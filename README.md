@@ -17,3 +17,15 @@ python -m lesr.cli.main artifact-get demo REQ-SW-0001
 
 YAML files are the source of truth. The `.lesr/` directory contains rebuildable
 runtime state, snapshots, and audit records.
+
+## Specification import preview
+
+UTF-8 Markdown specifications can be converted into review candidates without
+writing formal project data:
+
+```powershell
+lesr import-preview demo specifications/demo-standard.md --artifact-type coding_rule
+```
+
+Every candidate includes source provenance and remains in `candidate` review
+status. See [the import-preview documentation](docs/specification-import.md).

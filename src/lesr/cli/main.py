@@ -6,6 +6,7 @@ import typer
 
 from lesr.domain.models import Artifact
 from lesr.errors import LESRError
+from lesr.importing.service import ImportService
 from lesr.mcp.server import create_server
 from lesr.retrieval.sqlite_index import SQLiteIndex
 from lesr.storage.yaml_repository import YamlRepository
@@ -45,6 +46,28 @@ def rebuild_index(project: Path) -> None:
     repository = YamlRepository(project)
     SQLiteIndex(project).rebuild(repository.list_artifacts(), repository.list_relations())
     typer.echo("LESR index rebuilt")
+
+
+@app.command("import-preview")
+def import_preview(
+    project: Path,
+    source: Path,
+    artifact_type: str = typer.Option(
+        "specification_item",
+        help="Artifact type proposed for every imported section",
+    ),
+    version: str | None = typer.Option(None, help="Optional source-document version"),
+) -> None:
+    """Preview Markdown sections as review candidates without formal writes."""
+    try:
+        preview = ImportService(project).preview(
+            source,
+            artifact_type=artifact_type,
+            version=version,
+        )
+    except LESRError as error:
+        raise typer.Exit(code=_print_error(error)) from error
+    typer.echo(preview.model_dump_json(indent=2))
 
 
 @app.command("serve-mcp")
