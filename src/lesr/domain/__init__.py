@@ -1,0 +1,1 @@
+"""Stable LESR domain model."""

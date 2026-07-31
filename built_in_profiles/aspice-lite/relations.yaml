@@ -1,0 +1,11 @@
+relations:
+  - type: derives_from
+    source_types: [software_requirement]
+    target_types: [system_requirement]
+    min_count:
+      approved: 1
+  - type: verified_by
+    source_types: [software_requirement]
+    target_types: [test_specification]
+    min_count:
+      approved: 1

@@ -1,0 +1,10 @@
+id: REQ-SYS-0001
+artifact_type: system_requirement
+title: Offline recovery
+status: approved
+version: 1
+statement: The system shall recover communication after an offline event.
+profile_ids: [aspice-lite]
+tags: [mqtt, availability]
+module: communication
+attributes: {}
