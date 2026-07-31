@@ -74,6 +74,7 @@ class MarkdownSpecificationImporter:
 
             candidate_id = self._candidate_id(
                 document,
+                artifact_type,
                 line_number,
                 suggested_id,
                 title,
@@ -117,6 +118,7 @@ class MarkdownSpecificationImporter:
     @staticmethod
     def _candidate_id(
         document: SourceDocument,
+        artifact_type: str,
         line_number: int,
         suggested_id: str | None,
         title: str,
@@ -125,6 +127,9 @@ class MarkdownSpecificationImporter:
         seed = "|".join(
             [
                 document.content_hash,
+                document.source_path,
+                document.version or "",
+                artifact_type,
                 str(line_number),
                 suggested_id or "",
                 title,

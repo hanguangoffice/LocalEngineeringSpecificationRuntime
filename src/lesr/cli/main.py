@@ -70,6 +70,37 @@ def import_preview(
     typer.echo(preview.model_dump_json(indent=2))
 
 
+@app.command("import-accept")
+def import_accept(
+    project: Path,
+    source: Path,
+    candidate_id: str,
+    expected_source_hash: str = typer.Option(
+        ...,
+        help="Exact source content hash returned by import-preview",
+    ),
+    actor: str = typer.Option(..., help="Human actor accepting the candidate"),
+    artifact_type: str = typer.Option(
+        "specification_item",
+        help="Artifact type used to create the reviewed candidate",
+    ),
+    version: str | None = typer.Option(None, help="Source-document version used in preview"),
+) -> None:
+    """Accept one exact candidate as a formal draft Artifact."""
+    try:
+        artifact = ImportService(project).accept(
+            source,
+            candidate_id,
+            expected_source_hash=expected_source_hash,
+            actor=actor,
+            artifact_type=artifact_type,
+            version=version,
+        )
+    except LESRError as error:
+        raise typer.Exit(code=_print_error(error)) from error
+    typer.echo(artifact.model_dump_json(indent=2))
+
+
 @app.command("serve-mcp")
 def serve_mcp(project: Path) -> None:
     create_server(project).run()

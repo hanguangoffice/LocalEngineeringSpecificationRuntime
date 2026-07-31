@@ -29,3 +29,15 @@ lesr import-preview demo specifications/demo-standard.md --artifact-type coding_
 
 Every candidate includes source provenance and remains in `candidate` review
 status. See [the import-preview documentation](docs/specification-import.md).
+
+After human review, one exact candidate can be accepted as a formal draft:
+
+```powershell
+lesr import-accept demo specifications/demo-standard.md CAND-... `
+  --expected-source-hash "sha256:..." `
+  --actor reviewer `
+  --artifact-type coding_rule
+```
+
+Acceptance binds the reviewed source and candidate identity, then writes the
+draft Artifact, its first version snapshot, and an attributed audit event.

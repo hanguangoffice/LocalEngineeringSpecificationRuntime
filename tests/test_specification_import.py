@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from lesr.cli.main import app
 from lesr.errors import LESRError
 from lesr.importing.service import ImportService
+from lesr.storage.yaml_repository import YamlRepository
 
 FIXTURE = Path("tests/fixtures/specifications/demo-standard.md")
 
@@ -49,14 +50,13 @@ def test_preview_is_stable_across_line_ending_styles(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     text = FIXTURE.read_text(encoding="utf-8")
-    left = project / "left.md"
-    right = project / "right.md"
-    left.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
-    right.write_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    source = project / "standard.md"
+    source.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
 
     service = ImportService(project)
-    left_result = service.preview(Path("left.md"))
-    right_result = service.preview(Path("right.md"))
+    left_result = service.preview(Path("standard.md"))
+    source.write_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    right_result = service.preview(Path("standard.md"))
 
     assert left_result.source.content_hash == right_result.source.content_hash
     assert [item.candidate_id for item in left_result.candidates] == [
@@ -156,3 +156,223 @@ def test_import_preview_cli_outputs_json_without_writing(tmp_path: Path) -> None
     assert payload["source"]["version"] == "1.0"
     assert len(payload["candidates"]) == 2
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_accept_creates_draft_with_provenance_snapshot_and_audit(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(
+        source.relative_to(tmp_path),
+        artifact_type="coding_rule",
+        version="1.0",
+    )
+    candidate = preview.candidates[0]
+
+    saved = service.accept(
+        source.relative_to(tmp_path),
+        candidate.candidate_id,
+        expected_source_hash=preview.source.content_hash,
+        actor="reviewer",
+        artifact_type="coding_rule",
+        version="1.0",
+    )
+
+    assert saved.id == "RULE-COM-001"
+    assert saved.status == "draft"
+    assert saved.source_path == "artifacts/RULE-COM-001.yaml"
+    assert saved.attributes["normative_level"] == "required"
+    provenance = saved.attributes["provenance"]
+    assert provenance["source_path"] == "specifications/demo-standard.md"
+    assert provenance["source_content_hash"] == preview.source.content_hash
+    assert provenance["source_version"] == "1.0"
+    assert provenance["line_start"] == 5
+    assert provenance["line_end"] == 7
+    assert provenance["import_candidate_id"] == candidate.candidate_id
+    assert (tmp_path / "artifacts/RULE-COM-001.yaml").is_file()
+    assert (tmp_path / ".lesr/versions/RULE-COM-001/v0001.json").is_file()
+    audit = (tmp_path / "audit/events.jsonl").read_text(encoding="utf-8")
+    assert '"actor":"reviewer"' in audit
+    assert '"operation":"artifact.create"' in audit
+
+
+def test_accept_rejects_changed_source_before_formal_write(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(source.relative_to(tmp_path), artifact_type="coding_rule")
+    candidate = preview.candidates[0]
+    source.write_text(
+        source.read_text(encoding="utf-8") + "\nChanged after review.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            source.relative_to(tmp_path),
+            candidate.candidate_id,
+            expected_source_hash=preview.source.content_hash,
+            actor="reviewer",
+            artifact_type="coding_rule",
+        )
+
+    assert error.value.code == "LESR-IMPORT-SOURCE-CHANGED"
+    assert list((tmp_path / "artifacts").glob("*.yaml")) == []
+
+
+def test_accept_rejects_unknown_candidate_before_formal_write(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(source.relative_to(tmp_path))
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            source.relative_to(tmp_path),
+            "CAND-DOES-NOT-EXIST",
+            expected_source_hash=preview.source.content_hash,
+            actor="reviewer",
+        )
+
+    assert error.value.code == "LESR-IMPORT-CANDIDATE-NOT-FOUND"
+    assert list((tmp_path / "artifacts").glob("*.yaml")) == []
+
+
+def test_accept_rejects_candidate_without_stable_id(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = tmp_path / "specifications" / "standard.md"
+    source.parent.mkdir()
+    source.write_text(
+        "# Demo\n\n## Reconnect behavior\n\nThe client shall reconnect.\n",
+        encoding="utf-8",
+    )
+    service = ImportService(tmp_path)
+    preview = service.preview(Path("specifications/standard.md"))
+    candidate = preview.candidates[0]
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            Path("specifications/standard.md"),
+            candidate.candidate_id,
+            expected_source_hash=preview.source.content_hash,
+            actor="reviewer",
+        )
+
+    assert error.value.code == "LESR-IMPORT-STABLE-ID-REQUIRED"
+    assert list((tmp_path / "artifacts").glob("*.yaml")) == []
+
+
+@pytest.mark.parametrize(
+    ("accepted_type", "accepted_version"),
+    [
+        ("software_requirement", "1.0"),
+        ("coding_rule", "2.0"),
+    ],
+)
+def test_candidate_id_binds_type_and_source_version(
+    tmp_path: Path,
+    accepted_type: str,
+    accepted_version: str,
+) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(
+        source.relative_to(tmp_path),
+        artifact_type="coding_rule",
+        version="1.0",
+    )
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            source.relative_to(tmp_path),
+            preview.candidates[0].candidate_id,
+            expected_source_hash=preview.source.content_hash,
+            actor="reviewer",
+            artifact_type=accepted_type,
+            version=accepted_version,
+        )
+
+    assert error.value.code == "LESR-IMPORT-CANDIDATE-NOT-FOUND"
+    assert list((tmp_path / "artifacts").glob("*.yaml")) == []
+
+
+def test_accept_requires_human_actor_before_formal_write(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(source.relative_to(tmp_path))
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            source.relative_to(tmp_path),
+            preview.candidates[0].candidate_id,
+            expected_source_hash=preview.source.content_hash,
+            actor=" ",
+        )
+
+    assert error.value.code == "LESR-HUMAN-CONFIRMATION-REQUIRED"
+    assert list((tmp_path / "artifacts").glob("*.yaml")) == []
+
+
+def test_accept_rejects_duplicate_artifact_id_without_overwrite(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    service = ImportService(tmp_path)
+    preview = service.preview(source.relative_to(tmp_path), artifact_type="coding_rule")
+    candidate = preview.candidates[0]
+    service.accept(
+        source.relative_to(tmp_path),
+        candidate.candidate_id,
+        expected_source_hash=preview.source.content_hash,
+        actor="reviewer",
+        artifact_type="coding_rule",
+    )
+
+    with pytest.raises(LESRError) as error:
+        service.accept(
+            source.relative_to(tmp_path),
+            candidate.candidate_id,
+            expected_source_hash=preview.source.content_hash,
+            actor="reviewer",
+            artifact_type="coding_rule",
+        )
+
+    assert error.value.code == "LESR-DUPLICATE-ID"
+    assert len(list((tmp_path / "artifacts").glob("*.yaml"))) == 1
+
+
+def test_import_accept_cli_creates_draft_artifact(tmp_path: Path) -> None:
+    YamlRepository(tmp_path).initialize("demo")
+    source = copy_fixture(tmp_path)
+    preview = ImportService(tmp_path).preview(
+        source.relative_to(tmp_path),
+        artifact_type="coding_rule",
+        version="1.0",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "import-accept",
+            str(tmp_path),
+            "specifications/demo-standard.md",
+            preview.candidates[0].candidate_id,
+            "--expected-source-hash",
+            preview.source.content_hash,
+            "--actor",
+            "reviewer",
+            "--artifact-type",
+            "coding_rule",
+            "--version",
+            "1.0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["id"] == "RULE-COM-001"
+    assert payload["status"] == "draft"
+    assert payload["attributes"]["provenance"]["import_candidate_id"] == (
+        preview.candidates[0].candidate_id
+    )
