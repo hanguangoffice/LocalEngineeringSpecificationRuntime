@@ -1,4 +1,4 @@
-"""Side-effect-free service for previewing local specification imports."""
+"""Preview and controlled acceptance services for local specifications."""
 
 from __future__ import annotations
 
@@ -6,14 +6,16 @@ import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
+from lesr.domain.models import Artifact
 from lesr.errors import LESRError
 from lesr.importing.base import SpecificationImporter
 from lesr.importing.markdown import MarkdownSpecificationImporter
 from lesr.importing.models import ImportPreview, SourceDocument
+from lesr.storage.yaml_repository import YamlRepository
 
 
 class ImportService:
-    """Resolve, read and dispatch source documents without modifying a project."""
+    """Preview sources and accept explicitly reviewed candidates as drafts."""
 
     def __init__(
         self,
@@ -75,6 +77,95 @@ class ImportService:
             document,
             normalized_text,
             artifact_type=artifact_type,
+        )
+
+    def accept(
+        self,
+        source: Path,
+        candidate_id: str,
+        *,
+        expected_source_hash: str,
+        actor: str,
+        artifact_type: str = "specification_item",
+        version: str | None = None,
+    ) -> Artifact:
+        """Accept one exact preview candidate as a formal draft Artifact."""
+        confirmed_actor = actor.strip()
+        if not confirmed_actor:
+            raise LESRError(
+                "LESR-HUMAN-CONFIRMATION-REQUIRED",
+                "A human actor is required to accept an import candidate",
+                {"candidate_id": candidate_id},
+            )
+
+        preview = self.preview(
+            source,
+            artifact_type=artifact_type,
+            version=version,
+        )
+        if preview.source.content_hash != expected_source_hash:
+            raise LESRError(
+                "LESR-IMPORT-SOURCE-CHANGED",
+                "Specification source changed after preview",
+                {
+                    "expected_source_hash": expected_source_hash,
+                    "actual_source_hash": preview.source.content_hash,
+                },
+                "run_import_preview_again",
+            )
+
+        candidate = next(
+            (item for item in preview.candidates if item.candidate_id == candidate_id),
+            None,
+        )
+        if candidate is None:
+            raise LESRError(
+                "LESR-IMPORT-CANDIDATE-NOT-FOUND",
+                "Import candidate is not present in the current preview",
+                {"candidate_id": candidate_id},
+                "run_import_preview_again",
+            )
+        if candidate.suggested_artifact_id is None:
+            raise LESRError(
+                "LESR-IMPORT-STABLE-ID-REQUIRED",
+                "Import candidate requires a stable Artifact ID before acceptance",
+                {"candidate_id": candidate_id},
+                "add_a_stable_id_to_the_source",
+            )
+        if candidate.warnings:
+            raise LESRError(
+                "LESR-IMPORT-CANDIDATE-REVIEW-REQUIRED",
+                "Import candidate has unresolved warnings",
+                {
+                    "candidate_id": candidate_id,
+                    "warnings": [warning.model_dump(mode="json") for warning in candidate.warnings],
+                },
+            )
+
+        location = candidate.source_location
+        attributes = dict(candidate.attributes)
+        attributes["provenance"] = {
+            "document_id": preview.source.document_id,
+            "source_path": preview.source.source_path,
+            "source_content_hash": preview.source.content_hash,
+            "source_version": preview.source.version,
+            "section": location.section,
+            "line_start": location.line_start,
+            "line_end": location.line_end,
+            "page": location.page,
+            "import_candidate_id": candidate.candidate_id,
+        }
+        artifact = Artifact(
+            id=candidate.suggested_artifact_id,
+            artifact_type=candidate.artifact_type,
+            title=candidate.title,
+            status="draft",
+            statement=candidate.statement,
+            attributes=attributes,
+        )
+        return YamlRepository(self.project_root).create_artifact(
+            artifact,
+            actor=confirmed_actor,
         )
 
     def _require_inside_project(self, path: Path) -> None:

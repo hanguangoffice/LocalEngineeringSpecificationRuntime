@@ -3,10 +3,11 @@
 LESR imports specifications in two stages:
 
 1. preview source content as review candidates;
-2. publish explicitly approved candidates through a controlled workflow.
+2. accept one exact reviewed candidate as a formal draft Artifact.
 
-Only the first stage is currently implemented. A preview never creates formal
-Artifacts, Relations, audit events, versions, or runtime indexes.
+A preview never creates formal Artifacts, Relations, audit events, versions, or
+runtime indexes. Acceptance is an explicit CLI action and creates only a draft;
+it does not approve or baseline the Artifact.
 
 ## Supported input
 
@@ -47,5 +48,43 @@ with stable LESR error codes.
 ## Trust boundary
 
 All output has `review_status: candidate`. Preview output must not be treated as
-an approved engineering specification. A later workflow will support explicit
-review, correction, approval, rejection, formal persistence, and audit.
+an approved engineering specification.
+
+## Accepting one reviewed candidate
+
+After reviewing the preview, copy the exact candidate ID and source content
+hash into the acceptance command:
+
+```powershell
+lesr import-accept demo specifications/demo-standard.md `
+  CAND-C2E1FAE70A36 `
+  --expected-source-hash "sha256:..." `
+  --actor reviewer `
+  --artifact-type coding_rule `
+  --version 1.0
+```
+
+The candidate identity is bound to the source path, normalized content hash,
+source version, Artifact type, section location, ID, title, and statement.
+Acceptance therefore fails if reviewed inputs are silently changed.
+
+Acceptance also fails before formal writing when:
+
+- the current source hash differs from the reviewed hash;
+- the candidate is absent from the newly generated preview;
+- the candidate does not contain a stable Artifact ID;
+- the candidate has unresolved warnings;
+- the Artifact ID already exists.
+
+A successful acceptance creates:
+
+- `artifacts/<ID>.yaml` with `status: draft`;
+- `.lesr/versions/<ID>/v0001.json`;
+- an `artifact.create` audit event attributed to the human actor.
+
+The Artifact stores its original document ID, path, content hash, version,
+section, line range, page (when available), and import candidate ID under
+`attributes.provenance`.
+
+Acceptance does not approve, baseline, index, or expose the Artifact through
+MCP automatically. Those actions remain separate controlled workflows.
