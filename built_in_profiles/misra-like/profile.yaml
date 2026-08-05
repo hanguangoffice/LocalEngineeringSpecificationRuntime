@@ -1,4 +1,0 @@
-id: misra-like
-name: MISRA-like Rule Profile
-version: 0.1.0
-artifact_types: [coding_rule, finding, deviation]

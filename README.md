@@ -1,86 +1,55 @@
-# LESR
+# LESR v1
 
-> **Development status:** `LESR_Solution_Design_Baseline_v1.0/` is the current
-> design authority. P1-P5 have passed and the final v1.0 construction contract
-> is under review. The implementation under `src/lesr` is still the superseded
-> v0.1 YAML MVP and remains a runnable reference until the separate cutover PR.
+Local Engineering Specification Runtime is a Git-backed local semantic runtime
+for engineering specifications. `LESR_Solution_Design_Baseline_v1.0/` is the
+requirements authority and `docs/LESR_Codex_Construction_Spec_v1.0.md` is the
+frozen implementation contract.
 
-Local Engineering Specification Runtime (LESR) turns Git-managed engineering
-specifications into structured, auditable local objects.
+The v1 runtime separates Logical Objects, immutable Revisions and Records,
+versioned Relation Assertions, typed rules, explicit Evaluation Context,
+reviewed semantic transactions and Baselines. Git commit trees are authoritative;
+SQLite/FTS5 is a disposable query projection.
 
-## Legacy implementation
-
-The legacy MVP provides structured YAML facts, Profile validation,
-SQLite/FTS5 retrieval, controlled change and baselines, context construction,
-MCP query tools, and the `examples/home-control` project.
+## Development
 
 ```powershell
-python -m lesr.cli.main init demo
-python -m lesr.cli.main artifact-create demo REQ-SW-0001 software_requirement "Reconnect MQTT" --statement "The client shall reconnect after an unexpected disconnect."
-python -m lesr.cli.main artifact-get demo REQ-SW-0001
+py -m uv sync --all-extras
+py -m uv run python scripts/verify_baseline_manifest.py
+py -m uv run python scripts/verify_construction_schemas.py
+py -m uv run pytest
+py -m uv run ruff check .
+py -m uv run mypy src
 ```
 
-YAML files are the source of truth. The `.lesr/` directory contains rebuildable
-runtime state, snapshots, and audit records.
+CI runs the same gates on Python 3.12 for Ubuntu and Windows. The design baseline
+is protected from line-ending conversion and verified byte-for-byte against its
+81-entry Manifest.
 
-## Specification import preview
-
-UTF-8 Markdown specifications can be converted into review candidates without
-writing formal project data:
+## Capability CLI
 
 ```powershell
-lesr import-preview demo specifications/demo-standard.md --artifact-type coding_rule
+lesr init PROJECT
+lesr resolve PROJECT IDENTIFIER
+lesr inspect PROJECT UID
+lesr query PROJECT --kind software_requirement
+lesr context build PROJECT coding --target UID
+lesr workspace open PROJECT DELEGATION_UID
+lesr approval keygen ACTOR_UID "Reviewer" --role technical
+lesr projection rebuild PROJECT
+lesr mcp serve PROJECT
 ```
 
-Every candidate includes source provenance and remains in `candidate` review
-status. See [the import-preview documentation](docs/specification-import.md).
+Human approval signing is deliberately CLI-only. MCP exposes versioned Resolve,
+Inspect, Query, Context, Workspace, Governance and Compliance capabilities but
+never arbitrary file, SQL, shell or private-key operations.
 
-After human review, one exact candidate can be accepted as a formal draft:
+## Compatibility and recovery
 
-```powershell
-lesr import-accept demo specifications/demo-standard.md CAND-... `
-  --expected-source-hash "sha256:..." `
-  --actor reviewer `
-  --artifact-type coding_rule
-```
+v1 does not preserve the old YAML, CLI or MCP contract and does not ship a legacy
+migration tool. The untouched MVP is recoverable at Git tag
+`legacy-mvp-v0.1.0`. P1-P5 decision reports remain in `docs/prototype-results`;
+the disposable prototype package has been removed after its invariant tests were
+moved into the production suite.
 
-Acceptance binds the reviewed source and candidate identity, then writes the
-draft Artifact, its first version snapshot, and an attributed audit event.
-
-## v1.0 prototype gates
-
-The new semantic model is developed in `prototypes/lesr_v1` and does not import
-the legacy domain model. Gate reports live in `docs/prototype-results`. Run the
-quality suite with Python 3.12 through uv:
-
-```powershell
-uv sync --all-extras
-uv run python scripts/verify_baseline_manifest.py
-uv run python scripts/verify_construction_schemas.py
-uv run pytest
-uv run ruff check .
-uv run mypy src prototypes
-```
-
-Current gate status:
-
-| Gate | Status |
-|---|---|
-| P1 Semantic Kernel | PASS |
-| P2 Rule Compiler | PASS |
-| P3 Configuration/Context | PASS |
-| P4 Git Transaction | PASS |
-| P5 MCP Adapter | PASS (approved client substitution) |
-
-The P5 code, independent stdio `ClientSession`, and Codex live probe pass.
-Claude Code cannot currently complete even a control prompt without MCP, so on
-2026-08-05 the acceptance evidence was explicitly changed to Codex plus the
-independent stdio protocol client. The final `src/lesr` cutover remains a
-separate reviewed change. See `docs/prototype-results/GATE-SUMMARY.md`.
-
-## v1.0 construction contract
-
-The final implementation decisions are frozen in
-`docs/LESR_Codex_Construction_Spec_v1.0.md`. Draft 2020-12 contracts live in
-`schemas/v1`; they are reviewed and validated independently from the destructive
-runtime cutover.
+P6 interoperability, UI, Chinese-specific tokenization, general plugin sandbox,
+SHACL/Rego execution and Claude Code re-validation remain explicit deferred work.

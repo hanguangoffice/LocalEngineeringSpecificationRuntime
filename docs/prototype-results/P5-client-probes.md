@@ -45,3 +45,23 @@ normal model session. On 2026-08-05 the project owner approved Codex plus the
 independent stdio client as the current P5 acceptance evidence, so P5 is `PASS`
 with a documented client substitution. Claude validation is deferred and must
 not be represented as passed.
+
+## Long-term runtime revalidation
+
+Date: 2026-08-05 (Asia/Shanghai)
+
+- Server: project Python 3.12, module `lesr.adapters.mcp`.
+- Domain contract: `1.0`.
+- Client: Codex Desktop bundled CLI `0.146.0-alpha.9.2`, invoked directly because
+  the unrelated npm shim still points to an obsolete Desktop build.
+- Configuration: ephemeral command-line MCP configuration; no user config edit.
+- Calls: `capabilities`, then `resolve("REQ-SW-0001")`.
+- Result: PASS.
+
+```json
+{"domain_contract":"1.0","capability_groups":["resolve","inspect","query","context","workspace","governance","compliance"],"uid":"018f0000-0000-7000-8000-000000000001","revision_uid":"018f0000-0000-7000-8000-000000000002"}
+```
+
+The client emitted a PowerShell shell-snapshot warning before the probe; both MCP
+calls completed and the warning is unrelated to the stdio protocol. Claude Code
+remains deferred and is not represented as passed.

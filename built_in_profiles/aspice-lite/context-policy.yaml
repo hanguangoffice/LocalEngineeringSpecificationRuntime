@@ -1,5 +1,0 @@
-task_types:
-  coding:
-    mandatory: [software_requirement, software_design, test_specification]
-    optional: [coding_rule]
-    exclude: [deprecated]

@@ -187,3 +187,11 @@ MCP 提供 capability negotiation、Resources、分页和协议无关 `start/sta
 Claude Code 在其模型会话恢复后补测。P6、UI、中文专用分词、通用插件沙箱、
 SHACL/Rego 执行和旧格式迁移只能作为 v1.0 之后的独立需求进入，不得阻塞或暗中扩大
 本次施工范围。
+
+## 11. 实现期勘误
+
+`applied-change.schema.json` 不包含 `result_commit`。Applied Change 与结果 tree 同处一个
+commit；让其内容包含该 commit 的对象 ID 会产生不可解的加密哈希自引用。权威结果 commit
+由 `refs/heads/lesr/canonical` 的 CAS 推进和 Git parent 链确定，Applied Change 继续固定
+Base、Transaction、Review Package、Effective Model、Operations、Approvals、Provenance 与
+Audit Anchor。该勘误不降低任何追踪或恢复能力。

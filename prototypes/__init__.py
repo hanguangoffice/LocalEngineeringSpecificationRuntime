@@ -1,1 +1,0 @@
-"""Disposable LESR prototype gates."""

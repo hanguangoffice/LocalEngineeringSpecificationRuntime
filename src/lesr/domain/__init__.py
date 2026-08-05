@@ -1,1 +1,1 @@
-"""Stable LESR domain model."""
+"""LESR v1 domain model."""

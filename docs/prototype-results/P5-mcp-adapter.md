@@ -62,3 +62,9 @@ domain service and experimental tool naming after live-client evidence.
 Record a Claude Code probe when its endpoint/session is repaired. Response
 pagination limits, authentication mapping, async task transport and adapter
 version negotiation remain final-runtime work.
+
+## Runtime cutover note
+
+The disposable `p5_mcp.py` adapter was replaced by `src/lesr/adapters/mcp.py`.
+The formal adapter advertises domain contract `1.0`; its independent stdio test
+and the Codex Desktop live revalidation both pass. Claude Code remains deferred.

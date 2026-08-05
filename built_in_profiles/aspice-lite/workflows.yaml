@@ -1,9 +1,0 @@
-id: engineering-artifact-workflow
-states: [draft, in_review, approved, baselined, deprecated]
-transitions:
-  - from: draft
-    to: in_review
-  - from: in_review
-    to: approved
-  - from: approved
-    to: baselined

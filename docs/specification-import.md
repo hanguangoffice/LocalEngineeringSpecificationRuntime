@@ -1,5 +1,8 @@
 # Specification Import Preview
 
+> **SUPERSEDED:** 本文描述 v0.1 导入流程。v1 只允许 Markdown 生成 Workspace
+> 候选操作，不允许导入器直接写 Canonical State。
+
 LESR imports specifications in two stages:
 
 1. preview source content as review candidates;

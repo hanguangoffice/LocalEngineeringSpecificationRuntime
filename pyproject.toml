@@ -4,26 +4,30 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lesr"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local Engineering Specification Runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.10",
-  "PyYAML>=6.0",
   "typer>=0.15",
   "jsonschema>=4.23",
   "mcp>=1.0,<2",
+  "cryptography>=45.0",
+  "platformdirs>=4.3",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.9", "mypy>=1.14", "types-PyYAML>=6.0", "types-jsonschema>=4.23"]
+dev = ["pytest>=8.0", "ruff>=0.9", "mypy>=1.14", "types-jsonschema>=4.23"]
 
 [project.scripts]
 lesr = "lesr.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lesr"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas/v1" = "lesr/schemas/v1"
 
 [tool.ruff]
 line-length = 100
@@ -37,6 +41,6 @@ strict = true
 package = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "prototypes/tests"]
+testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]

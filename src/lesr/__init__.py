@@ -1,5 +1,18 @@
-"""Local Engineering Specification Runtime."""
+"""Local Engineering Specification Runtime v1."""
 
-from lesr.domain.models import Artifact, Relation
+from lesr.domain.semantic import (
+    ConfigurationSnapshot,
+    ImmutableRecord,
+    LogicalObject,
+    RelationAssertion,
+    Revision,
+)
 
-__all__ = ["Artifact", "Relation"]
+__version__ = "1.0.0"
+__all__ = [
+    "ConfigurationSnapshot",
+    "ImmutableRecord",
+    "LogicalObject",
+    "RelationAssertion",
+    "Revision",
+]
