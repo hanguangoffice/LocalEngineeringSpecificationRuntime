@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -252,7 +252,7 @@ class ApprovalKeyStore:
             key = _derive_scrypt(self._fallback_password, salt)
             try:
                 return AESGCM(key).decrypt(nonce, protected, key_uid.encode("utf-8"))
-            except ValueError as error:
+            except (InvalidTag, ValueError) as error:
                 raise PermissionError("private key password is invalid") from error
         raise PermissionError("private key protection is unsupported")
 

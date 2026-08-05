@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import secrets
+import tempfile
 import time
 from multiprocessing.connection import Client, Listener
 from pathlib import Path
@@ -32,7 +33,7 @@ def sign_once(
     address = (
         rf"\\.\pipe\lesr-signer-{uid}"
         if os.name == "nt"
-        else str(project / ".lesr" / f"signer-{uid}.sock")
+        else str(Path(tempfile.gettempdir()) / f"lesr-{uid}.sock")
     )
     if os.name != "nt":
         Path(address).parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +93,8 @@ def _broker(
     password: str | None,
 ) -> None:
     listener = Listener(address, family=family, authkey=challenge)
+    if family == "AF_UNIX":
+        os.chmod(address, 0o600)
     ready.set()
     connection = listener.accept()
     try:
