@@ -4,7 +4,7 @@
   "title": "LESR Rule Definition Revision",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "rule_uid", "rule_revision_uid", "source", "target_selector", "applicability", "modality", "constraints", "enforcement", "authority", "fixtures", "explanation_map", "content_hash"],
+  "required": ["schema_version", "resource_type", "rule_uid", "rule_revision_uid", "source", "target_selector", "applicability", "modality", "constraints", "evaluation", "enforcement", "authority", "exception_policy", "deviation_policy", "fixtures", "explanation_map", "content_hash"],
   "properties": {
     "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
     "resource_type": {"const": "rule_definition_revision"},
@@ -13,34 +13,69 @@
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text", "language", "source_hash"],
+      "required": ["text", "language", "source_hash", "interpretation_note"],
       "properties": {
         "text": {"type": "string", "minLength": 1},
         "language": {"type": "string", "minLength": 2},
-        "source_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+        "source_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+        "interpretation_note": {"type": "string"},
+        "source_reference": {"$ref": "common.schema.json#/$defs/canonical_value"}
       }
     },
     "target_selector": {"$ref": "#/$defs/expression"},
     "applicability": {"$ref": "#/$defs/expression"},
-    "modality": {"enum": ["obligation", "prohibition", "permission", "recommendation", "information"]},
+    "modality": {"enum": ["obligation", "prohibition", "permission", "recommendation", "discouragement", "informational"]},
     "constraints": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/constraint"}},
-    "enforcement": {
+    "evaluation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "effect"],
+      "required": ["kind"],
       "properties": {
-        "operation": {"type": "string", "minLength": 1},
-        "effect": {"enum": ["observe", "warn", "block", "require_approval", "require_deviation"]}
+        "kind": {"enum": ["declarative", "registered_validator", "external_tool", "human_attestation", "ai_semantic", "composite"]},
+        "validator_uid": {"type": ["string", "null"]},
+        "advisory_only": {"type": "boolean"}
+      }
+    },
+    "enforcement": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "effect"],
+        "properties": {
+          "operation": {"type": "string", "minLength": 1},
+          "effect": {"enum": ["allow", "allow_with_observation", "require_acknowledgement", "require_review", "require_deviation", "block_operation"]}
+        }
       }
     },
     "authority": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_uid", "rank"],
+      "required": ["source_uid", "profile_revision_uid", "issuer_uid", "scope", "may_refine", "may_relax", "deviation_allowed", "non_overridable", "overrides"],
       "properties": {
         "source_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
-        "rank": {"type": "integer", "minimum": 0},
-        "overrides": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true}
+        "profile_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+        "issuer_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+        "scope": {"$ref": "common.schema.json#/$defs/canonical_value"},
+        "valid_from": {"oneOf": [{"$ref": "common.schema.json#/$defs/utc_timestamp"}, {"type": "null"}]},
+        "valid_until": {"oneOf": [{"$ref": "common.schema.json#/$defs/utc_timestamp"}, {"type": "null"}]},
+        "may_refine": {"type": "boolean"},
+        "may_relax": {"type": "boolean"},
+        "deviation_allowed": {"type": "boolean"},
+        "non_overridable": {"type": "boolean"},
+        "overrides": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+        "approval_record_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]}
+      }
+    },
+    "exception_policy": {"$ref": "common.schema.json#/$defs/canonical_value"},
+    "deviation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "required_approval_roles"],
+      "properties": {
+        "allowed": {"type": "boolean"},
+        "required_approval_roles": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
       }
     },
     "fixtures": {
@@ -54,7 +89,7 @@
           "fixture_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
           "kind": {"enum": ["positive", "negative", "not_applicable", "indeterminate", "exception", "deviation", "conflict", "migration"]},
           "environment": {"$ref": "common.schema.json#/$defs/canonical_value"},
-          "expected_outcome": {"enum": ["pass", "fail", "not_applicable", "indeterminate", "excepted", "deviated", "conflict"]}
+          "expected_outcome": {"enum": ["pass", "fail", "not_applicable", "indeterminate", "suppressed_by_deviation", "evaluator_error", "not_evaluated"]}
         }
       }
     },

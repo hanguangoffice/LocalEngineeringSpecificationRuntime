@@ -32,6 +32,44 @@ def preview_markdown(source: Path, *, namespace: str, kind: str) -> tuple[Import
         object_uid = uuid7_candidate()
         revision_uid = uuid7_candidate()
         key = f"IMPORT-{index + 1:04d}"
+        created_at = "1970-01-01T00:00:00Z"
+        logical: dict[str, object] = {
+            "schema_version": "1.0",
+            "resource_type": "logical_object",
+            "entity_uid": object_uid,
+            "namespace": namespace,
+            "human_key": key,
+            "kind": kind,
+            "core_class": "governed_object",
+            "facets": ["imported", "traceability"],
+            "aliases": [],
+            "external_identities": [],
+            "created_at": created_at,
+        }
+        revision_without_hash: dict[str, object] = {
+            "schema_version": "1.0",
+            "resource_type": "revision",
+            "revision_uid": revision_uid,
+            "object_uid": object_uid,
+            "revision_number": 1,
+            "parent_revision_uid": None,
+            "human_key": key,
+            "kind": kind,
+            "facets": ["imported", "traceability"],
+            "fields": [
+                {"path": "/title", "value": match.group(1)},
+                {"path": "/statement", "value": body},
+                {"path": "/source/path", "value": source.name},
+                {"path": "/source/section", "value": index + 1},
+                {"path": "/source/hash", "value": source_hash},
+            ],
+            "fragments": [],
+            "provenance_origin": "imported",
+            "created_at": created_at,
+        }
+        revision = revision_without_hash | {
+            "content_hash": semantic_hash(revision_without_hash)
+        }
         candidates.append(
             ImportCandidate(
                 candidate_uid=uuid7_candidate(),
@@ -41,13 +79,11 @@ def preview_markdown(source: Path, *, namespace: str, kind: str) -> tuple[Import
                 operations=(
                     {
                         "operation_type": "create_logical_object",
-                        "target": f"canonical/objects/{object_uid}.json",
-                        "payload": {"entity_uid": object_uid, "namespace": namespace, "human_key": key, "kind": kind},
+                        "resource": logical,
                     },
                     {
                         "operation_type": "create_revision",
-                        "target": f"canonical/revisions/{revision_uid}.json",
-                        "payload": {"revision_uid": revision_uid, "object_uid": object_uid, "title": match.group(1), "body": body, "source_hash": source_hash},
+                        "resource": revision,
                     },
                 ),
             )

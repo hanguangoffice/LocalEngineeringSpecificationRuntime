@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lesr"
-version = "1.0.0"
+version = "0.5.0a1"
 description = "Local Engineering Specification Runtime"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ dependencies = [
   "mcp>=1.0,<2",
   "cryptography>=45.0",
   "platformdirs>=4.3",
+  "pypdf>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -44,3 +45,4 @@ package = true
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+markers = ["local_corpus: uses uncommitted local evaluation documents"]

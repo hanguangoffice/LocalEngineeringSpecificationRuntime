@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 .venv/
 examples/*/.lesr/index.db
+测试文档/

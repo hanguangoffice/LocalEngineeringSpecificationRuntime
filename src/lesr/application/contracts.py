@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -418,10 +419,16 @@ class InMemoryDomainService:
 
 
 def _jsonable(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(asdict(value))
     if isinstance(value, StrEnum):
         return value.value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat().replace("+00:00", "Z")
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [_jsonable(item) for item in sorted(value, key=str)]
     return value

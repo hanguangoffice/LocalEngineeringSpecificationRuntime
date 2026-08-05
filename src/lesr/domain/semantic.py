@@ -9,11 +9,13 @@ import time
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import JsonValue as PydanticJsonValue
 
-JsonScalar = str | int | float | bool | None
+JsonScalar = str | int | bool | None
+type JsonValue = PydanticJsonValue
 
 
 class FrozenModel(BaseModel):
@@ -117,10 +119,35 @@ def canonical_json(value: BaseModel | dict[str, Any] | list[Any] | tuple[Any, ..
 
     data: Any
     if isinstance(value, BaseModel):
-        data = value.model_dump(mode="json", exclude_none=False)
+        data = value.model_dump(mode="json", exclude_none=True)
     else:
         data = value
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    _validate_canonical_value(data)
+    return json.dumps(
+        data,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _validate_canonical_value(value: Any, path: str = "$") -> None:
+    if isinstance(value, float):
+        raise TypeError(f"canonical JSON forbids floating-point values at {path}")
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_canonical_value(item, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"canonical JSON requires string keys at {path}")
+            _validate_canonical_value(item, f"{path}.{key}")
+        return
+    raise TypeError(f"unsupported canonical JSON value at {path}: {type(value).__name__}")
 
 
 def semantic_hash(value: BaseModel | dict[str, Any] | list[Any] | tuple[Any, ...]) -> str:
@@ -166,20 +193,14 @@ def ulid_candidate(timestamp_ms: int | None = None) -> str:
 
 
 class SemanticField(FrozenModel):
-    path: str = Field(min_length=1)
-    value_json: str
+    path: str = Field(pattern=r"^/([^/~]|~[01])+(?:/([^/~]|~[01])+)*$")
+    value: JsonValue
 
     @classmethod
-    def from_value(cls, path: str, value: JsonScalar | list[Any] | dict[str, Any]) -> Self:
-        return cls(
-            path=path,
-            value_json=json.dumps(
-                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ),
-        )
-
-    def value(self) -> Any:
-        return json.loads(self.value_json)
+    def from_value(cls, path: str, value: JsonValue) -> Self:
+        pointer = path if path.startswith("/") else f"/{path.replace('.', '/')}"
+        _validate_canonical_value(value)
+        return cls(path=pointer, value=value)
 
 
 class Alias(FrozenModel):
@@ -214,6 +235,8 @@ class FragmentAddress(FrozenModel):
 
 
 class LogicalObject(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["logical_object"] = "logical_object"
     entity_uid: str = Field(default_factory=uuid7_candidate)
     namespace: str = Field(min_length=1)
     human_key: str = Field(min_length=1)
@@ -222,9 +245,12 @@ class LogicalObject(FrozenModel):
     facets: tuple[str, ...] = ()
     aliases: tuple[Alias, ...] = ()
     external_identities: tuple[ExternalIdentity, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Revision(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["revision"] = "revision"
     revision_uid: str = Field(default_factory=uuid7_candidate)
     object_uid: str
     revision_number: int = Field(ge=1)
@@ -240,7 +266,9 @@ class Revision(FrozenModel):
 
     @model_validator(mode="after")
     def calculate_content_hash(self) -> Revision:
-        payload = self.model_dump(mode="json", exclude={"content_hash"})
+        payload = self.model_dump(
+            mode="json", exclude={"content_hash"}, exclude_none=True
+        )
         calculated = semantic_hash(payload)
         if self.content_hash and self.content_hash != calculated:
             raise ValueError("content_hash does not match immutable revision content")
@@ -249,22 +277,33 @@ class Revision(FrozenModel):
 
 
 class ImmutableRecord(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["immutable_record"] = "immutable_record"
     record_uid: str = Field(default_factory=uuid7_candidate)
     record_type: str
     subject_uid: str
-    actor: str
+    actor_uid: str
+    actor_type: Literal["human", "ai", "tool", "system"]
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     fields: tuple[SemanticField, ...] = ()
     supersedes_record_uid: str | None = None
+    content_hash: str = ""
+
+    @model_validator(mode="after")
+    def calculate_content_hash(self) -> ImmutableRecord:
+        calculated = semantic_hash(
+            self.model_dump(mode="json", exclude={"content_hash"}, exclude_none=True)
+        )
+        if self.content_hash and self.content_hash != calculated:
+            raise ValueError("content_hash does not match immutable record content")
+        object.__setattr__(self, "content_hash", calculated)
+        return self
+
+    def field_value(self, path: str) -> JsonValue | None:
+        return next((item.value for item in self.fields if item.path == path), None)
 
 
-class LifecycleRecord(ImmutableRecord):
-    record_type: str = "lifecycle"
-    event_type: LifecycleEventType
-    from_state: str | None = None
-    to_state: str
-    workflow_revision_uid: str
-    review_package_uid: str | None = None
+LifecycleRecord = ImmutableRecord
 
 
 class ProjectionResult(FrozenModel):
@@ -277,18 +316,25 @@ class LifecycleProjector:
     """Project maturity/disposition without mutating the subject Revision."""
 
     @staticmethod
-    def project(initial: str, records: tuple[LifecycleRecord, ...]) -> ProjectionResult:
+    def project(initial: str, records: tuple[ImmutableRecord, ...]) -> ProjectionResult:
         state = initial
         applied: list[str] = []
         conflicts: list[str] = []
         ordered = sorted(records, key=lambda item: (item.occurred_at, item.record_uid))
         for record in ordered:
-            if record.from_state is not None and record.from_state != state:
+            if record.record_type != "lifecycle":
+                continue
+            from_state = record.field_value("/from_state")
+            to_state = record.field_value("/to_state")
+            if not isinstance(to_state, str):
+                conflicts.append(f"{record.record_uid}: lifecycle record has no to_state")
+                continue
+            if from_state is not None and from_state != state:
                 conflicts.append(
-                    f"{record.record_uid}: expected {record.from_state}, projected {state}"
+                    f"{record.record_uid}: expected {from_state}, projected {state}"
                 )
                 continue
-            state = record.to_state
+            state = to_state
             applied.append(record.record_uid)
         if conflicts:
             return ProjectionResult(
@@ -312,26 +358,33 @@ class RelationEndpoint(FrozenModel):
     binding: BindingMode
     object_uid: str | None = None
     revision_uid: str | None = None
-    fragment: FragmentAddress | None = None
-    external: ExternalIdentity | None = None
+    fragment_path: str | None = None
+    system: str | None = None
+    namespace: str | None = None
+    external_id: str | None = None
+    external_revision: str | None = None
+    uri: str | None = None
+    source_hash: str | None = None
 
     @model_validator(mode="after")
     def exactly_one_binding_target(self) -> RelationEndpoint:
         valid = {
             BindingMode.LOGICAL: self.object_uid is not None
             and self.revision_uid is None
-            and self.fragment is None
-            and self.external is None,
+            and self.fragment_path is None
+            and self.external_id is None,
             BindingMode.PINNED: self.object_uid is not None
             and self.revision_uid is not None
-            and self.fragment is None
-            and self.external is None,
-            BindingMode.FRAGMENT: self.fragment is not None
-            and self.external is None
-            and self.object_uid is None
-            and self.revision_uid is None,
-            BindingMode.EXTERNAL: self.external is not None
-            and self.fragment is None
+            and self.fragment_path is None
+            and self.external_id is None,
+            BindingMode.FRAGMENT: self.object_uid is not None
+            and self.revision_uid is not None
+            and self.fragment_path is not None
+            and self.external_id is None,
+            BindingMode.EXTERNAL: self.system is not None
+            and self.namespace is not None
+            and self.external_id is not None
+            and self.fragment_path is None
             and self.object_uid is None
             and self.revision_uid is None,
         }
@@ -341,9 +394,14 @@ class RelationEndpoint(FrozenModel):
 
 
 class RelationAssertion(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["relation_assertion_revision"] = (
+        "relation_assertion_revision"
+    )
     assertion_uid: str = Field(default_factory=uuid7_candidate)
-    revision_uid: str = Field(default_factory=uuid7_candidate)
+    relation_revision_uid: str = Field(default_factory=uuid7_candidate)
     revision_number: int = Field(default=1, ge=1)
+    parent_relation_revision_uid: str | None = None
     predicate: str
     core_role: CoreRelationRole
     source: RelationEndpoint
@@ -352,6 +410,18 @@ class RelationAssertion(FrozenModel):
     provenance_kind: ProvenanceKind
     formal_trace_categories: tuple[str, ...] = ()
     rationale: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    content_hash: str = ""
+
+    @model_validator(mode="after")
+    def calculate_content_hash(self) -> RelationAssertion:
+        calculated = semantic_hash(
+            self.model_dump(mode="json", exclude={"content_hash"}, exclude_none=True)
+        )
+        if self.content_hash and self.content_hash != calculated:
+            raise ValueError("content_hash does not match relation revision content")
+        object.__setattr__(self, "content_hash", calculated)
+        return self
 
     def identity_hash(self) -> str:
         return semantic_hash(
@@ -376,17 +446,21 @@ class WorkingCopy(FrozenModel):
     object_uid: str
     base_revision_uid: str
     fields: tuple[SemanticField, ...]
-    proposed_relations: tuple[RelationAssertion, ...] = ()
+    proposed_relation_revision_uids: tuple[str, ...] = ()
 
 
 class ChangeWorkspace(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["change_workspace"] = "change_workspace"
     workspace_uid: str = Field(default_factory=uuid7_candidate)
+    base_commit: str
     base_configuration_uid: str
     effective_model_hash: str
     delegation_uid: str
     state: str = "open"
     working_copies: tuple[WorkingCopy, ...] = ()
     checkpoint_uids: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
     def one_working_copy_per_object(self) -> ChangeWorkspace:
@@ -397,6 +471,8 @@ class ChangeWorkspace(FrozenModel):
 
 
 class ConfigurationSnapshot(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["configuration_snapshot"] = "configuration_snapshot"
     configuration_uid: str = Field(default_factory=uuid7_candidate)
     git_commit: str
     revision_uids: tuple[str, ...]
@@ -404,7 +480,11 @@ class ConfigurationSnapshot(FrozenModel):
     profile_revision_uids: tuple[str, ...]
     effective_model_hash: str
     active_deviation_revision_uids: tuple[str, ...] = ()
+    variant: str | None = None
+    valid_at: datetime | None = None
     closure_status: str = "complete"
+    closure_reasons: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class KindDefinition(FrozenModel):

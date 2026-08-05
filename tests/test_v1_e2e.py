@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -29,6 +30,7 @@ APPROVAL_UID = "018f0000-0000-7000-8000-000000000006"
 PACKAGE_UID = "018f0000-0000-7000-8000-000000000007"
 BASELINE_UID = "018f0000-0000-7000-8000-000000000008"
 CONFIGURATION_UID = "018f0000-0000-7000-8000-000000000009"
+PREPARER_UID = "018f0000-0000-7000-8000-000000000015"
 
 
 def canonical_resources() -> tuple[dict[str, object], dict[str, object]]:
@@ -94,7 +96,9 @@ def review_package(
         "open_finding_uids": [],
         "effective_model_hash": effective_model_hash,
         "evaluation_context_hash": semantic_hash({"configuration": "demo"}),
+        "prepared_by_actor_uid": PREPARER_UID,
         "required_review_roles": ["technical"],
+        "minimum_approval_count": 1,
         "created_at": "2026-08-05T00:00:00Z",
     }
     return package | {"package_hash": document_hash(package, "package_hash")}
@@ -119,12 +123,30 @@ def baseline_manifest(base_commit: str, model_hash: str) -> dict[str, object]:
     return manifest | {"manifest_hash": document_hash(manifest, "manifest_hash")}
 
 
+def configuration_snapshot(base_commit: str, model_hash: str) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "resource_type": "configuration_snapshot",
+        "configuration_uid": CONFIGURATION_UID,
+        "git_commit": base_commit,
+        "revision_uids": [REVISION_UID],
+        "relation_revision_uids": [],
+        "profile_revision_uids": [],
+        "active_deviation_revision_uids": [],
+        "variant": None,
+        "valid_at": None,
+        "effective_model_hash": model_hash,
+        "closure_status": "complete",
+        "closure_reasons": [],
+        "created_at": "2026-08-05T00:00:00Z",
+    }
+
+
 def test_reviewed_multi_resource_apply_resolve_and_projection_rebuild(tmp_path: Path) -> None:
     repository = GitCanonicalRepository(tmp_path / "project")
     base = repository.initialize()
     logical, revision = canonical_resources()
     model_hash = semantic_hash({"profiles": []})
-    baseline = baseline_manifest(base, model_hash)
     package_hash = semantic_hash({"candidate_revision_uids": [REVISION_UID]})
     transaction = SemanticTransaction(
         transaction_uid=TRANSACTION_UID,
@@ -143,11 +165,6 @@ def test_reviewed_multi_resource_apply_resolve_and_projection_rebuild(tmp_path: 
                 f"canonical/revisions/{REVISION_UID}.json",
                 revision,
             ),
-            SemanticOperation(
-                OperationType.CREATE_BASELINE,
-                f"canonical/baselines/{BASELINE_UID}.json",
-                baseline,
-            ),
         ),
         approvals=(
             ApprovalAttestation(
@@ -162,8 +179,40 @@ def test_reviewed_multi_resource_apply_resolve_and_projection_rebuild(tmp_path: 
         delegation_uid=DELEGATION_UID,
         idempotency_key="e2e-reviewed-apply",
     )
-    applied = repository.apply(transaction)
-    assert not applied.idempotent_replay
+    content_applied = repository.apply(transaction)
+    configuration = configuration_snapshot(content_applied.commit, model_hash)
+    configuration_applied = repository.apply(
+        replace(
+            transaction,
+            transaction_uid="018f0000-0000-7000-8000-000000000016",
+            base_commit=content_applied.commit,
+            operations=(
+                SemanticOperation(
+                    OperationType.CREATE_CONFIGURATION,
+                    f"canonical/configurations/{CONFIGURATION_UID}.json",
+                    configuration,
+                ),
+            ),
+            idempotency_key="e2e-reviewed-configuration",
+        )
+    )
+    baseline = baseline_manifest(configuration_applied.commit, model_hash)
+    applied = repository.apply(
+        replace(
+            transaction,
+            transaction_uid="018f0000-0000-7000-8000-000000000017",
+            base_commit=configuration_applied.commit,
+            operations=(
+                SemanticOperation(
+                    OperationType.CREATE_BASELINE,
+                    f"canonical/baselines/{BASELINE_UID}.json",
+                    baseline,
+                ),
+            ),
+            idempotency_key="e2e-reviewed-baseline",
+        )
+    )
+    assert not content_applied.idempotent_replay
     catalog = SchemaCatalog()
     catalog.validate(
         "baseline-manifest.schema.json",
@@ -174,7 +223,7 @@ def test_reviewed_multi_resource_apply_resolve_and_projection_rebuild(tmp_path: 
     for schema_name, path in (
         (
             "applied-change.schema.json",
-            f"canonical/applied_changes/{TRANSACTION_UID}.json",
+                f"canonical/applied_changes/{TRANSACTION_UID}.json",
         ),
         (
             "provenance.schema.json",
@@ -190,6 +239,13 @@ def test_reviewed_multi_resource_apply_resolve_and_projection_rebuild(tmp_path: 
     resolved = domain.resolve("REQ-SW-0001").payload()
     assert resolved["value"]["uid"] == OBJECT_UID
     assert resolved["value"]["revision_uid"] == REVISION_UID
+    context = domain.build_context("requirement_change", (OBJECT_UID,), 4096).payload()
+    assert context["ok"] is True
+    assert context["value"]["completeness"] == "complete_under_model"
+    json.dumps(context)
+    audit_task = domain.start_task("verify_audit_chain", {}).payload()
+    assert audit_task["value"]["result"]["valid"] is True
+    assert domain.start_task("arbitrary_fake_task", {}).ok is False
 
     database = tmp_path / "projection.sqlite3"
     assert repository.rebuild_projection(database) == applied.commit
@@ -214,12 +270,67 @@ def test_repository_capability_apply_requires_valid_human_signature(tmp_path: Pa
     project = tmp_path / "project"
     domain = RepositoryDomainService(project)
     workspace_uid = "018f0000-0000-7000-8000-000000000010"
+    store = ApprovalKeyStore(tmp_path / "keys")
+    trust = store.generate(ACTOR_UID, "Reviewer", ("technical",))
+    delegation_uid = "018f0000-0000-7000-8000-000000000011"
+    delegation_without_hash: dict[str, object] = {
+        "schema_version": "1.0",
+        "resource_type": "delegation_grant",
+        "delegation_uid": delegation_uid,
+        "principal_uid": ACTOR_UID,
+        "principal_type": "human",
+        "workspace_uid": workspace_uid,
+        "base_commit": domain.base,
+        "operations": ["open_workspace", "propose_operation", "apply_transaction"],
+        "scope": {"resource_uids": [OBJECT_UID], "revision_uids": [REVISION_UID]},
+        "limits": {"max_operations": 10},
+        "issued_by": ACTOR_UID,
+        "issued_at": "2026-08-05T00:00:00Z",
+        "expires_at": "2099-08-05T00:00:00Z",
+        "stop_conditions": [],
+    }
+    delegation = delegation_without_hash | {
+        "content_hash": document_hash(delegation_without_hash, "content_hash")
+    }
+    bootstrap = SemanticTransaction(
+        transaction_uid="018f0000-0000-7000-8000-000000000013",
+        base_commit=domain.base,
+        expected_revisions=(),
+        effective_model_hash=semantic_hash({"bootstrap": True}),
+        review_package_hash=semantic_hash({"bootstrap": "reviewed"}),
+        operations=(
+            SemanticOperation(
+                OperationType.REGISTER_TRUSTED_ACTOR,
+                f"canonical/trust/{ACTOR_UID}/{trust.key_uid}.json",
+                trust.model_dump(mode="json"),
+            ),
+            SemanticOperation(
+                OperationType.CREATE_DELEGATION,
+                f"canonical/delegations/{delegation_uid}.json",
+                delegation,
+            ),
+        ),
+        approvals=(
+            ApprovalAttestation(
+                "018f0000-0000-7000-8000-000000000014",
+                semantic_hash({"bootstrap": "reviewed"}),
+                ACTOR_UID,
+                "human",
+                "technical",
+            ),
+        ),
+        actor=ACTOR_UID,
+        delegation_uid=delegation_uid,
+        idempotency_key="bootstrap-trust-delegation",
+    )
+    domain.repository.apply(bootstrap)
+    domain.reload()
     base_envelope = WriteEnvelope(
         workspace_uid=workspace_uid,
         expected_base=domain.base,
         idempotency_key="signed-workspace-open",
         actor=ACTOR_UID,
-        delegation_uid="018f0000-0000-7000-8000-000000000011",
+        delegation_uid=delegation_uid,
         dry_run=False,
         risk_class=RiskClass.HIGH,
         operation={"type": "open_workspace"},
@@ -235,15 +346,13 @@ def test_repository_capability_apply_requires_valid_human_signature(tmp_path: Pa
     ]
     package = review_package(workspace_uid, domain.base, model_hash, operations)
     package_hash = str(package["package_hash"])
-    store = ApprovalKeyStore(tmp_path / "keys")
-    trust = store.generate(ACTOR_UID, "Reviewer", ("technical",))
     signed = store.sign(
         trust,
         "technical",
         ApprovalPayload(
             package_hash=package_hash,
             effective_model_hash=model_hash,
-            scope={"revision_uids": [REVISION_UID]},
+            scope={"resource_uids": [OBJECT_UID], "revision_uids": [REVISION_UID]},
             approval_type="technical",
         ),
     )
@@ -260,10 +369,33 @@ def test_repository_capability_apply_requires_valid_human_signature(tmp_path: Pa
             "review_package": package,
             "effective_model_hash": model_hash,
             "signed_approval": signed.model_dump(mode="json"),
-            "trust_record": trust.model_dump(mode="json"),
             "operations": operations,
         },
     )
+    rogue_store = ApprovalKeyStore(tmp_path / "rogue-keys")
+    rogue_trust = rogue_store.generate(ACTOR_UID, "Rogue Reviewer", ("technical",))
+    rogue_signed = rogue_store.sign(
+        rogue_trust,
+        "technical",
+        ApprovalPayload(
+            package_hash=package_hash,
+            effective_model_hash=model_hash,
+            scope={"resource_uids": [OBJECT_UID], "revision_uids": [REVISION_UID]},
+            approval_type="technical",
+        ),
+    )
+    request_supplied_trust = replace(
+        request,
+        idempotency_key="request-supplied-trust-is-untrusted",
+        operation=request.operation
+        | {
+            "signed_approval": rogue_signed.model_dump(mode="json"),
+            "trust_record": rogue_trust.model_dump(mode="json"),
+        },
+    )
+    rejected = domain.apply_transaction(request_supplied_trust)
+    assert not rejected.ok
+    assert "Canonical State" in rejected.error.message
     result = domain.apply_transaction(request)
     assert result.ok
     assert domain.resolve("REQ-SW-0001").ok

@@ -31,11 +31,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["operation_type", "target", "payload"],
+        "required": ["operation_type", "resource"],
         "properties": {
           "operation_type": {"enum": ["create_logical_object", "create_revision", "set_disposition", "assert_relation", "retire_relation", "create_record", "retract_record", "create_deviation", "revoke_deviation", "update_profile_binding", "create_configuration", "create_baseline", "promote_fragment", "split_object", "consolidate_object"]},
-          "target": {"type": "string", "minLength": 1},
-          "payload": {"$ref": "common.schema.json#/$defs/canonical_value"}
+          "resource": {"type": "object"}
         }
       }
     },

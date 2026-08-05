@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -124,7 +126,10 @@ class ApprovalKeyStore:
             "algorithm": "Ed25519",
             "actor_uid": actor_uid,
             "key_uid": trust.key_uid,
-            "private_key": base64.b64encode(private.private_bytes_raw()).decode("ascii"),
+            "protection": "windows-dpapi-current-user" if os.name == "nt" else "filesystem-user-only",
+            "protected_private_key": base64.b64encode(
+                _protect_private_key(private.private_bytes_raw())
+            ).decode("ascii"),
         }
         path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8", newline="\n")
         path.chmod(0o600)
@@ -138,7 +143,10 @@ class ApprovalKeyStore:
         path = self.root / f"{trust.key_uid}.json"
         value = json.loads(path.read_text(encoding="utf-8"))
         private = Ed25519PrivateKey.from_private_bytes(
-            base64.b64decode(value["private_key"], validate=True)
+            _unprotect_private_key(
+                base64.b64decode(value["protected_private_key"], validate=True),
+                str(value["protection"]),
+            )
         )
         signature = private.sign(payload.message())
         return SignedApproval(
@@ -189,3 +197,59 @@ def verify_approval(
         )
     except (InvalidSignature, ValueError) as error:
         raise PermissionError("approval signature is invalid") from error
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _blob(value: bytes) -> tuple[_DataBlob, ctypes.Array[ctypes.c_char]]:
+    buffer = ctypes.create_string_buffer(value)
+    return (
+        _DataBlob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))),
+        buffer,
+    )
+
+
+def _protect_private_key(value: bytes) -> bytes:
+    if os.name != "nt":
+        return value
+    source, source_buffer = _blob(value)
+    output = _DataBlob()
+    crypt32 = ctypes.windll.crypt32
+    if not crypt32.CryptProtectData(
+        ctypes.byref(source),
+        "LESR Ed25519 private key",
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(output),
+    ):
+        raise OSError("Windows DPAPI could not protect the LESR private key")
+    try:
+        return ctypes.string_at(output.pbData, output.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(output.pbData)
+        del source_buffer
+
+
+def _unprotect_private_key(value: bytes, protection: str) -> bytes:
+    if protection == "filesystem-user-only":
+        if os.name == "nt":
+            raise PermissionError("unprotected private key is forbidden on Windows")
+        return value
+    if protection != "windows-dpapi-current-user" or os.name != "nt":
+        raise PermissionError("private key protection is unavailable for this user/platform")
+    source, source_buffer = _blob(value)
+    output = _DataBlob()
+    crypt32 = ctypes.windll.crypt32
+    if not crypt32.CryptUnprotectData(
+        ctypes.byref(source), None, None, None, None, 0, ctypes.byref(output)
+    ):
+        raise PermissionError("Windows DPAPI could not unlock the LESR private key")
+    try:
+        return ctypes.string_at(output.pbData, output.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(output.pbData)
+        del source_buffer

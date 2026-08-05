@@ -10,25 +10,21 @@ from typing import Any
 import typer
 
 from lesr.adapters.git import (
-    ApprovalAttestation,
     CheckpointStrategy,
     GitCanonicalRepository,
-    OperationType,
-    SemanticOperation,
-    SemanticTransaction,
 )
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.mcp import create_server
+from lesr.adapters.pdf_import import preview_pdf
 from lesr.adapters.schemas import SchemaCatalog
+from lesr.application.contracts import RiskClass, WriteEnvelope
 from lesr.application.service import RepositoryDomainService
 from lesr.domain.approval import (
     ApprovalKeyStore,
     ApprovalPayload,
-    SignedApproval,
     TrustedActor,
-    verify_approval,
 )
-from lesr.domain.semantic import document_hash, semantic_hash, uuid7_candidate
+from lesr.domain.semantic import document_hash, uuid7_candidate
 
 app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
 context_app = typer.Typer(no_args_is_help=True)
@@ -85,16 +81,29 @@ def build_context(project: Path, task_type: str, target: list[str], token_budget
 
 
 @workspace_app.command("open")
-def open_workspace(project: Path, delegation_uid: str, workspace_uid: str = "") -> None:
-    repository = GitCanonicalRepository(project)
-    repository.initialize()
+def open_workspace(
+    project: Path,
+    delegation_uid: str,
+    actor_uid: str,
+    idempotency_key: str,
+    workspace_uid: str = "",
+    dry_run: bool = False,
+) -> None:
+    domain = RepositoryDomainService(project)
     uid = workspace_uid or uuid7_candidate()
-    checkpoint = repository.create_checkpoint(
-        uid,
-        {"workspace_uid": uid, "delegation_uid": delegation_uid, "state": "open"},
-        CheckpointStrategy.WORKSPACE_REF,
+    result = domain.open_workspace(
+        WriteEnvelope(
+            uid,
+            domain.base,
+            idempotency_key,
+            actor_uid,
+            delegation_uid,
+            dry_run,
+            RiskClass.MEDIUM,
+            {"type": "open_workspace"},
+        )
     )
-    emit(repository.checkpoint_payload(checkpoint) | {"git_reference": checkpoint.git_reference})
+    emit(result.payload())
 
 
 @workspace_app.command("checkpoint")
@@ -120,7 +129,14 @@ def import_preview(project: Path, source: Path, namespace: str, kind: str) -> No
         selected.relative_to(root)
     except ValueError as error:
         raise typer.BadParameter("source must be inside the project") from error
-    emit([asdict(item) for item in preview_markdown(selected, namespace=namespace, kind=kind)])
+    candidates: tuple[Any, ...]
+    if selected.suffix.casefold() == ".pdf":
+        candidates = preview_pdf(selected, namespace=namespace, kind=kind)
+    elif selected.suffix.casefold() in {".md", ".markdown"}:
+        candidates = preview_markdown(selected, namespace=namespace, kind=kind)
+    else:
+        raise typer.BadParameter("supported preview formats are UTF-8 Markdown and text PDF")
+    emit([asdict(item) for item in candidates])
 
 
 @approval_app.command("keygen")
@@ -150,20 +166,17 @@ def apply_transaction(
     project: Path,
     transaction_file: Path,
     review_package_file: Path,
-    approval_file: Path,
-    trust_record: Path,
+    approval_file: list[Path],
+    dry_run: bool = False,
 ) -> None:
     raw = read_object(transaction_file)
     review_package = read_object(review_package_file)
-    approval_value = read_object(approval_file)
-    trust_value = read_object(trust_record)
+    approval_values = [read_object(path) for path in approval_file]
     schemas = SchemaCatalog()
     schemas.validate("semantic-transaction.schema.json", raw)
     schemas.validate("review-package.schema.json", review_package)
-    schemas.validate("approval-attestation.schema.json", approval_value)
-    schemas.validate("trusted-actor.schema.json", trust_value)
-    signed = SignedApproval.model_validate(approval_value)
-    trust = TrustedActor.model_validate(trust_value)
+    for approval_value in approval_values:
+        schemas.validate("approval-attestation.schema.json", approval_value)
     package_hash = str(review_package["package_hash"])
     if document_hash(review_package, "package_hash") != package_hash:
         raise typer.BadParameter("review package content hash is invalid")
@@ -176,60 +189,29 @@ def apply_transaction(
     if review_package["effective_model_hash"] != raw["effective_model_hash"]:
         raise typer.BadParameter("review package effective model does not match")
     semantic_diff = review_package["semantic_diff"]
-    operation_hashes = [
-        semantic_hash(
+    if not isinstance(semantic_diff, dict):
+        raise typer.BadParameter("review package semantic diff is invalid")
+    domain = RepositoryDomainService(project)
+    result = domain.apply_transaction(
+        WriteEnvelope(
+            str(raw["workspace_uid"]),
+            str(raw["base_commit"]),
+            str(raw["idempotency_key"]),
+            str(raw["actor_uid"]),
+            str(raw["delegation_uid"]),
+            dry_run,
+            RiskClass(str(raw["risk_class"])),
             {
-                "operation_type": item["operation_type"],
-                "target": item["target"],
-                "payload": item["payload"],
-            }
+                "transaction_uid": raw["transaction_uid"],
+                "review_package": review_package,
+                "effective_model_hash": raw["effective_model_hash"],
+                "signed_approvals": approval_values,
+                "operations": raw["operations"],
+                "expected_revisions": raw["expected_revisions"],
+            },
         )
-        for item in raw["operations"]
-    ]
-    if not isinstance(semantic_diff, dict) or semantic_diff.get(
-        "operation_hashes"
-    ) != operation_hashes:
-        raise typer.BadParameter("review package does not bind the semantic operations")
-    verify_approval(
-        signed,
-        trust,
-        package_hash=package_hash,
-        effective_model_hash=str(raw["effective_model_hash"]),
     )
-    repository = GitCanonicalRepository(project)
-    repository.initialize()
-    operations = tuple(
-        SemanticOperation(
-            OperationType(item["operation_type"]),
-            str(item["target"]),
-            dict(item["payload"]),
-        )
-        for item in raw["operations"]
-    )
-    transaction = SemanticTransaction(
-        transaction_uid=str(raw["transaction_uid"]),
-        base_commit=str(raw["base_commit"]),
-        expected_revisions=tuple(
-            (str(item["revision_uid"]), str(item["content_hash"]))
-            for item in raw.get("expected_revisions", [])
-        ),
-        effective_model_hash=str(raw["effective_model_hash"]),
-        review_package_hash=package_hash,
-        operations=operations,
-        approvals=(
-            ApprovalAttestation(
-                signed.approval_uid,
-                signed.package_hash,
-                signed.actor_uid,
-                "human",
-                signed.approval_type,
-            ),
-        ),
-        actor=str(raw["actor_uid"]),
-        delegation_uid=str(raw["delegation_uid"]),
-        idempotency_key=str(raw["idempotency_key"]),
-    )
-    emit(asdict(repository.apply(transaction)))
+    emit(result.payload())
 
 
 @baseline_app.command("create")

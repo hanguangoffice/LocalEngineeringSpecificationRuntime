@@ -126,12 +126,13 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
     assert any(str(item.uriTemplate).startswith("lesr://objects/") for item in templates)
 
 
-def test_real_stdio_protocol_initializes_lists_and_calls_tools() -> None:
+def test_real_stdio_protocol_initializes_lists_and_calls_tools(tmp_path: Path) -> None:
     async def probe() -> None:
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "lesr.adapters.mcp"],
             cwd=Path.cwd(),
+            env={"LESR_PROJECT": str(tmp_path / "project")},
         )
         async with (
             stdio_client(parameters) as (read_stream, write_stream),
@@ -145,6 +146,7 @@ def test_real_stdio_protocol_initializes_lists_and_calls_tools() -> None:
             resolved = await session.call_tool("resolve", {"identifier": "REQ-SW-0001"})
             assert resolved.isError is not True
             assert resolved.structuredContent is not None
-            assert resolved.structuredContent["value"]["uid"] == "018f0000-0000-7000-8000-000000000001"
+            assert resolved.structuredContent["ok"] is False
+            assert resolved.structuredContent["error"]["code"] == "LESR-NOT-FOUND"
 
     asyncio.run(probe())

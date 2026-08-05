@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from lesr.domain.semantic import canonical_json, semantic_hash
+from pydantic import Field, model_validator
+
+from lesr.domain.semantic import FrozenModel, JsonValue, canonical_json, semantic_hash
 
 
 class ApplicabilityResult(StrEnum):
@@ -117,7 +120,12 @@ class ConstantApplicability:
         return ExplanationNode("constant", self.result, "explicit constant")
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "constant", "result": self.result}
+        value = {
+            ApplicabilityResult.APPLICABLE: "true",
+            ApplicabilityResult.NOT_APPLICABLE: "false",
+            ApplicabilityResult.INDETERMINATE: "unknown",
+        }[self.result]
+        return {"op": "constant", "value": value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +141,7 @@ class KindIs:
         return ExplanationNode("kind_is", result, f"target kind is {environment.target_kind}")
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "kind_is", "kind": self.kind}
+        return {"op": "kind_is", "kind": self.kind}
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,13 +159,13 @@ class FieldKnown:
         return ExplanationNode("field_known", result, f"{self.path} is {cell.state}")
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "field_known", "path": self.path}
+        return {"op": "field_known", "path": self.path}
 
 
 @dataclass(frozen=True, slots=True)
 class FieldEquals:
     path: str
-    expected: str | int | bool
+    expected: JsonValue
 
     def evaluate(self, environment: EvaluationEnvironment) -> ExplanationNode:
         cell = environment.read(self.path)
@@ -176,7 +184,7 @@ class FieldEquals:
         )
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "field_equals", "path": self.path, "expected": self.expected}
+        return {"op": "field_equals", "path": self.path, "value": self.expected}
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +203,7 @@ class AllOf:
         return ExplanationNode("all_of", result, "Kleene three-valued ALL", evaluated)
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "all_of", "children": [child.to_data() for child in self.children]}
+        return {"op": "all_of", "items": [child.to_data() for child in self.children]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +222,7 @@ class AnyOf:
         return ExplanationNode("any_of", result, "Kleene three-valued ANY", evaluated)
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "any_of", "children": [child.to_data() for child in self.children]}
+        return {"op": "any_of", "items": [child.to_data() for child in self.children]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,7 +239,7 @@ class Not:
         return ExplanationNode("not", result, "Kleene three-valued NOT", (evaluated,))
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "not", "child": self.child.to_data()}
+        return {"op": "not", "item": self.child.to_data()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,7 +309,7 @@ class FieldRequired:
         return frozenset({self.path})
 
     def to_data(self) -> dict[str, Any]:
-        return {"node": "field_required", "path": self.path}
+        return {"op": "field_required", "path": self.path}
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,9 +352,9 @@ class QuantityMaximum:
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "node": "quantity_maximum",
+            "op": "quantity_maximum",
             "path": self.path,
-            "maximum": {"value": str(self.maximum.value), "unit": self.maximum.unit},
+            "maximum": {"decimal": str(self.maximum.value), "unit": self.maximum.unit},
         }
 
 
@@ -382,10 +390,9 @@ class RelationMinimum:
 
     def to_data(self) -> dict[str, Any]:
         return {
-            "node": "relation_minimum",
-            "predicate": self.predicate,
+            "op": "relation_minimum",
+            "path": {"roles": [self.predicate], "max_depth": self.maximum_depth},
             "minimum": self.minimum,
-            "maximum_depth": self.maximum_depth,
         }
 
 
@@ -397,36 +404,101 @@ class RuleFixture:
     expected_outcome: RuleOutcome
 
 
-@dataclass(frozen=True, slots=True)
-class RuleSource:
-    rule_uid: str
-    revision_uid: str
-    schema_version: int
-    authoritative_statement: str
-    interpretation_note: str
-    target_kind: str
-    applicability: ApplicabilityExpression
-    modality: NormativeModality
-    constraint: Constraint
-    enforcement: dict[str, EnforcementEffect]
-    authority: str
+class RuleSourceText(FrozenModel):
+    text: str = Field(min_length=1)
+    language: str = Field(min_length=2)
+    source_hash: str
+    interpretation_note: str = ""
+    source_reference: JsonValue | None = None
+
+
+class EvaluationSpecification(FrozenModel):
+    kind: Literal[
+        "declarative",
+        "registered_validator",
+        "external_tool",
+        "human_attestation",
+        "ai_semantic",
+        "composite",
+    ] = "declarative"
+    validator_uid: str | None = None
+    advisory_only: bool = False
+
+
+class EnforcementMapping(FrozenModel):
+    operation: str = Field(min_length=1)
+    effect: EnforcementEffect
+
+
+class AuthorityDeclaration(FrozenModel):
+    source_uid: str
+    profile_revision_uid: str
+    issuer_uid: str
+    scope: JsonValue
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    may_refine: bool
+    may_relax: bool
     deviation_allowed: bool
+    non_overridable: bool
+    overrides: tuple[str, ...] = ()
+    approval_record_uid: str | None = None
+
+
+class DeviationPolicy(FrozenModel):
+    allowed: bool
+    required_approval_roles: tuple[str, ...] = ()
+
+
+class RuleFixtureDefinition(FrozenModel):
+    fixture_uid: str
+    kind: FixtureKind
+    environment: dict[str, JsonValue]
+    expected_outcome: RuleOutcome
+
+
+class RuleDefinition(FrozenModel):
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["rule_definition_revision"] = "rule_definition_revision"
+    rule_uid: str
+    rule_revision_uid: str
+    source: RuleSourceText
+    target_selector: dict[str, JsonValue]
+    applicability: dict[str, JsonValue]
+    modality: NormativeModality
+    constraints: tuple[dict[str, JsonValue], ...]
+    evaluation: EvaluationSpecification
+    enforcement: tuple[EnforcementMapping, ...]
+    authority: AuthorityDeclaration
+    exception_policy: JsonValue
+    deviation_policy: DeviationPolicy
     explanation_map: dict[str, str]
-    fixtures: tuple[RuleFixture, ...]
+    fixtures: tuple[RuleFixtureDefinition, ...]
+    content_hash: str = ""
+
+    @model_validator(mode="after")
+    def calculate_content_hash(self) -> RuleDefinition:
+        calculated = semantic_hash(
+            self.model_dump(mode="json", exclude={"content_hash"}, exclude_none=True)
+        )
+        if self.content_hash and self.content_hash != calculated:
+            raise ValueError("content_hash does not match rule definition content")
+        object.__setattr__(self, "content_hash", calculated)
+        return self
 
 
 @dataclass(frozen=True, slots=True)
 class RuleAST:
     rule_uid: str
-    revision_uid: str
-    schema_version: int
+    rule_revision_uid: str
+    schema_version: str
     ast_hash: str
     target_kind: str
     applicability: ApplicabilityExpression
     modality: NormativeModality
-    constraint: Constraint
+    constraints: tuple[Constraint, ...]
     enforcement: dict[str, EnforcementEffect]
-    authority: str
+    authority: AuthorityDeclaration
     deviation_allowed: bool
 
 
@@ -461,17 +533,30 @@ class RuleCompiler:
         self.symbols = symbols
         self.units = units
 
-    def compile(self, source: RuleSource) -> CompilationResult:
+    def compile(self, source: RuleDefinition) -> CompilationResult:
         diagnostics: list[CompilationDiagnostic] = []
-        if not source.authoritative_statement.strip():
+        if not source.source.text.strip():
             diagnostics.append(
                 CompilationDiagnostic("error", "RULE_STATEMENT_MISSING", "statement is required")
             )
-        if not source.authority.strip():
+        if not source.authority.source_uid:
             diagnostics.append(
                 CompilationDiagnostic("error", "RULE_AUTHORITY_MISSING", "authority is required")
             )
-        for path in source.constraint.referenced_paths():
+        try:
+            target = _parse_expression(source.target_selector)
+            if not isinstance(target, KindIs):
+                raise TypeError("v1 target selector must resolve to kind_is")
+            applicability = _parse_expression(source.applicability)
+            constraints = tuple(_parse_constraint(item) for item in source.constraints)
+        except (KeyError, TypeError, ValueError) as error:
+            diagnostics.append(
+                CompilationDiagnostic("error", "RULE_AST_INVALID", str(error))
+            )
+            return CompilationResult(None, tuple(diagnostics), ())
+        for path in frozenset().union(
+            *(constraint.referenced_paths() for constraint in constraints)
+        ):
             if path not in self.symbols:
                 diagnostics.append(
                     CompilationDiagnostic("error", "RULE_PATH_UNKNOWN", f"unknown path: {path}")
@@ -482,31 +567,48 @@ class RuleCompiler:
                     "error", "RULE_EXPLANATION_MISSING", "explanation map is required"
                 )
             )
+        if source.evaluation.kind == "ai_semantic" and not source.evaluation.advisory_only:
+            diagnostics.append(
+                CompilationDiagnostic(
+                    "error",
+                    "RULE_AI_SEMANTIC_NOT_ADVISORY",
+                    "AI semantic evaluation must be advisory unless a reviewed policy says otherwise",
+                )
+            )
+        enforcement = {item.operation: item.effect for item in source.enforcement}
+        if len(enforcement) != len(source.enforcement):
+            diagnostics.append(
+                CompilationDiagnostic(
+                    "error", "RULE_ENFORCEMENT_DUPLICATE", "duplicate enforcement operation"
+                )
+            )
         ast_data = {
             "schema_version": source.schema_version,
             "rule_uid": source.rule_uid,
-            "revision_uid": source.revision_uid,
-            "target": source.target_kind,
-            "applicability": source.applicability.to_data(),
+            "rule_revision_uid": source.rule_revision_uid,
+            "target_selector": target.to_data(),
+            "applicability": applicability.to_data(),
             "modality": source.modality,
-            "constraint": source.constraint.to_data(),
-            "enforcement": source.enforcement,
-            "authority": source.authority,
-            "deviation_allowed": source.deviation_allowed,
+            "constraints": [item.to_data() for item in constraints],
+            "enforcement": enforcement,
+            "authority": source.authority.model_dump(mode="json", exclude_none=True),
+            "deviation_allowed": source.deviation_policy.allowed,
             "explanation_map": source.explanation_map,
         }
         ast = RuleAST(
             rule_uid=source.rule_uid,
-            revision_uid=source.revision_uid,
+            rule_revision_uid=source.rule_revision_uid,
             schema_version=source.schema_version,
             ast_hash=semantic_hash(ast_data),
-            target_kind=source.target_kind,
-            applicability=source.applicability,
+            target_kind=target.kind,
+            applicability=applicability,
             modality=source.modality,
-            constraint=source.constraint,
-            enforcement=dict(source.enforcement),
+            constraints=constraints,
+            enforcement=enforcement,
             authority=source.authority,
-            deviation_allowed=source.deviation_allowed,
+            deviation_allowed=(
+                source.deviation_policy.allowed and source.authority.deviation_allowed
+            ),
         )
         outcomes: list[tuple[str, RuleOutcome]] = []
         fixture_kinds = {fixture.kind for fixture in source.fixtures}
@@ -520,19 +622,124 @@ class RuleCompiler:
                 )
             )
         for fixture in source.fixtures:
-            result = evaluate_rule(ast, fixture.environment, self.units)
-            outcomes.append((fixture.fixture_id, result.outcome))
+            try:
+                environment = _parse_environment(fixture.environment)
+            except (KeyError, TypeError, ValueError) as error:
+                diagnostics.append(
+                    CompilationDiagnostic(
+                        "error",
+                        "RULE_FIXTURE_INVALID",
+                        f"{fixture.fixture_uid}: {error}",
+                    )
+                )
+                continue
+            result = evaluate_rule(ast, environment, self.units)
+            outcomes.append((fixture.fixture_uid, result.outcome))
             if result.outcome is not fixture.expected_outcome:
                 diagnostics.append(
                     CompilationDiagnostic(
                         "error",
                         "RULE_FIXTURE_FAILED",
-                        f"{fixture.fixture_id}: expected {fixture.expected_outcome}, got {result.outcome}",
+                        f"{fixture.fixture_uid}: expected {fixture.expected_outcome}, got {result.outcome}",
                     )
                 )
         if any(item.level == "error" for item in diagnostics):
             return CompilationResult(None, tuple(diagnostics), tuple(outcomes))
         return CompilationResult(ast, tuple(diagnostics), tuple(outcomes))
+
+
+def _parse_expression(value: dict[str, JsonValue]) -> ApplicabilityExpression:
+    operation = value.get("op")
+    if operation == "constant":
+        result = {
+            "true": ApplicabilityResult.APPLICABLE,
+            "false": ApplicabilityResult.NOT_APPLICABLE,
+            "unknown": ApplicabilityResult.INDETERMINATE,
+        }[str(value["value"])]
+        return ConstantApplicability(result)
+    if operation == "kind_is":
+        return KindIs(str(value["kind"]))
+    if operation == "field_known":
+        return FieldKnown(str(value["path"]))
+    if operation == "field_equals":
+        return FieldEquals(str(value["path"]), value.get("value"))
+    if operation in {"all_of", "any_of"}:
+        raw_items = value.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            raise ValueError(f"{operation} requires non-empty items")
+        items = tuple(_parse_expression(_require_dict(item)) for item in raw_items)
+        return AllOf(items) if operation == "all_of" else AnyOf(items)
+    if operation == "not":
+        return Not(_parse_expression(_require_dict(value.get("item"))))
+    raise ValueError(f"unsupported applicability operation: {operation}")
+
+
+def _parse_constraint(value: dict[str, JsonValue]) -> Constraint:
+    operation = value.get("op")
+    if operation == "field_required":
+        return FieldRequired(str(value["path"]))
+    if operation == "quantity_maximum":
+        maximum = _require_dict(value.get("maximum"))
+        return QuantityMaximum(
+            str(value["path"]),
+            Quantity(Decimal(str(maximum["decimal"])), str(maximum["unit"])),
+        )
+    if operation == "relation_minimum":
+        path = _require_dict(value.get("path"))
+        roles = path.get("roles")
+        if not isinstance(roles, list) or len(roles) != 1:
+            raise ValueError("v1 relation_minimum requires exactly one bounded role")
+        return RelationMinimum(
+            str(roles[0]),
+            int(str(value["minimum"])),
+            int(str(path["max_depth"])),
+        )
+    raise ValueError(f"unsupported constraint operation: {operation}")
+
+
+def _parse_environment(value: dict[str, JsonValue]) -> EvaluationEnvironment:
+    raw_fields = value.get("fields", {})
+    if not isinstance(raw_fields, dict):
+        raise TypeError("fixture fields must be an object")
+    fields: dict[str, ValueCell] = {}
+    for path, raw_cell in raw_fields.items():
+        cell = _require_dict(raw_cell)
+        state = ValueState(str(cell.get("state", "value")))
+        item: Any = cell.get("value")
+        if isinstance(item, dict) and {"decimal", "unit"} <= item.keys():
+            item = Quantity(Decimal(str(item["decimal"])), str(item["unit"]))
+        fields[path] = ValueCell(state, item)
+    raw_counts = value.get("relation_counts", {})
+    if not isinstance(raw_counts, dict):
+        raise TypeError("fixture relation_counts must be an object")
+    return EvaluationEnvironment(
+        target_kind=str(value["target_kind"]),
+        fields=fields,
+        relation_counts={key: int(str(item)) for key, item in raw_counts.items()},
+        operation=str(value.get("operation", "validate")),
+        active_exception_rule_uids=frozenset(
+            str(item) for item in _require_list(value.get("active_exception_rule_uids", []))
+        ),
+        active_deviation_rule_uids=frozenset(
+            str(item) for item in _require_list(value.get("active_deviation_rule_uids", []))
+        ),
+        conflicted_rule_uids=frozenset(
+            str(item) for item in _require_list(value.get("conflicted_rule_uids", []))
+        ),
+        schema_version=int(str(value.get("schema_version", 1))),
+    )
+
+
+def _require_dict(value: JsonValue | None) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        raise TypeError("expected an object")
+    return value
+
+
+def _require_list(value: JsonValue | None) -> list[JsonValue]:
+    if not isinstance(value, list):
+        raise TypeError("expected an array")
+    return value
 
 
 def evaluate_rule(
@@ -549,8 +756,19 @@ def evaluate_rule(
         return RuleEvaluation(RuleOutcome.NOT_APPLICABLE, applicability, None, enforcement)
     if applicability_result is ApplicabilityResult.INDETERMINATE:
         return RuleEvaluation(RuleOutcome.INDETERMINATE, applicability, None, enforcement)
-    constraint = ast.constraint.evaluate(environment, units)
-    constraint_result = ConstraintResult(constraint.result)
+    evaluated = tuple(item.evaluate(environment, units) for item in ast.constraints)
+    results = {ConstraintResult(item.result) for item in evaluated}
+    if ConstraintResult.EVALUATOR_ERROR in results:
+        constraint_result = ConstraintResult.EVALUATOR_ERROR
+    elif ConstraintResult.VIOLATED in results:
+        constraint_result = ConstraintResult.VIOLATED
+    elif ConstraintResult.INDETERMINATE in results:
+        constraint_result = ConstraintResult.INDETERMINATE
+    else:
+        constraint_result = ConstraintResult.SATISFIED
+    constraint = ExplanationNode(
+        "all_constraints", constraint_result, "all compiled constraints", evaluated
+    )
     if (
         constraint_result is ConstraintResult.VIOLATED
         and ast.deviation_allowed
@@ -572,7 +790,8 @@ def detect_direct_conflict(left: RuleAST, right: RuleAST) -> bool:
         left.target_kind == right.target_kind
         and {left.modality, right.modality}
         == {NormativeModality.OBLIGATION, NormativeModality.PROHIBITION}
-        and canonical_json(left.constraint.to_data()) == canonical_json(right.constraint.to_data())
+        and canonical_json([item.to_data() for item in left.constraints])
+        == canonical_json([item.to_data() for item in right.constraints])
     )
 
 
@@ -583,7 +802,7 @@ def project_to_shacl(ast: RuleAST) -> dict[str, Any]:
         "@type": "sh:NodeShape",
         "lesr:rule": ast.rule_uid,
         "lesr:targetKind": ast.target_kind,
-        "lesr:constraint": ast.constraint.to_data(),
+        "lesr:constraints": [item.to_data() for item in ast.constraints],
     }
 
 

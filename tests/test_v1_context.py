@@ -131,6 +131,23 @@ def test_high_risk_operation_cannot_use_latest_approved_fallback() -> None:
     assert any("fallback forbidden" in item for item in result.conflicts)
 
 
+def test_missing_explicit_revision_never_falls_back_to_configuration() -> None:
+    pinned = EvaluationContext(
+        repository="repo",
+        project="project",
+        operation="coding",
+        actor="USER-1",
+        target_object_uids=("REQ",),
+        evaluation_time=NOW,
+        configuration_uid="CFG-1",
+        explicit_revisions=(ConfigurationMembership("REQ", "REQ@404"),),
+    )
+    result = EffectiveResolver().resolve(pinned, revisions(), configuration())
+    assert result.selected.get("REQ") is None
+    assert result.objects[0].status is ResolutionStatus.INDETERMINATE
+    assert "REQ@404" in result.objects[0].reason
+
+
 @pytest.mark.parametrize(
     "task_type",
     ["mqtt_change", "can_signal_change", "requirement_change", "test_design", "deviation_review"],
@@ -148,3 +165,34 @@ def test_budget_shortage_is_explicit_and_never_drops_mandatory_context() -> None
     selected = {item.resource.object_uid for item in contract.selections}
     assert {"REQ", "DES", "RULE", "DEV"} <= selected
     assert contract.completeness is CompletenessStatus.INCOMPLETE_BUDGET
+
+
+def test_mandatory_sensitivity_omission_is_never_reported_complete() -> None:
+    resolved = EffectiveResolver().resolve(context(), revisions(), configuration())
+    secret_resources = tuple(
+        item if item.object_uid != "REQ" else ContextResource(
+            item.object_uid,
+            item.revision_uid,
+            item.kind,
+            item.title,
+            item.token_estimate,
+            "secret",
+        )
+        for item in resources()
+    )
+    contract = ContextPlanner().build(
+        task_type="requirement_change",
+        resolution=resolved,
+        resources=secret_resources,
+        relations=(),
+        rules=(),
+        policy=ContextPolicy(
+            invariant_object_uids=frozenset(),
+            mandatory_predicates=frozenset(),
+            forbidden_sensitivities=frozenset({"secret"}),
+        ),
+        token_budget=100,
+        configuration=configuration(),
+    )
+    assert contract.completeness is CompletenessStatus.INCOMPLETE_CONFIDENTIALITY
+    assert any(item.revision_uid == "REQ@2" for item in contract.negative_context)

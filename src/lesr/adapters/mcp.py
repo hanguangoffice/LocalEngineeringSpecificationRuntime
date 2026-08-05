@@ -10,7 +10,6 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from lesr.application.contracts import (
-    InMemoryDomainService,
     LESRDomainPort,
     RiskClass,
     WriteEnvelope,
@@ -181,12 +180,11 @@ def _write(
 
 def main() -> None:
     project = os.environ.get("LESR_PROJECT")
-    if project:
-        from lesr.application.service import RepositoryDomainService
+    if not project:
+        raise RuntimeError("LESR_PROJECT is required; no synthetic repository fallback is allowed")
+    from lesr.application.service import RepositoryDomainService
 
-        domain: LESRDomainPort = RepositoryDomainService(Path(project))
-    else:
-        domain = InMemoryDomainService()
+    domain: LESRDomainPort = RepositoryDomainService(Path(project))
     create_server(domain).run()
 
 

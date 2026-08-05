@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +14,11 @@ from lesr.domain.semantic import semantic_hash
 def test_ed25519_approval_binds_package_model_scope_and_role(tmp_path) -> None:
     store = ApprovalKeyStore(tmp_path / "keys")
     trust = store.generate("USER-1", "Reviewer", ("technical",))
+    key_document = json.loads(next((tmp_path / "keys").glob("*.json")).read_text())
+    assert "private_key" not in key_document
+    assert key_document["protection"] == (
+        "windows-dpapi-current-user" if os.name == "nt" else "filesystem-user-only"
+    )
     payload = ApprovalPayload(
         package_hash="sha256:package",
         effective_model_hash="sha256:model",

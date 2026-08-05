@@ -1,93 +1,37 @@
-# Specification Import Preview
+# Specification import boundary
 
-> **SUPERSEDED:** 本文描述 v0.1 导入流程。v1 只允许 Markdown 生成 Workspace
-> 候选操作，不允许导入器直接写 Canonical State。
+Import is a preview-only adapter. It produces structured semantic operations for
+a Change Workspace and never writes Canonical State, approves content, creates a
+Baseline or updates the query projection.
 
-LESR imports specifications in two stages:
+## Supported preview inputs
 
-1. preview source content as review candidates;
-2. accept one exact reviewed candidate as a formal draft Artifact.
+- UTF-8 Markdown: one candidate per non-empty heading section.
+- Text PDFs that the operator is entitled to process: one candidate per selected
+  page, with page number and source hash provenance.
 
-A preview never creates formal Artifacts, Relations, audit events, versions, or
-runtime indexes. Acceptance is an explicit CLI action and creates only a draft;
-it does not approve or baseline the Artifact.
+Encrypted/restricted PDFs are rejected before text extraction. OCR, password
+handling and permission bypass are not features. Source PDFs and extracted
+licensed standard text must not be committed.
 
-## Supported input
+Each candidate contains exactly two schema-valid operations:
 
-The initial importer accepts UTF-8 Markdown files inside the selected LESR
-project directory. Each non-empty level-two heading becomes one candidate:
+1. `create_logical_object` with a new Internal UID and Human Key;
+2. `create_revision` with imported provenance and source anchors.
 
-```markdown
-# Home communication standard
+The candidate must then pass ordinary Workspace, review-package, human approval,
+Delegation and atomic Apply controls. There is no import-specific authority path.
 
-## RULE-COM-001 MQTT reconnect
+## Determinism and provenance
 
-The client shall reconnect after an unexpected disconnect.
-```
+The source content hash, local filename, section/page anchor and extractor
+identity are fields of the candidate Revision. Re-running preview may allocate
+new candidate UIDs; accepting a candidate therefore binds the reviewed semantic
+operation hashes and exact source hash in the Review Package.
 
-Headings should start with a stable LESR ID. Missing IDs and empty sections are
-reported as review warnings. The importer does not invent missing requirements.
+## Local evaluation corpus
 
-## Command
-
-```powershell
-lesr import-preview demo specifications/demo-standard.md `
-  --artifact-type coding_rule `
-  --version 1.0
-```
-
-The command returns JSON containing:
-
-- normalized source identity and SHA-256 hash;
-- candidate Artifact IDs, types, titles, statements, and review status;
-- source section and exact Markdown line range;
-- deterministic normative-level hints;
-- stable warnings that require human review.
-
-Relative source paths are resolved against the project directory. Sources
-outside the project directory and non-UTF-8 or unsupported files are rejected
-with stable LESR error codes.
-
-## Trust boundary
-
-All output has `review_status: candidate`. Preview output must not be treated as
-an approved engineering specification.
-
-## Accepting one reviewed candidate
-
-After reviewing the preview, copy the exact candidate ID and source content
-hash into the acceptance command:
-
-```powershell
-lesr import-accept demo specifications/demo-standard.md `
-  CAND-C2E1FAE70A36 `
-  --expected-source-hash "sha256:..." `
-  --actor reviewer `
-  --artifact-type coding_rule `
-  --version 1.0
-```
-
-The candidate identity is bound to the source path, normalized content hash,
-source version, Artifact type, section location, ID, title, and statement.
-Acceptance therefore fails if reviewed inputs are silently changed.
-
-Acceptance also fails before formal writing when:
-
-- the current source hash differs from the reviewed hash;
-- the candidate is absent from the newly generated preview;
-- the candidate does not contain a stable Artifact ID;
-- the candidate has unresolved warnings;
-- the Artifact ID already exists.
-
-A successful acceptance creates:
-
-- `artifacts/<ID>.yaml` with `status: draft`;
-- `.lesr/versions/<ID>/v0001.json`;
-- an `artifact.create` audit event attributed to the human actor.
-
-The Artifact stores its original document ID, path, content hash, version,
-section, line range, page (when available), and import candidate ID under
-`attributes.provenance`.
-
-Acceptance does not approve, baseline, index, or expose the Artifact through
-MCP automatically. Those actions remain separate controlled workflows.
+`测试文档/` is ignored by Git. The unencrypted local ASPICE-like document is used
+for page-anchor integration tests. The encrypted MISRA document is used solely
+to verify fail-closed refusal. Executable MISRA-like rules in the committed test
+suite are synthetic and do not reproduce protected standard text.

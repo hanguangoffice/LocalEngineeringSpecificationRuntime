@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from lesr.adapters.markdown import preview_markdown
+from lesr.adapters.schemas import SchemaCatalog
 
 
 def test_markdown_preview_only_returns_workspace_operations(tmp_path) -> None:
@@ -13,4 +14,9 @@ def test_markdown_preview_only_returns_workspace_operations(tmp_path) -> None:
         "create_logical_object",
         "create_revision",
     ]
+    catalog = SchemaCatalog()
+    catalog.validate(
+        "logical-object.schema.json", candidates[0].operations[0]["resource"]
+    )
+    catalog.validate("revision.schema.json", candidates[0].operations[1]["resource"])
     assert set(tmp_path.rglob("*")) == before
