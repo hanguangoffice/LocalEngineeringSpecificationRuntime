@@ -1,0 +1,25 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/delegation-grant.schema.json",
+  "title":"LESR Scoped Delegation Grant",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schema_version","resource_type","delegation_uid","principal_uid","principal_type","workspace_uid","base_commit","operations","scope","limits","issued_by","issued_at","expires_at","stop_conditions","content_hash"],
+  "properties":{
+    "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
+    "resource_type":{"const":"delegation_grant"},
+    "delegation_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "principal_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "principal_type":{"$ref":"common.schema.json#/$defs/actor_type"},
+    "workspace_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "base_commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},
+    "operations":{"type":"array","minItems":1,"items":{"type":"string","minLength":1},"uniqueItems":true},
+    "scope":{"$ref":"common.schema.json#/$defs/canonical_value"},
+    "limits":{"$ref":"common.schema.json#/$defs/canonical_value"},
+    "issued_by":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "issued_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
+    "expires_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
+    "stop_conditions":{"type":"array","items":{"$ref":"common.schema.json#/$defs/canonical_value"}},
+    "content_hash":{"$ref":"common.schema.json#/$defs/sha256"}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/domain-error.schema.json",
+  "title": "LESR Domain Error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "category", "message", "affected_resources", "rule_or_policy", "retryable", "suggested_capability", "correlation_id"],
+  "properties": {
+    "code": {"type": "string", "pattern": "^LESR-[A-Z0-9-]+$"},
+    "category": {"enum": ["validation", "not_found", "conflict", "authorization", "indeterminate", "integrity", "internal"]},
+    "message": {"type": "string", "minLength": 1},
+    "affected_resources": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "rule_or_policy": {"type": ["string", "null"]},
+    "retryable": {"type": "boolean"},
+    "suggested_capability": {"type": ["string", "null"]},
+    "correlation_id": {"$ref": "common.schema.json#/$defs/uuid7"}
+  },
+  "examples": [{"code":"LESR-BASE-CONFLICT","category":"conflict","message":"Expected base is stale.","affected_resources":["refs/heads/lesr/canonical"],"rule_or_policy":"semantic_transaction.expected_base","retryable":true,"suggested_capability":"workspace.rebase","correlation_id":"018f0000-0000-7000-8000-000000000009"}]
+}

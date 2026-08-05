@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/profile.schema.json",
+  "title": "LESR Profile Revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "profile_uid", "profile_revision_uid", "profile_kind", "resource_kinds", "relation_types", "rule_revision_uids", "configuration_policies", "review_policies", "content_hash"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "profile_revision"},
+    "profile_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "profile_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "profile_kind": {"enum": ["core", "domain", "project", "tool_mapping", "tailoring"]},
+    "resource_kinds": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}, "uniqueItems": true},
+    "relation_types": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}, "uniqueItems": true},
+    "rule_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+    "configuration_policies": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "review_policies": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  }
+}

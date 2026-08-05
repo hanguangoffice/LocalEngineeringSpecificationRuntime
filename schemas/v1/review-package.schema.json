@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/review-package.schema.json",
+  "title": "LESR Immutable Review Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "package_uid", "workspace_uid", "base_commit", "base_revision_uids", "candidate_revision_uids", "relation_changes", "disposition_changes", "semantic_diff", "impact_analysis", "validation_run_uids", "open_finding_uids", "effective_model_hash", "evaluation_context_hash", "required_review_roles", "created_at", "package_hash"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "review_package"},
+    "package_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "workspace_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "base_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+    "candidate_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+    "relation_changes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "disposition_changes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "semantic_diff": {"$ref": "common.schema.json#/$defs/canonical_value"},
+    "impact_analysis": {"$ref": "common.schema.json#/$defs/canonical_value"},
+    "validation_run_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+    "open_finding_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
+    "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "evaluation_context_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "required_review_roles": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "package_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  }
+}

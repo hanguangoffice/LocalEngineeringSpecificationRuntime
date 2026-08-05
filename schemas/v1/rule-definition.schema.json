@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/rule-definition.schema.json",
+  "title": "LESR Rule Definition Revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "rule_uid", "rule_revision_uid", "source", "target_selector", "applicability", "modality", "constraints", "enforcement", "authority", "fixtures", "explanation_map", "content_hash"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "rule_definition_revision"},
+    "rule_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "rule_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "language", "source_hash"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "language": {"type": "string", "minLength": 2},
+        "source_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+      }
+    },
+    "target_selector": {"$ref": "#/$defs/expression"},
+    "applicability": {"$ref": "#/$defs/expression"},
+    "modality": {"enum": ["obligation", "prohibition", "permission", "recommendation", "information"]},
+    "constraints": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/constraint"}},
+    "enforcement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "effect"],
+      "properties": {
+        "operation": {"type": "string", "minLength": 1},
+        "effect": {"enum": ["observe", "warn", "block", "require_approval", "require_deviation"]}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_uid", "rank"],
+      "properties": {
+        "source_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+        "rank": {"type": "integer", "minimum": 0},
+        "overrides": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true}
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fixture_uid", "kind", "environment", "expected_outcome"],
+        "properties": {
+          "fixture_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+          "kind": {"enum": ["positive", "negative", "not_applicable", "indeterminate", "exception", "deviation", "conflict", "migration"]},
+          "environment": {"$ref": "common.schema.json#/$defs/canonical_value"},
+          "expected_outcome": {"enum": ["pass", "fail", "not_applicable", "indeterminate", "excepted", "deviated", "conflict"]}
+        }
+      }
+    },
+    "explanation_map": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  },
+  "$defs": {
+    "relation_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roles", "max_depth"],
+      "properties": {
+        "roles": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "max_depth": {"type": "integer", "minimum": 1, "maximum": 16}
+      }
+    },
+    "expression": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["op","value"],"properties":{"op":{"const":"constant"},"value":{"enum":["true","false","unknown"]}}},
+        {"type":"object","additionalProperties":false,"required":["op","kind"],"properties":{"op":{"const":"kind_is"},"kind":{"type":"string","minLength":1}}},
+        {"type":"object","additionalProperties":false,"required":["op","path"],"properties":{"op":{"const":"field_known"},"path":{"type":"string","minLength":1}}},
+        {"type":"object","additionalProperties":false,"required":["op","path","value"],"properties":{"op":{"const":"field_equals"},"path":{"type":"string","minLength":1},"value":{"$ref":"common.schema.json#/$defs/canonical_value"}}},
+        {"type":"object","additionalProperties":false,"required":["op","items"],"properties":{"op":{"enum":["all_of","any_of"]},"items":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/expression"}}}},
+        {"type":"object","additionalProperties":false,"required":["op","item"],"properties":{"op":{"const":"not"},"item":{"$ref":"#/$defs/expression"}}}
+      ]
+    },
+    "constraint": {
+      "oneOf": [
+        {"type":"object","additionalProperties":false,"required":["op","path"],"properties":{"op":{"const":"field_required"},"path":{"type":"string","minLength":1}}},
+        {"type":"object","additionalProperties":false,"required":["op","path","maximum"],"properties":{"op":{"const":"quantity_maximum"},"path":{"type":"string","minLength":1},"maximum":{"$ref":"common.schema.json#/$defs/quantity"}}},
+        {"type":"object","additionalProperties":false,"required":["op","path","minimum"],"properties":{"op":{"const":"relation_minimum"},"path":{"$ref":"#/$defs/relation_path"},"minimum":{"type":"integer","minimum":0}}},
+        {"type":"object","additionalProperties":false,"required":["op","function","path","comparison","expected"],"properties":{"op":{"const":"aggregate"},"function":{"enum":["count","sum","minimum","maximum"]},"path":{"$ref":"#/$defs/relation_path"},"comparison":{"enum":["eq","ne","lt","lte","gt","gte"]},"expected":{"oneOf":[{"type":"integer"},{"$ref":"common.schema.json#/$defs/quantity"}]}}}
+      ]
+    }
+  }
+}

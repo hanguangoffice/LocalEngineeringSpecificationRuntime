@@ -1,9 +1,9 @@
 # LESR
 
 > **Development status:** `LESR_Solution_Design_Baseline_v1.0/` is the current
-> design authority. The implementation under `src/lesr` is the superseded
-> v0.1 YAML MVP and is retained only as a runnable reference while the P1-P5
-> prototype gates are evaluated.
+> design authority. P1-P5 have passed and the final v1.0 construction contract
+> is under review. The implementation under `src/lesr` is still the superseded
+> v0.1 YAML MVP and remains a runnable reference until the separate cutover PR.
 
 Local Engineering Specification Runtime (LESR) turns Git-managed engineering
 specifications into structured, auditable local objects.
@@ -56,6 +56,7 @@ quality suite with Python 3.12 through uv:
 ```powershell
 uv sync --all-extras
 uv run python scripts/verify_baseline_manifest.py
+uv run python scripts/verify_construction_schemas.py
 uv run pytest
 uv run ruff check .
 uv run mypy src prototypes
@@ -76,3 +77,10 @@ Claude Code cannot currently complete even a control prompt without MCP, so on
 2026-08-05 the acceptance evidence was explicitly changed to Codex plus the
 independent stdio protocol client. The final `src/lesr` cutover remains a
 separate reviewed change. See `docs/prototype-results/GATE-SUMMARY.md`.
+
+## v1.0 construction contract
+
+The final implementation decisions are frozen in
+`docs/LESR_Codex_Construction_Spec_v1.0.md`. Draft 2020-12 contracts live in
+`schemas/v1`; they are reviewed and validated independently from the destructive
+runtime cutover.

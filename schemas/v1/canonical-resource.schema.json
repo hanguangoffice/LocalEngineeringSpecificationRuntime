@@ -1,0 +1,22 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/canonical-resource.schema.json",
+  "title":"LESR Canonical Resource",
+  "oneOf":[
+    {"$ref":"logical-object.schema.json"},
+    {"$ref":"revision.schema.json"},
+    {"$ref":"relation-identity.schema.json"},
+    {"$ref":"relation-assertion.schema.json"},
+    {"$ref":"immutable-record.schema.json"},
+    {"$ref":"profile.schema.json"},
+    {"$ref":"configuration.schema.json"},
+    {"$ref":"delegation-grant.schema.json"},
+    {"$ref":"review-package.schema.json"},
+    {"$ref":"approval-attestation.schema.json"},
+    {"$ref":"baseline-manifest.schema.json"},
+    {"$ref":"applied-change.schema.json"},
+    {"$ref":"trusted-actor.schema.json"},
+    {"$ref":"provenance.schema.json"},
+    {"$ref":"audit-anchor.schema.json"}
+  ]
+}

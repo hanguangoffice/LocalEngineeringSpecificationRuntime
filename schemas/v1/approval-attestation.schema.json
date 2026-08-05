@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/approval-attestation.schema.json",
+  "title": "LESR Ed25519 Approval Attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "approval_uid", "package_hash", "effective_model_hash", "scope", "scope_hash", "approval_type", "actor_uid", "actor_role", "actor_type", "issued_at", "conditions", "signature_algorithm", "key_uid", "signature", "provenance_uid"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "approval_attestation"},
+    "approval_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "package_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "scope": {"$ref": "common.schema.json#/$defs/canonical_value"},
+    "scope_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "approval_type": {"enum": ["content", "technical", "process", "risk_deviation", "baseline", "release"]},
+    "actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "actor_role": {"type": "string", "minLength": 1},
+    "actor_type": {"const": "human"},
+    "issued_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "expires_at": {"oneOf": [{"$ref": "common.schema.json#/$defs/utc_timestamp"}, {"type": "null"}]},
+    "conditions": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "signature_algorithm": {"const": "Ed25519"},
+    "key_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "signature": {"type": "string", "contentEncoding": "base64", "minLength": 80},
+    "provenance_uid": {"$ref": "common.schema.json#/$defs/uuid7"}
+  }
+}

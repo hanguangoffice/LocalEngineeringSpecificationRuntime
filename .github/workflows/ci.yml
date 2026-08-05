@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -15,6 +19,7 @@ jobs:
           enable-cache: true
       - run: uv sync --all-extras
       - run: uv run python scripts/verify_baseline_manifest.py
+      - run: uv run python scripts/verify_construction_schemas.py
       - run: uv run ruff check .
       - run: uv run mypy src prototypes
       - run: uv run pytest
