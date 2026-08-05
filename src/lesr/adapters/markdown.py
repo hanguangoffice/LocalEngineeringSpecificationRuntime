@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from lesr.domain.semantic import semantic_hash, uuid7_candidate
@@ -18,7 +19,14 @@ class ImportCandidate:
     operations: tuple[dict[str, object], ...]
 
 
-def preview_markdown(source: Path, *, namespace: str, kind: str) -> tuple[ImportCandidate, ...]:
+def preview_markdown(
+    source: Path,
+    *,
+    namespace: str,
+    kind: str,
+    rights_basis: str,
+    license_id: str,
+) -> tuple[ImportCandidate, ...]:
     raw = source.read_bytes()
     text = raw.decode("utf-8")
     source_hash = semantic_hash({"bytes_utf8": text})
@@ -31,8 +39,11 @@ def preview_markdown(source: Path, *, namespace: str, kind: str) -> tuple[Import
             continue
         object_uid = uuid7_candidate()
         revision_uid = uuid7_candidate()
-        key = f"IMPORT-{index + 1:04d}"
-        created_at = "1970-01-01T00:00:00Z"
+        key = (
+            f"IMPORT-{source_hash.removeprefix('sha256:')[:12].upper()}-"
+            f"{index + 1:04d}"
+        )
+        created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         logical: dict[str, object] = {
             "schema_version": "1.0",
             "resource_type": "logical_object",
@@ -62,6 +73,8 @@ def preview_markdown(source: Path, *, namespace: str, kind: str) -> tuple[Import
                 {"path": "/source/path", "value": source.name},
                 {"path": "/source/section", "value": index + 1},
                 {"path": "/source/hash", "value": source_hash},
+                {"path": "/source/rights_basis", "value": rights_basis},
+                {"path": "/source/license", "value": license_id},
             ],
             "fragments": [],
             "provenance_origin": "imported",

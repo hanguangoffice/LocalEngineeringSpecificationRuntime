@@ -1,0 +1,25 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/validation-finding.schema.json",
+  "title":"LESR Validation Finding",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","resource_type","finding_uid","validation_run_uid","rule_uid","rule_revision_uid","subject_uid","outcome","enforcement","blocking","status","explanation","created_at","content_hash"],
+  "properties":{
+    "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
+    "resource_type":{"const":"validation_finding"},
+    "finding_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "validation_run_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "rule_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "rule_revision_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "subject_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "subject_revision_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
+    "outcome":{"enum":["fail","indeterminate","evaluator_error","not_evaluated"]},
+    "enforcement":{"enum":["allow","allow_with_observation","require_acknowledgement","require_review","require_deviation","block_operation"]},
+    "blocking":{"type":"boolean"},
+    "status":{"enum":["open","resolved","suppressed_by_deviation"]},
+    "deviation_revision_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
+    "explanation":{"$ref":"common.schema.json#/$defs/canonical_value"},
+    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
+    "content_hash":{"$ref":"common.schema.json#/$defs/sha256"}
+  }
+}

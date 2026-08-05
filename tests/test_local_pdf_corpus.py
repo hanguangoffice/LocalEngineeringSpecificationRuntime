@@ -19,6 +19,8 @@ def test_rights_clear_aspice_pages_form_schema_valid_workspace_candidates() -> N
         source,
         namespace="local-evaluation",
         kind="process_reference",
+        rights_basis="user-provided-evaluation-copy",
+        license_id="evaluation-only",
         page_numbers=(48, 55, 88),
     )
     assert len(candidates) == 3
@@ -39,5 +41,7 @@ def test_encrypted_misra_source_is_refused_without_decryption_attempt() -> None:
             source,
             namespace="local-evaluation",
             kind="coding_rule",
+            rights_basis="user-provided-evaluation-copy",
+            license_id="restricted-evaluation",
             page_numbers=(1,),
         )

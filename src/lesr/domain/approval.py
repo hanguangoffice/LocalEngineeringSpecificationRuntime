@@ -34,7 +34,15 @@ class ApprovalPayload(FrozenModel):
     def scope_hash(self) -> str:
         return semantic_hash(self.scope)
 
-    def message(self) -> bytes:
+    def message(
+        self,
+        *,
+        approval_uid: str,
+        actor_uid: str,
+        actor_role: str,
+        issued_at: datetime,
+        provenance_uid: str,
+    ) -> bytes:
         expiry = (
             self.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
             if self.expires_at
@@ -43,7 +51,9 @@ class ApprovalPayload(FrozenModel):
         conditions_hash = semantic_hash({"conditions": self.conditions})
         return (
             "LESR-APPROVAL-V1\n"
-            f"{self.package_hash}\n{self.effective_model_hash}\n{self.scope_hash}\n"
+            f"{approval_uid}\n{actor_uid}\n{actor_role}\n"
+            f"{issued_at.astimezone(UTC).isoformat().replace('+00:00', 'Z')}\n"
+            f"{provenance_uid}\n{self.package_hash}\n{self.effective_model_hash}\n{self.scope_hash}\n"
             f"{self.approval_type}\n{conditions_hash}\n{expiry}"
         ).encode()
 
@@ -103,6 +113,15 @@ class SignedApproval(FrozenModel):
             conditions=self.conditions,
         )
 
+    def signed_message(self) -> bytes:
+        return self.signing_payload().message(
+            approval_uid=self.approval_uid,
+            actor_uid=self.actor_uid,
+            actor_role=self.actor_role,
+            issued_at=self.issued_at,
+            provenance_uid=self.provenance_uid,
+        )
+
 
 class ApprovalKeyStore:
     """User-local private keys; only public trust records enter Canonical State."""
@@ -149,8 +168,20 @@ class ApprovalKeyStore:
                 str(value["protection"]),
             )
         )
-        signature = private.sign(payload.message())
+        approval_uid = uuid7_candidate()
+        provenance_uid = uuid7_candidate()
+        issued_at = datetime.now(UTC)
+        signature = private.sign(
+            payload.message(
+                approval_uid=approval_uid,
+                actor_uid=trust.actor_uid,
+                actor_role=role,
+                issued_at=issued_at,
+                provenance_uid=provenance_uid,
+            )
+        )
         return SignedApproval(
+            approval_uid=approval_uid,
             package_hash=payload.package_hash,
             effective_model_hash=payload.effective_model_hash,
             scope=payload.scope,
@@ -158,10 +189,12 @@ class ApprovalKeyStore:
             approval_type=payload.approval_type,
             actor_uid=trust.actor_uid,
             actor_role=role,
+            issued_at=issued_at,
             expires_at=payload.expires_at,
             conditions=payload.conditions,
             key_uid=trust.key_uid,
             signature=base64.b64encode(signature).decode("ascii"),
+            provenance_uid=provenance_uid,
         )
 
 
@@ -194,7 +227,7 @@ def verify_approval(
     try:
         public.verify(
             base64.b64decode(approval.signature, validate=True),
-            approval.signing_payload().message(),
+            approval.signed_message(),
         )
     except (InvalidSignature, ValueError) as error:
         raise PermissionError("approval signature is invalid") from error

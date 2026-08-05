@@ -39,17 +39,63 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
 
     @server.tool()
     def query(
-        kind: str | None = None, cursor: str | None = None, page_size: int = 50
+        kind: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
+        text: str | None = None,
     ) -> dict[str, Any]:
         """Page through structured resources; no arbitrary SQL is exposed."""
-        return domain.query(kind, cursor, page_size).payload()
+        return domain.query(kind, cursor, page_size, text).payload()
+
+    @server.tool()
+    def traverse(
+        start_uid: str, predicate: str | None = None, max_depth: int = 4
+    ) -> dict[str, Any]:
+        """Traverse the bounded canonical relation graph without exposing SQL."""
+        return domain.traverse(start_uid, predicate, max_depth).payload()
+
+    @server.tool()
+    def impact(start_uid: str, max_depth: int = 4) -> dict[str, Any]:
+        """Return bounded bidirectional impact over canonical relations."""
+        return domain.impact(start_uid, max_depth).payload()
 
     @server.tool()
     def build_context(
-        task_type: str, target_uids: list[str], token_budget: int
+        task_type: str,
+        target_uids: list[str],
+        token_budget: int,
+        configuration_uid: str,
+        actor: str,
     ) -> dict[str, Any]:
         """Build an explainable Context Contract with explicit completeness."""
-        return domain.build_context(task_type, tuple(target_uids), token_budget).payload()
+        return domain.build_context(
+            task_type, tuple(target_uids), token_budget, configuration_uid, actor
+        ).payload()
+
+    @server.tool()
+    def prepare_review(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        risk_class: RiskClass,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run Profile-derived validation and create an immutable review package."""
+        return domain.prepare_review(
+            _write(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor,
+                delegation_uid,
+                dry_run,
+                risk_class,
+                operation,
+            )
+        ).payload()
 
     @server.tool()
     def open_workspace(

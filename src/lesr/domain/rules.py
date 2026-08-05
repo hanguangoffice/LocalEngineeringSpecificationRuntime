@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import Field, model_validator
 
@@ -87,10 +87,12 @@ class EvaluationEnvironment:
     target_kind: str
     fields: dict[str, ValueCell]
     relation_counts: dict[str, int] = field(default_factory=dict)
+    relation_values: dict[str, tuple[int | Quantity, ...]] = field(default_factory=dict)
     operation: str = "validate"
     active_exception_rule_uids: frozenset[str] = frozenset()
     active_deviation_rule_uids: frozenset[str] = frozenset()
     conflicted_rule_uids: frozenset[str] = frozenset()
+    external_rule_outcomes: dict[str, RuleOutcome] = field(default_factory=dict)
     schema_version: int = 1
 
     def read(self, path: str) -> ValueCell:
@@ -277,6 +279,20 @@ class UnitRegistry:
         except KeyError as error:
             raise ValueError(f"unknown unit: {unit}") from error
 
+    def require(self, unit: str) -> UnitDefinition:
+        return self._require(unit)
+
+    @property
+    def definitions(self) -> tuple[UnitDefinition, ...]:
+        return tuple(sorted(self._definitions.values(), key=lambda item: item.unit))
+
+
+@dataclass(frozen=True, slots=True)
+class FieldSymbol:
+    path: str
+    value_type: str
+    unit: str | None = None
+
 
 class Constraint(Protocol):
     def evaluate(
@@ -397,6 +413,114 @@ class RelationMinimum:
 
 
 @dataclass(frozen=True, slots=True)
+class AggregateConstraint:
+    function: Literal["count", "sum", "minimum", "maximum"]
+    predicate: str
+    comparison: Literal["eq", "ne", "lt", "lte", "gt", "gte"]
+    expected: int | Quantity
+    maximum_depth: int = 1
+
+    def evaluate(
+        self, environment: EvaluationEnvironment, units: UnitRegistry
+    ) -> ExplanationNode:
+        values = environment.relation_values.get(self.predicate)
+        if self.function == "count":
+            count = environment.relation_counts.get(self.predicate)
+            if count is None:
+                return ExplanationNode(
+                    "aggregate", ConstraintResult.INDETERMINATE, "relation count unknown"
+                )
+            actual: int | Quantity = count
+        elif values is None:
+            return ExplanationNode(
+                "aggregate", ConstraintResult.INDETERMINATE, "relation values unknown"
+            )
+        elif not values:
+            return ExplanationNode(
+                "aggregate", ConstraintResult.INDETERMINATE, "relation value set is empty"
+            )
+        else:
+            try:
+                actual = self._aggregate(values, units)
+            except (TypeError, ValueError) as error:
+                return ExplanationNode("aggregate", ConstraintResult.EVALUATOR_ERROR, str(error))
+        try:
+            ordering = _compare_values(actual, self.expected, units)
+        except (TypeError, ValueError) as error:
+            return ExplanationNode("aggregate", ConstraintResult.EVALUATOR_ERROR, str(error))
+        satisfied = {
+            "eq": ordering == 0,
+            "ne": ordering != 0,
+            "lt": ordering < 0,
+            "lte": ordering <= 0,
+            "gt": ordering > 0,
+            "gte": ordering >= 0,
+        }[self.comparison]
+        return ExplanationNode(
+            "aggregate",
+            ConstraintResult.SATISFIED if satisfied else ConstraintResult.VIOLATED,
+            f"{self.function}({self.predicate}) {self.comparison} expected",
+        )
+
+    def _aggregate(
+        self, values: tuple[int | Quantity, ...], units: UnitRegistry
+    ) -> int | Quantity:
+        if all(isinstance(value, int) for value in values):
+            integers = tuple(value for value in values if isinstance(value, int))
+            if self.function == "sum":
+                return sum(integers)
+            return min(integers) if self.function == "minimum" else max(integers)
+        if not all(isinstance(value, Quantity) for value in values):
+            raise TypeError("aggregate values have incompatible types")
+        quantities = tuple(value for value in values if isinstance(value, Quantity))
+        base = quantities[0]
+        if self.function == "sum":
+            definition = units.require(base.unit)
+            total_base = sum(
+                value.value * units.require(value.unit).scale_to_base for value in quantities
+            )
+            return Quantity(total_base / definition.scale_to_base, base.unit)
+        selected = base
+        for value in quantities[1:]:
+            ordering = units.compare(value, selected)
+            if (self.function == "minimum" and ordering < 0) or (
+                self.function == "maximum" and ordering > 0
+            ):
+                selected = value
+        return selected
+
+    def referenced_paths(self) -> frozenset[str]:
+        return frozenset()
+
+    def to_data(self) -> dict[str, Any]:
+        expected: int | dict[str, str]
+        if isinstance(self.expected, Quantity):
+            expected = {
+                "decimal": str(self.expected.value),
+                "unit": self.expected.unit,
+            }
+        else:
+            expected = self.expected
+        return {
+            "op": "aggregate",
+            "function": self.function,
+            "path": {"roles": [self.predicate], "max_depth": self.maximum_depth},
+            "comparison": self.comparison,
+            "expected": expected,
+        }
+
+
+def _compare_values(
+    left: int | Quantity, right: int | Quantity, units: UnitRegistry
+) -> int:
+    if isinstance(left, int) and isinstance(right, int):
+        return (left > right) - (left < right)
+    if isinstance(left, Quantity) and isinstance(right, Quantity):
+        return units.compare(left, right)
+    raise TypeError("aggregate result and expected value have incompatible types")
+
+
+@dataclass(frozen=True, slots=True)
 class RuleFixture:
     fixture_id: str
     kind: FixtureKind
@@ -496,6 +620,7 @@ class RuleAST:
     target_kind: str
     applicability: ApplicabilityExpression
     modality: NormativeModality
+    evaluation: EvaluationSpecification
     constraints: tuple[Constraint, ...]
     enforcement: dict[str, EnforcementEffect]
     authority: AuthorityDeclaration
@@ -529,7 +654,9 @@ class RuleEvaluation:
 
 
 class RuleCompiler:
-    def __init__(self, symbols: dict[str, type[Any]], units: UnitRegistry) -> None:
+    def __init__(
+        self, symbols: dict[str, type[Any] | FieldSymbol], units: UnitRegistry
+    ) -> None:
         self.symbols = symbols
         self.units = units
 
@@ -561,6 +688,33 @@ class RuleCompiler:
                 diagnostics.append(
                     CompilationDiagnostic("error", "RULE_PATH_UNKNOWN", f"unknown path: {path}")
                 )
+        for constraint in constraints:
+            if isinstance(constraint, QuantityMaximum):
+                symbol = self.symbols.get(constraint.path)
+                value_type = symbol.value_type if isinstance(symbol, FieldSymbol) else None
+                if value_type != "quantity":
+                    diagnostics.append(
+                        CompilationDiagnostic(
+                            "error",
+                            "RULE_TYPE_MISMATCH",
+                            f"{constraint.path} must be declared as quantity",
+                        )
+                    )
+                try:
+                    self.units.require(constraint.maximum.unit)
+                except ValueError as error:
+                    diagnostics.append(
+                        CompilationDiagnostic("error", "RULE_UNIT_UNKNOWN", str(error))
+                    )
+            if isinstance(constraint, AggregateConstraint) and isinstance(
+                constraint.expected, Quantity
+            ):
+                try:
+                    self.units.require(constraint.expected.unit)
+                except ValueError as error:
+                    diagnostics.append(
+                        CompilationDiagnostic("error", "RULE_UNIT_UNKNOWN", str(error))
+                    )
         if not source.explanation_map:
             diagnostics.append(
                 CompilationDiagnostic(
@@ -589,6 +743,7 @@ class RuleCompiler:
             "target_selector": target.to_data(),
             "applicability": applicability.to_data(),
             "modality": source.modality,
+            "evaluation": source.evaluation.model_dump(mode="json", exclude_none=True),
             "constraints": [item.to_data() for item in constraints],
             "enforcement": enforcement,
             "authority": source.authority.model_dump(mode="json", exclude_none=True),
@@ -603,6 +758,7 @@ class RuleCompiler:
             target_kind=target.kind,
             applicability=applicability,
             modality=source.modality,
+            evaluation=source.evaluation,
             constraints=constraints,
             enforcement=enforcement,
             authority=source.authority,
@@ -694,6 +850,30 @@ def _parse_constraint(value: dict[str, JsonValue]) -> Constraint:
             int(str(value["minimum"])),
             int(str(path["max_depth"])),
         )
+    if operation == "aggregate":
+        path = _require_dict(value.get("path"))
+        roles = path.get("roles")
+        if not isinstance(roles, list) or len(roles) != 1:
+            raise ValueError("v1 aggregate requires exactly one bounded role")
+        expected_value = value.get("expected")
+        expected: int | Quantity
+        if isinstance(expected_value, int):
+            expected = expected_value
+        else:
+            quantity = _require_dict(expected_value)
+            expected = Quantity(
+                Decimal(str(quantity["decimal"])), str(quantity["unit"])
+            )
+        return AggregateConstraint(
+            cast(Literal["count", "sum", "minimum", "maximum"], str(value["function"])),
+            str(roles[0]),
+            cast(
+                Literal["eq", "ne", "lt", "lte", "gt", "gte"],
+                str(value["comparison"]),
+            ),
+            expected,
+            int(str(path["max_depth"])),
+        )
     raise ValueError(f"unsupported constraint operation: {operation}")
 
 
@@ -712,10 +892,30 @@ def _parse_environment(value: dict[str, JsonValue]) -> EvaluationEnvironment:
     raw_counts = value.get("relation_counts", {})
     if not isinstance(raw_counts, dict):
         raise TypeError("fixture relation_counts must be an object")
+    raw_relation_values = value.get("relation_values", {})
+    if not isinstance(raw_relation_values, dict):
+        raise TypeError("fixture relation_values must be an object")
+    relation_values: dict[str, tuple[int | Quantity, ...]] = {}
+    for predicate, raw_values in raw_relation_values.items():
+        values = _require_list(raw_values)
+        parsed: list[int | Quantity] = []
+        for raw_value in values:
+            if isinstance(raw_value, int):
+                parsed.append(raw_value)
+            else:
+                quantity = _require_dict(raw_value)
+                parsed.append(
+                    Quantity(Decimal(str(quantity["decimal"])), str(quantity["unit"]))
+                )
+        relation_values[predicate] = tuple(parsed)
+    raw_external = value.get("external_rule_outcomes", {})
+    if not isinstance(raw_external, dict):
+        raise TypeError("fixture external_rule_outcomes must be an object")
     return EvaluationEnvironment(
         target_kind=str(value["target_kind"]),
         fields=fields,
         relation_counts={key: int(str(item)) for key, item in raw_counts.items()},
+        relation_values=relation_values,
         operation=str(value.get("operation", "validate")),
         active_exception_rule_uids=frozenset(
             str(item) for item in _require_list(value.get("active_exception_rule_uids", []))
@@ -726,6 +926,9 @@ def _parse_environment(value: dict[str, JsonValue]) -> EvaluationEnvironment:
         conflicted_rule_uids=frozenset(
             str(item) for item in _require_list(value.get("conflicted_rule_uids", []))
         ),
+        external_rule_outcomes={
+            key: RuleOutcome(str(item)) for key, item in raw_external.items()
+        },
         schema_version=int(str(value.get("schema_version", 1))),
     )
 
@@ -756,6 +959,11 @@ def evaluate_rule(
         return RuleEvaluation(RuleOutcome.NOT_APPLICABLE, applicability, None, enforcement)
     if applicability_result is ApplicabilityResult.INDETERMINATE:
         return RuleEvaluation(RuleOutcome.INDETERMINATE, applicability, None, enforcement)
+    if ast.evaluation.kind not in {"declarative", "composite"}:
+        outcome = environment.external_rule_outcomes.get(
+            ast.rule_revision_uid, RuleOutcome.NOT_EVALUATED
+        )
+        return RuleEvaluation(outcome, applicability, None, enforcement)
     evaluated = tuple(item.evaluate(environment, units) for item in ast.constraints)
     results = {ConstraintResult(item.result) for item in evaluated}
     if ConstraintResult.EVALUATOR_ERROR in results:
@@ -782,6 +990,10 @@ def evaluate_rule(
             ConstraintResult.INDETERMINATE: RuleOutcome.INDETERMINATE,
             ConstraintResult.EVALUATOR_ERROR: RuleOutcome.EVALUATOR_ERROR,
         }[constraint_result]
+    if ast.evaluation.kind == "composite" and outcome is RuleOutcome.PASS:
+        outcome = environment.external_rule_outcomes.get(
+            ast.rule_revision_uid, RuleOutcome.NOT_EVALUATED
+        )
     return RuleEvaluation(outcome, applicability, constraint, enforcement)
 
 

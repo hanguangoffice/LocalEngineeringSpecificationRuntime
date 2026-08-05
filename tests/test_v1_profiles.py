@@ -4,6 +4,7 @@ import pytest
 
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.profiles import ProfileCompiler, ProfileRevision
+from lesr.domain.rules import FixtureKind, RuleDefinition, RuleOutcome
 from lesr.domain.semantic import uuid7_candidate
 from tests.test_v1_rules import source
 
@@ -11,13 +12,19 @@ from tests.test_v1_rules import source
 def profile(rule_uid: str) -> ProfileRevision:
     return ProfileRevision(
         profile_uid=uuid7_candidate(),
-        profile_revision_uid=uuid7_candidate(),
+        profile_revision_uid="018f0000-0000-7000-8000-000000000104",
         profile_kind="project",
         resource_kinds=("software_requirement", "software_design"),
         relation_types=("verified_by",),
         rule_revision_uids=(rule_uid,),
         configuration_policies=({"latest_fallback": False},),
-        review_policies=({"required_roles": ["reviewer"]},),
+        review_policies=(
+            {
+                "operation": "apply_transaction",
+                "required_roles": ["reviewer"],
+                "minimum_approval_count": 1,
+            },
+        ),
     )
 
 
@@ -59,9 +66,57 @@ def test_authority_is_a_partial_order_and_cycles_are_rejected() -> None:
     )
     selected = ProfileRevision(
         profile_uid=uuid7_candidate(),
-        profile_revision_uid=uuid7_candidate(),
+        profile_revision_uid="018f0000-0000-7000-8000-000000000104",
         profile_kind="project",
         rule_revision_uids=(left.rule_revision_uid, right_uid),
     )
     with pytest.raises(ValueError, match="cycle"):
         ProfileCompiler().compile((selected,), (left, right))
+
+
+def test_profile_supplies_field_symbols_for_common_field_rules() -> None:
+    definition = source()
+    expected = {
+        FixtureKind.POSITIVE: RuleOutcome.PASS,
+        FixtureKind.NEGATIVE: RuleOutcome.PASS,
+        FixtureKind.NOT_APPLICABLE: RuleOutcome.NOT_APPLICABLE,
+        FixtureKind.INDETERMINATE: RuleOutcome.INDETERMINATE,
+        FixtureKind.EXCEPTION: RuleOutcome.NOT_APPLICABLE,
+        FixtureKind.DEVIATION: RuleOutcome.PASS,
+        FixtureKind.CONFLICT: RuleOutcome.INDETERMINATE,
+        FixtureKind.MIGRATION: RuleOutcome.PASS,
+    }
+    definition = RuleDefinition.model_validate(
+        definition.model_dump(mode="json", exclude={"content_hash"})
+        | {
+            "constraints": [{"op": "field_required", "path": "statement"}],
+            "fixtures": [
+                fixture.model_copy(
+                    update={"expected_outcome": expected[fixture.kind]}
+                ).model_dump(mode="json")
+                for fixture in definition.fixtures
+            ],
+        }
+    )
+    selected = ProfileRevision(
+        profile_uid=uuid7_candidate(),
+        profile_revision_uid=definition.authority.profile_revision_uid,
+        profile_kind="project",
+        resource_kinds=(
+            {
+                "kind": "software_requirement",
+                "fields": [{"path": "statement", "type": "string"}],
+            },
+        ),
+        rule_revision_uids=(definition.rule_revision_uid,),
+        review_policies=(
+            {
+                "operation": "apply_transaction",
+                "required_roles": ["technical"],
+                "minimum_approval_count": 1,
+            },
+        ),
+    )
+    model = ProfileCompiler().compile((selected,), (definition,))
+    assert model.symbols[0].path == "statement"
+    assert model.review_policies[0].required_roles == ("technical",)

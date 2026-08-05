@@ -16,7 +16,6 @@ from lesr.adapters.git import (
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.mcp import create_server
 from lesr.adapters.pdf_import import preview_pdf
-from lesr.adapters.schemas import SchemaCatalog
 from lesr.application.contracts import RiskClass, WriteEnvelope
 from lesr.application.service import RepositoryDomainService
 from lesr.domain.approval import (
@@ -60,6 +59,92 @@ def initialize(project: Path) -> None:
     emit({"canonical_ref": GitCanonicalRepository.CANONICAL_REF, "commit": commit})
 
 
+@app.command("bootstrap")
+def bootstrap_root_owner(
+    project: Path,
+    trust_record: Path,
+    delegation_record: Path,
+    role: str,
+    idempotency_key: str,
+    governance_bundle: Path | None = None,
+    key_root: Path | None = None,
+) -> None:
+    """Establish the first root trust with local proof of private-key possession."""
+    domain = RepositoryDomainService(project)
+    trust_value = read_object(trust_record)
+    delegation_value = read_object(delegation_record)
+    trust = TrustedActor.model_validate(trust_value)
+    governance_values: tuple[dict[str, Any], ...] = ()
+    if governance_bundle is not None:
+        bundle = read_object(governance_bundle)
+        raw_operations = bundle.get("operations")
+        if not isinstance(raw_operations, list) or not all(
+            isinstance(item, dict) for item in raw_operations
+        ):
+            raise typer.BadParameter("governance bundle must contain an operations array")
+        governance_values = tuple(raw_operations)
+    package_hash, model_hash, scope = domain.bootstrap_binding(
+        domain.base, trust_value, delegation_value, governance_values
+    )
+    approval = ApprovalKeyStore(key_root).sign(
+        trust,
+        role,
+        ApprovalPayload(
+            package_hash=package_hash,
+            effective_model_hash=model_hash,
+            scope=scope,
+            approval_type="technical",
+        ),
+    )
+    emit(
+        domain.bootstrap_root_owner(
+            trust_value,
+            delegation_value,
+            approval.model_dump(mode="json"),
+            idempotency_key,
+            governance_values,
+        ).payload()
+    )
+
+
+@app.command("init-configuration")
+def initialize_configuration(
+    project: Path,
+    configuration_file: Path,
+    trust_record: Path,
+    actor_uid: str,
+    delegation_uid: str,
+    role: str,
+    idempotency_key: str,
+    key_root: Path | None = None,
+) -> None:
+    domain = RepositoryDomainService(project)
+    configuration = read_object(configuration_file)
+    trust = TrustedActor.model_validate(read_object(trust_record))
+    package_hash, model_hash, scope = domain.initial_configuration_binding(
+        domain.base, configuration
+    )
+    approval = ApprovalKeyStore(key_root).sign(
+        trust,
+        role,
+        ApprovalPayload(
+            package_hash=package_hash,
+            effective_model_hash=model_hash,
+            scope=scope,
+            approval_type="technical",
+        ),
+    )
+    emit(
+        domain.initialize_configuration(
+            configuration,
+            approval.model_dump(mode="json"),
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+        ).payload()
+    )
+
+
 @app.command()
 def resolve(project: Path, identifier: str) -> None:
     emit(RepositoryDomainService(project).resolve(identifier).payload())
@@ -71,13 +156,49 @@ def inspect(project: Path, uid: str) -> None:
 
 
 @app.command()
-def query(project: Path, kind: str | None = None, cursor: str | None = None, page_size: int = 50) -> None:
-    emit(RepositoryDomainService(project).query(kind, cursor, page_size).payload())
+def query(
+    project: Path,
+    kind: str | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
+    text: str | None = None,
+) -> None:
+    emit(RepositoryDomainService(project).query(kind, cursor, page_size, text).payload())
+
+
+@app.command("trace")
+def trace(
+    project: Path,
+    start_uid: str,
+    predicate: str | None = None,
+    max_depth: int = 4,
+) -> None:
+    emit(
+        RepositoryDomainService(project).traverse(
+            start_uid, predicate, max_depth
+        ).payload()
+    )
+
+
+@app.command("impact")
+def impact(project: Path, start_uid: str, max_depth: int = 4) -> None:
+    emit(RepositoryDomainService(project).impact(start_uid, max_depth).payload())
 
 
 @context_app.command("build")
-def build_context(project: Path, task_type: str, target: list[str], token_budget: int = 4096) -> None:
-    emit(RepositoryDomainService(project).build_context(task_type, tuple(target), token_budget).payload())
+def build_context(
+    project: Path,
+    task_type: str,
+    target: list[str],
+    configuration_uid: str,
+    actor_uid: str,
+    token_budget: int = 4096,
+) -> None:
+    emit(
+        RepositoryDomainService(project).build_context(
+            task_type, tuple(target), token_budget, configuration_uid, actor_uid
+        ).payload()
+    )
 
 
 @workspace_app.command("open")
@@ -115,14 +236,69 @@ def checkpoint_workspace(project: Path, workspace_uid: str, state: Path) -> None
     emit({"checkpoint_uid": result.checkpoint_uid, "commit": result.commit, "git_reference": result.git_reference})
 
 
+@workspace_app.command("propose")
+def propose_workspace_operation(
+    project: Path,
+    workspace_uid: str,
+    expected_base: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    emit(
+        RepositoryDomainService(project).propose_operation(
+            WriteEnvelope(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor_uid,
+                delegation_uid,
+                dry_run,
+                RiskClass.MEDIUM,
+                read_object(operation_file),
+            )
+        ).payload()
+    )
+
+
 @app.command("review-package")
-def build_review_package(candidate: Path) -> None:
-    value = read_object(candidate)
-    emit(value | {"package_hash": document_hash(value, "package_hash")})
+def build_review_package(
+    project: Path,
+    workspace_uid: str,
+    expected_base: str,
+    configuration_uid: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    dry_run: bool = False,
+) -> None:
+    emit(
+        RepositoryDomainService(project).prepare_review(
+            WriteEnvelope(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor_uid,
+                delegation_uid,
+                dry_run,
+                RiskClass.HIGH,
+                {"configuration_uid": configuration_uid},
+            )
+        ).payload()
+    )
 
 
 @app.command("import-preview")
-def import_preview(project: Path, source: Path, namespace: str, kind: str) -> None:
+def import_preview(
+    project: Path,
+    source: Path,
+    namespace: str,
+    kind: str,
+    rights_basis: str,
+    license_id: str,
+) -> None:
     root = project.resolve()
     selected = source.resolve()
     try:
@@ -131,9 +307,21 @@ def import_preview(project: Path, source: Path, namespace: str, kind: str) -> No
         raise typer.BadParameter("source must be inside the project") from error
     candidates: tuple[Any, ...]
     if selected.suffix.casefold() == ".pdf":
-        candidates = preview_pdf(selected, namespace=namespace, kind=kind)
+        candidates = preview_pdf(
+            selected,
+            namespace=namespace,
+            kind=kind,
+            rights_basis=rights_basis,
+            license_id=license_id,
+        )
     elif selected.suffix.casefold() in {".md", ".markdown"}:
-        candidates = preview_markdown(selected, namespace=namespace, kind=kind)
+        candidates = preview_markdown(
+            selected,
+            namespace=namespace,
+            kind=kind,
+            rights_basis=rights_basis,
+            license_id=license_id,
+        )
     else:
         raise typer.BadParameter("supported preview formats are UTF-8 Markdown and text PDF")
     emit([asdict(item) for item in candidates])
@@ -164,50 +352,31 @@ def approval_sign(
 @app.command("apply")
 def apply_transaction(
     project: Path,
-    transaction_file: Path,
-    review_package_file: Path,
+    workspace_uid: str,
+    expected_base: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    review_package_uid: str,
     approval_file: list[Path],
+    transaction_uid: str = "",
     dry_run: bool = False,
 ) -> None:
-    raw = read_object(transaction_file)
-    review_package = read_object(review_package_file)
     approval_values = [read_object(path) for path in approval_file]
-    schemas = SchemaCatalog()
-    schemas.validate("semantic-transaction.schema.json", raw)
-    schemas.validate("review-package.schema.json", review_package)
-    for approval_value in approval_values:
-        schemas.validate("approval-attestation.schema.json", approval_value)
-    package_hash = str(review_package["package_hash"])
-    if document_hash(review_package, "package_hash") != package_hash:
-        raise typer.BadParameter("review package content hash is invalid")
-    if raw["review_package_hash"] != package_hash:
-        raise typer.BadParameter("transaction review package hash does not match")
-    if review_package["base_commit"] != raw["base_commit"]:
-        raise typer.BadParameter("review package base does not match the transaction")
-    if review_package["workspace_uid"] != raw["workspace_uid"]:
-        raise typer.BadParameter("review package workspace does not match the transaction")
-    if review_package["effective_model_hash"] != raw["effective_model_hash"]:
-        raise typer.BadParameter("review package effective model does not match")
-    semantic_diff = review_package["semantic_diff"]
-    if not isinstance(semantic_diff, dict):
-        raise typer.BadParameter("review package semantic diff is invalid")
     domain = RepositoryDomainService(project)
     result = domain.apply_transaction(
         WriteEnvelope(
-            str(raw["workspace_uid"]),
-            str(raw["base_commit"]),
-            str(raw["idempotency_key"]),
-            str(raw["actor_uid"]),
-            str(raw["delegation_uid"]),
+            workspace_uid,
+            expected_base,
+            idempotency_key,
+            actor_uid,
+            delegation_uid,
             dry_run,
-            RiskClass(str(raw["risk_class"])),
+            RiskClass.HIGH,
             {
-                "transaction_uid": raw["transaction_uid"],
-                "review_package": review_package,
-                "effective_model_hash": raw["effective_model_hash"],
+                "transaction_uid": transaction_uid or uuid7_candidate(),
+                "review_package_uid": review_package_uid,
                 "signed_approvals": approval_values,
-                "operations": raw["operations"],
-                "expected_revisions": raw["expected_revisions"],
             },
         )
     )

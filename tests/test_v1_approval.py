@@ -81,6 +81,35 @@ def test_revoked_expired_and_modified_approval_are_rejected(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("approval_uid", "018f0000-0000-7000-8000-000000000091"),
+        ("issued_at", datetime(2026, 8, 5, 1, 2, tzinfo=UTC)),
+        ("provenance_uid", "018f0000-0000-7000-8000-000000000092"),
+    ],
+)
+def test_signature_binds_complete_attestation_identity_and_time(
+    tmp_path, field: str, value: object
+) -> None:
+    store = ApprovalKeyStore(tmp_path / "keys")
+    trust = store.generate("USER-1", "Reviewer", ("technical",))
+    payload = ApprovalPayload(
+        package_hash="sha256:package",
+        effective_model_hash="sha256:model",
+        scope={"revision_uids": ["REV-1"]},
+        approval_type="technical",
+    )
+    approval = store.sign(trust, "technical", payload)
+    with pytest.raises(PermissionError, match="signature"):
+        verify_approval(
+            approval.model_copy(update={field: value}),
+            trust,
+            package_hash=payload.package_hash,
+            effective_model_hash=payload.effective_model_hash,
+        )
+
+
 def test_public_trust_and_approval_documents_match_v1_schemas(tmp_path) -> None:
     actor_uid = "018f0000-0000-7000-8000-000000000001"
     store = ApprovalKeyStore(tmp_path / "keys")

@@ -4,5 +4,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .venv/
+.verify-venv/
 examples/*/.lesr/index.db
 测试文档/

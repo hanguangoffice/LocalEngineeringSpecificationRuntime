@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -33,6 +34,8 @@ def preview_pdf(
     *,
     namespace: str,
     kind: str,
+    rights_basis: str,
+    license_id: str,
     page_numbers: tuple[int, ...] | None = None,
 ) -> tuple[PdfImportCandidate, ...]:
     """Extract selected unencrypted pages; returned candidates cannot mutate Canonical State."""
@@ -63,6 +66,8 @@ def preview_pdf(
                 heading,
                 normalized,
                 source_hash,
+                rights_basis,
+                license_id,
             )
         )
     return tuple(candidates)
@@ -76,11 +81,13 @@ def _candidate(
     heading: str,
     body: str,
     source_hash: str,
+    rights_basis: str,
+    license_id: str,
 ) -> PdfImportCandidate:
     object_uid = uuid7_candidate()
     revision_uid = uuid7_candidate()
-    created_at = "1970-01-01T00:00:00Z"
-    key = f"PDF-{page_number:04d}"
+    created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    key = f"PDF-{source_hash.removeprefix('sha256:')[:12].upper()}-{page_number:04d}"
     logical: dict[str, object] = {
         "schema_version": "1.0",
         "resource_type": "logical_object",
@@ -111,6 +118,8 @@ def _candidate(
             {"path": "/source/page", "value": page_number},
             {"path": "/source/hash", "value": source_hash},
             {"path": "/source/extractor", "value": "pypdf-6"},
+            {"path": "/source/rights_basis", "value": rights_basis},
+            {"path": "/source/license", "value": license_id},
         ],
         "fragments": [],
         "provenance_origin": "imported",

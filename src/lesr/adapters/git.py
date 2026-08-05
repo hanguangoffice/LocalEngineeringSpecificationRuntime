@@ -10,6 +10,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -17,6 +18,18 @@ from typing import Any
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from lesr.adapters.schemas import SchemaCatalog
+from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
+from lesr.domain.profiles import ProfileCompiler, ProfileRevision
+from lesr.domain.rules import (
+    EnforcementEffect,
+    EvaluationEnvironment,
+    Quantity,
+    RuleDefinition,
+    RuleOutcome,
+    UnitRegistry,
+    ValueCell,
+    evaluate_rule,
+)
 from lesr.domain.semantic import canonical_json, document_hash, semantic_hash, uuid7_candidate
 
 
@@ -40,6 +53,10 @@ class OperationType(StrEnum):
     CREATE_DELEGATION = "create_delegation"
     RECORD_APPROVAL = "record_approval"
     CREATE_RULE = "create_rule"
+    RECORD_VALIDATION_RUN = "record_validation_run"
+    RECORD_VALIDATION_FINDING = "record_validation_finding"
+    RECORD_REVIEW_PACKAGE = "record_review_package"
+    RECORD_PROVENANCE = "record_provenance"
 
 
 class CheckpointStrategy(StrEnum):
@@ -167,6 +184,9 @@ _RESOURCE_SCHEMAS = {
     "applied_change": "applied-change.schema.json",
     "provenance_record": "provenance.schema.json",
     "audit_anchor": "audit-anchor.schema.json",
+    "validation_run": "validation-run.schema.json",
+    "validation_finding": "validation-finding.schema.json",
+    "review_package": "review-package.schema.json",
 }
 
 _OPERATION_RESOURCE_TYPES = {
@@ -189,6 +209,10 @@ _OPERATION_RESOURCE_TYPES = {
     OperationType.CREATE_DELEGATION: frozenset({"delegation_grant"}),
     OperationType.RECORD_APPROVAL: frozenset({"approval_attestation"}),
     OperationType.CREATE_RULE: frozenset({"rule_definition_revision"}),
+    OperationType.RECORD_VALIDATION_RUN: frozenset({"validation_run"}),
+    OperationType.RECORD_VALIDATION_FINDING: frozenset({"validation_finding"}),
+    OperationType.RECORD_REVIEW_PACKAGE: frozenset({"review_package"}),
+    OperationType.RECORD_PROVENANCE: frozenset({"provenance_record"}),
 }
 
 
@@ -216,6 +240,18 @@ class GitCanonicalRepository:
     def current_commit(self) -> str:
         return self._git("rev-parse", "--verify", self.CANONICAL_REF)
 
+    def idempotency_record(self, idempotency_key: str) -> dict[str, Any] | None:
+        current = self.current_commit()
+        digest = semantic_hash({"idempotency_key": idempotency_key})
+        path = f"canonical/idempotency/{digest.removeprefix('sha256:')}.json"
+        value = self.read_json(current, path)
+        if value is None:
+            return None
+        commits = self._git(
+            "log", current, "--diff-filter=A", "--format=%H", "--reverse", "--", path
+        ).splitlines()
+        return value | {"result_commit": commits[0]}
+
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         result = subprocess.run(
             ["git", "-C", str(self.path), "merge-base", "--is-ancestor", ancestor, descendant],
@@ -233,6 +269,9 @@ class GitCanonicalRepository:
     ) -> ApplyResult:
         self._validate_transaction(transaction)
         current = self.current_commit()
+        for operation in transaction.operations:
+            self._safe_path(operation.relative_path)
+            self._validate_operation(operation)
         transaction_hash = transaction.hash()
         idempotency_hash = semantic_hash({"idempotency_key": transaction.idempotency_key})
         idempotency_path = (
@@ -258,11 +297,24 @@ class GitCanonicalRepository:
             raise ConcurrencyConflict(
                 f"canonical base changed: expected {transaction.base_commit}, got {current}"
             )
+        self._authorize_transaction(current, transaction)
+        self._validate_governance(current, transaction)
+        for operation in transaction.operations:
+            safe_path = self._safe_path(operation.relative_path)
+            if self.read_bytes(current, safe_path) is not None:
+                raise IntegrityError(f"immutable canonical resource already exists: {safe_path}")
         self._verify_expected_revisions(current, transaction.expected_revisions)
         state_operations = tuple(
             item
             for item in transaction.operations
-            if item.operation_type is not OperationType.RECORD_APPROVAL
+            if item.operation_type
+            not in {
+                OperationType.RECORD_APPROVAL,
+                OperationType.RECORD_PROVENANCE,
+                OperationType.RECORD_VALIDATION_RUN,
+                OperationType.RECORD_VALIDATION_FINDING,
+                OperationType.RECORD_REVIEW_PACKAGE,
+            }
         )
         snapshot_operations = tuple(
             item
@@ -277,11 +329,6 @@ class GitCanonicalRepository:
                 )
             if snapshot_operations[0].payload.get("git_commit") != current:
                 raise IntegrityError("snapshot must pin the exact pre-snapshot canonical commit")
-        for operation in transaction.operations:
-            safe_path = self._safe_path(operation.relative_path)
-            self._validate_operation(operation)
-            if self.read_bytes(current, safe_path) is not None:
-                raise IntegrityError(f"immutable canonical resource already exists: {safe_path}")
         self._validate_candidate(current, transaction.operations)
 
         index_path = self.path / f".lesr-index-{uuid7_candidate()}.tmp"
@@ -364,6 +411,505 @@ class GitCanonicalRepository:
             except (OSError, RuntimeError):
                 projection_stale = True
         return ApplyResult(commit, transaction_hash, False, projection_stale)
+
+    def _validate_governance(
+        self, current: str, transaction: SemanticTransaction
+    ) -> None:
+        current_documents = [value for _, value in self.documents(current)]
+        configurations = {
+            str(value["configuration_uid"]): value
+            for value in current_documents
+            if value.get("resource_type") == "configuration_snapshot"
+        }
+        metadata_types = {
+            "approval_attestation",
+            "provenance_record",
+            "validation_run",
+            "validation_finding",
+            "review_package",
+        }
+        state_operations = tuple(
+            item
+            for item in transaction.operations
+            if item.payload.get("resource_type") not in metadata_types
+        )
+        if not configurations:
+            allowed = {
+                "trusted_actor",
+                "delegation_grant",
+                "rule_definition_revision",
+                "profile_revision",
+                "configuration_snapshot",
+            }
+            if any(item.payload.get("resource_type") not in allowed for item in state_operations):
+                raise ApprovalError(
+                    "engineering content cannot be applied before initial governance configuration"
+                )
+            return
+        packages = [
+            item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "review_package"
+        ]
+        runs = {
+            str(item.payload["validation_run_uid"]): item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "validation_run"
+        }
+        findings = {
+            str(item.payload["finding_uid"]): item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "validation_finding"
+        }
+        if len(packages) != 1 or len(runs) != 1:
+            raise ApprovalError(
+                "configured transactions require one Validation Run and one Review Package"
+            )
+        package = packages[0]
+        if (
+            package.get("package_hash") != transaction.review_package_hash
+            or package.get("effective_model_hash") != transaction.effective_model_hash
+            or package.get("base_commit") != transaction.base_commit
+            or package.get("configuration_uid") not in configurations
+        ):
+            raise ApprovalError("Review Package does not bind the semantic transaction")
+        configuration = configurations[str(package["configuration_uid"])]
+        if configuration["effective_model_hash"] != transaction.effective_model_hash:
+            raise ApprovalError("transaction Effective Model is not Canonical Configuration")
+        operation_hashes = [
+            semantic_hash(
+                {
+                    "operation_type": item.operation_type.value,
+                    "resource": item.payload,
+                }
+            )
+            for item in state_operations
+        ]
+        candidate_hash = semantic_hash(
+            {
+                "operations": [
+                    {
+                        "operation_type": item.operation_type.value,
+                        "resource": item.payload,
+                    }
+                    for item in state_operations
+                ]
+            }
+        )
+        if (
+            package.get("semantic_diff", {}).get("operation_hashes") != operation_hashes
+            or package.get("candidate_hash") != candidate_hash
+        ):
+            raise ApprovalError("Review Package does not bind the exact candidate operations")
+        package_run_uids = {str(uid) for uid in package["validation_run_uids"]}
+        if package_run_uids != set(runs):
+            raise ApprovalError("Review Package validation run set is incomplete")
+        for run in runs.values():
+            if (
+                run["base_commit"] != transaction.base_commit
+                or run["configuration_uid"] != package["configuration_uid"]
+                or run["effective_model_hash"] != transaction.effective_model_hash
+                or run["candidate_hash"] != candidate_hash
+                or set(run["finding_uids"]) - set(findings)
+            ):
+                raise ApprovalError("Validation Run does not bind the reviewed candidate")
+        run = next(iter(runs.values()))
+        if set(run["finding_uids"]) != set(findings) or any(
+            finding["validation_run_uid"] != run["validation_run_uid"]
+            for finding in findings.values()
+        ):
+            raise ApprovalError("Validation Run finding set is incomplete")
+        expected_observations, expected_findings, expected_outcome = (
+            self._recompute_rule_observations(
+            current_documents, configuration, state_operations
+        )
+        )
+        recorded_observations = sorted(
+            (
+                {
+                    "rule_uid": str(item["rule_uid"]),
+                    "rule_revision_uid": str(item["rule_revision_uid"]),
+                    "target_uid": str(item["target_uid"]),
+                    "target_revision_uid": item.get("target_revision_uid"),
+                    "outcome": str(item["outcome"]),
+                    "enforcement": str(item["enforcement"]),
+                }
+                for run in runs.values()
+                for item in run["observations"]
+            ),
+            key=lambda item: (
+                item["rule_revision_uid"],
+                str(item["target_revision_uid"]),
+            ),
+        )
+        if recorded_observations != expected_observations:
+            raise ApprovalError("Validation Run rule observations are not reproducible")
+        recorded_findings = sorted(
+            (
+                {
+                    "rule_uid": str(item["rule_uid"]),
+                    "rule_revision_uid": str(item["rule_revision_uid"]),
+                    "subject_uid": str(item["subject_uid"]),
+                    "subject_revision_uid": item.get("subject_revision_uid"),
+                    "outcome": str(item["outcome"]),
+                    "enforcement": str(item["enforcement"]),
+                    "blocking": bool(item["blocking"]),
+                    "status": str(item["status"]),
+                    "deviation_revision_uid": item.get("deviation_revision_uid"),
+                }
+                for item in findings.values()
+            ),
+            key=lambda item: (
+                item["rule_revision_uid"],
+                str(item["subject_revision_uid"]),
+            ),
+        )
+        if recorded_findings != expected_findings or run["outcome"] != expected_outcome:
+            raise ApprovalError("Validation Run findings or outcome are not reproducible")
+        expected_summary = semantic_hash(
+            {
+                "run": run["content_hash"],
+                "findings": [
+                    findings[str(uid)]["content_hash"] for uid in run["finding_uids"]
+                ],
+            }
+        )
+        if package["validation_summary_hash"] != expected_summary:
+            raise ApprovalError("Review Package validation summary hash is invalid")
+        open_finding_uids = {
+            uid for uid, finding in findings.items() if finding["status"] == "open"
+        }
+        if set(package["open_finding_uids"]) != open_finding_uids:
+            raise ApprovalError("Review Package finding set is incomplete")
+        if any(
+            finding["blocking"] and finding["status"] == "open"
+            for finding in findings.values()
+        ):
+            raise ApprovalError("blocking validation findings remain open")
+        signed = tuple(
+            SignedApproval.model_validate(item.payload)
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "approval_attestation"
+        )
+        roles = {item.actor_role for item in signed}
+        actors = {item.actor_uid for item in signed}
+        if not set(package["required_review_roles"]) <= roles:
+            raise ApprovalError("Profile-derived review roles were not approved")
+        if len(actors) < int(package["minimum_approval_count"]):
+            raise ApprovalError("Review Package approval quorum was not met")
+        if package["preparer_independence_required"] and package["prepared_by_actor_uid"] in actors:
+            raise ApprovalError("Review Package preparer cannot approve their own package")
+
+    @staticmethod
+    def _recompute_rule_observations(
+        current_documents: list[dict[str, Any]],
+        configuration: dict[str, Any],
+        state_operations: tuple[SemanticOperation, ...],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+        profile_uids = {str(uid) for uid in configuration["profile_revision_uids"]}
+        profiles = tuple(
+            ProfileRevision.model_validate(item)
+            for item in current_documents
+            if item.get("resource_type") == "profile_revision"
+            and item.get("profile_revision_uid") in profile_uids
+        )
+        rule_uids = {uid for profile in profiles for uid in profile.rule_revision_uids}
+        rules = tuple(
+            RuleDefinition.model_validate(item)
+            for item in current_documents
+            if item.get("resource_type") == "rule_definition_revision"
+            and item.get("rule_revision_uid") in rule_uids
+        )
+        model = ProfileCompiler().compile(profiles, rules)
+        relation_uids = {str(uid) for uid in configuration["relation_revision_uids"]}
+        relations = tuple(
+            item
+            for item in current_documents
+            if item.get("resource_type") == "relation_assertion_revision"
+            and item.get("relation_revision_uid") in relation_uids
+        ) + tuple(
+            item.payload
+            for item in state_operations
+            if item.payload.get("resource_type") == "relation_assertion_revision"
+        )
+        candidates = tuple(
+            item.payload
+            for item in state_operations
+            if item.payload.get("resource_type") == "revision"
+        )
+        conflicted_revisions = {
+            uid for conflict in model.conflicts for uid in conflict.split(":")[:2]
+        }
+        observations: list[dict[str, Any]] = []
+        expected_findings: list[dict[str, Any]] = []
+        units = UnitRegistry(model.units)
+        review_policies = [
+            item for item in model.review_policies if item.operation == "apply_transaction"
+        ] or [item for item in model.review_policies if item.operation == "*"]
+        if len(review_policies) != 1:
+            raise ApprovalError(
+                "effective Profile must define one review policy for apply_transaction"
+            )
+        blocking_effects = set(review_policies[0].blocking_effects)
+        immutable_record_uids = {
+            str(item["record_uid"])
+            for item in current_documents
+            if item.get("resource_type") == "immutable_record"
+        }
+        revisions = {
+            str(item["revision_uid"]): item
+            for item in current_documents
+            if item.get("resource_type") == "revision"
+        }
+        for revision in candidates:
+            fields: dict[str, ValueCell] = {}
+            for field in revision.get("fields", []):
+                if not isinstance(field, dict) or not isinstance(field.get("path"), str):
+                    continue
+                value = field.get("value")
+                if isinstance(value, dict) and set(value) == {"decimal", "unit"}:
+                    value = Quantity(Decimal(str(value["decimal"])), str(value["unit"]))
+                fields[str(field["path"])] = ValueCell.present(value)
+            object_uid = str(revision["object_uid"])
+            counts: dict[str, int] = {}
+            for relation in relations:
+                source = relation.get("source", {})
+                target = relation.get("target", {})
+                if not isinstance(source, dict) or not isinstance(target, dict):
+                    continue
+                if object_uid in {
+                    str(source.get("object_uid", "")),
+                    str(target.get("object_uid", "")),
+                }:
+                    predicate = str(relation["predicate"])
+                    counts[predicate] = counts.get(predicate, 0) + 1
+            active_deviations: dict[str, str] = {}
+            for deviation_uid in configuration["active_deviation_revision_uids"]:
+                deviation = revisions.get(str(deviation_uid))
+                if deviation is None or deviation.get("kind") != "deviation":
+                    raise ApprovalError(
+                        f"active deviation is not a deviation revision: {deviation_uid}"
+                    )
+                deviation_fields = {
+                    str(item["path"]): item.get("value")
+                    for item in deviation.get("fields", [])
+                    if isinstance(item, dict) and isinstance(item.get("path"), str)
+                }
+                if (
+                    str(deviation_fields.get("/approval_record_uid", ""))
+                    not in immutable_record_uids
+                ):
+                    raise ApprovalError(
+                        f"active deviation has no canonical approval record: {deviation_uid}"
+                    )
+                valid_until = deviation_fields.get("/valid_until")
+                if (
+                    not isinstance(valid_until, str)
+                    or datetime.fromisoformat(valid_until) <= datetime.now(UTC)
+                ):
+                    raise ApprovalError(
+                        f"active deviation is expired or has no validity: {deviation_uid}"
+                    )
+                if str(deviation_fields.get("/subject_uid", "")) not in {
+                    object_uid,
+                    str(revision["revision_uid"]),
+                }:
+                    continue
+                deviation_rule_revision_uid = str(
+                    deviation_fields.get("/rule_revision_uid", "")
+                )
+                deviation_rule = next(
+                    (
+                        item
+                        for item in model.rules
+                        if item.rule_revision_uid == deviation_rule_revision_uid
+                    ),
+                    None,
+                )
+                if deviation_rule is None or not deviation_rule.deviation_allowed:
+                    raise ApprovalError(
+                        "deviation does not reference a relaxable effective rule: "
+                        f"{deviation_uid}"
+                    )
+                active_deviations[deviation_rule.rule_uid] = str(deviation_uid)
+            environment = EvaluationEnvironment(
+                target_kind=str(revision["kind"]),
+                fields=fields,
+                relation_counts=counts,
+                operation="apply_transaction",
+                active_deviation_rule_uids=frozenset(active_deviations),
+                conflicted_rule_uids=frozenset(
+                    item.rule_uid
+                    for item in model.rules
+                    if item.rule_revision_uid in conflicted_revisions
+                ),
+            )
+            for rule in model.rules:
+                if rule.target_kind != environment.target_kind:
+                    continue
+                evaluated = evaluate_rule(rule, environment, units)
+                observations.append(
+                    {
+                        "rule_uid": rule.rule_uid,
+                        "rule_revision_uid": rule.rule_revision_uid,
+                        "target_uid": object_uid,
+                        "target_revision_uid": str(revision["revision_uid"]),
+                        "outcome": evaluated.outcome.value,
+                        "enforcement": evaluated.enforcement.value,
+                    }
+                )
+                if evaluated.outcome in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
+                    continue
+                suppressed = evaluated.outcome is RuleOutcome.SUPPRESSED_BY_DEVIATION
+                blocking = False if suppressed else (
+                    evaluated.enforcement.value in blocking_effects
+                    or (
+                        evaluated.outcome
+                        in {
+                            RuleOutcome.INDETERMINATE,
+                            RuleOutcome.EVALUATOR_ERROR,
+                            RuleOutcome.NOT_EVALUATED,
+                        }
+                        and evaluated.enforcement
+                        not in {
+                            EnforcementEffect.ALLOW,
+                            EnforcementEffect.ALLOW_WITH_OBSERVATION,
+                        }
+                    )
+                )
+                expected_findings.append(
+                    {
+                        "rule_uid": rule.rule_uid,
+                        "rule_revision_uid": rule.rule_revision_uid,
+                        "subject_uid": object_uid,
+                        "subject_revision_uid": str(revision["revision_uid"]),
+                        "outcome": evaluated.outcome.value,
+                        "enforcement": evaluated.enforcement.value,
+                        "blocking": blocking,
+                        "status": "suppressed_by_deviation" if suppressed else "open",
+                        "deviation_revision_uid": (
+                            active_deviations[rule.rule_uid] if suppressed else None
+                        ),
+                    }
+                )
+        observation_key = lambda item: (
+            item["rule_revision_uid"],
+            str(item["target_revision_uid"]),
+        )
+        finding_key = lambda item: (
+            item["rule_revision_uid"],
+            str(item["subject_revision_uid"]),
+        )
+        outcome = (
+            "fail"
+            if any(item["blocking"] for item in expected_findings)
+            else "indeterminate"
+            if expected_findings
+            else "pass"
+        )
+        return (
+            sorted(observations, key=observation_key),
+            sorted(expected_findings, key=finding_key),
+            outcome,
+        )
+
+    def _authorize_transaction(
+        self, current: str, transaction: SemanticTransaction
+    ) -> None:
+        """Enforce trust at the transaction boundary, including one-time bootstrap."""
+        current_documents = [value for _, value in self.documents(current)]
+        current_trust = [
+            value for value in current_documents if value.get("resource_type") == "trusted_actor"
+        ]
+        staged_trust = [
+            item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "trusted_actor"
+        ]
+        staged_delegations = [
+            item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "delegation_grant"
+        ]
+        staged_approvals = [
+            item.payload
+            for item in transaction.operations
+            if item.payload.get("resource_type") == "approval_attestation"
+        ]
+        bootstrap = not current_trust
+        if bootstrap:
+            if len(staged_trust) != 1 or len(staged_delegations) != 1:
+                raise ApprovalError(
+                    "initial transaction must explicitly bootstrap one root trust and delegation"
+                )
+            allowed_bootstrap_types = {
+                "trusted_actor",
+                "delegation_grant",
+                "approval_attestation",
+                "rule_definition_revision",
+                "profile_revision",
+                "provenance_record",
+            }
+            if any(
+                item.payload.get("resource_type") not in allowed_bootstrap_types
+                for item in transaction.operations
+            ):
+                raise ApprovalError("bootstrap transaction contains a forbidden resource type")
+            trust_documents = staged_trust
+            delegation_document = staged_delegations[0]
+        else:
+            trust_documents = current_trust
+            matching = [
+                value
+                for value in current_documents
+                if value.get("resource_type") == "delegation_grant"
+                and value.get("delegation_uid") == transaction.delegation_uid
+            ]
+            if len(matching) != 1:
+                raise ApprovalError("transaction delegation is not in Canonical State")
+            delegation_document = matching[0]
+        now = datetime.now(UTC)
+        if (
+            delegation_document.get("principal_uid") != transaction.actor
+            or delegation_document.get("delegation_uid") != transaction.delegation_uid
+            or not self.is_ancestor(
+                str(delegation_document.get("base_commit")), transaction.base_commit
+            )
+            or "apply_transaction" not in delegation_document.get("operations", [])
+            or now < datetime.fromisoformat(str(delegation_document["issued_at"]))
+            or now >= datetime.fromisoformat(str(delegation_document["expires_at"]))
+            or delegation_document.get("stop_conditions")
+        ):
+            raise ApprovalError("delegation does not authorize this semantic transaction")
+        issuers = {str(value.get("actor_uid")) for value in trust_documents}
+        if str(delegation_document.get("issued_by")) not in issuers:
+            raise ApprovalError("delegation issuer is not trusted")
+        signed = tuple(SignedApproval.model_validate(value) for value in staged_approvals)
+        if {item.approval_uid for item in signed} != {
+            item.approval_uid for item in transaction.approvals
+        }:
+            raise ApprovalError("signed approval resources do not match transaction attestations")
+        for approval in signed:
+            trust_value = next(
+                (
+                    value
+                    for value in trust_documents
+                    if value.get("actor_uid") == approval.actor_uid
+                    and value.get("key_uid") == approval.key_uid
+                ),
+                None,
+            )
+            if trust_value is None:
+                raise ApprovalError("approval key is not trusted by Canonical State")
+            try:
+                verify_approval(
+                    approval,
+                    TrustedActor.model_validate(trust_value),
+                    package_hash=transaction.review_package_hash,
+                    effective_model_hash=transaction.effective_model_hash,
+                )
+            except (PermissionError, ValueError) as error:
+                raise ApprovalError(str(error)) from error
 
     def create_checkpoint(
         self,
@@ -607,7 +1153,10 @@ class GitCanonicalRepository:
             self.schemas.validate(schema_name, operation.payload)
         except JsonSchemaValidationError as error:
             raise IntegrityError(f"canonical schema validation failed: {error.message}") from error
-        hash_field = "manifest_hash" if resource_type == "baseline_manifest" else "content_hash"
+        hash_field = {
+            "baseline_manifest": "manifest_hash",
+            "review_package": "package_hash",
+        }.get(resource_type, "content_hash")
         if hash_field in operation.payload:
             expected_hash = document_hash(operation.payload, hash_field)
             if operation.payload[hash_field] != expected_hash:
@@ -623,36 +1172,144 @@ class GitCanonicalRepository:
     ) -> None:
         documents = {path: value for path, value in self.documents(commit)}
         documents.update((operation.relative_path, operation.payload) for operation in operations)
-        objects = {
-            str(value["entity_uid"])
+        object_documents = {
+            str(value["entity_uid"]): value
             for value in documents.values()
             if value.get("resource_type") == "logical_object"
         }
-        revisions = {
-            str(value["revision_uid"]): str(value["object_uid"])
+        objects = set(object_documents)
+        revision_documents = {
+            str(value["revision_uid"]): value
             for value in documents.values()
             if value.get("resource_type") == "revision"
         }
-        relation_revisions = {
-            str(value["relation_revision_uid"])
+        revisions = {
+            uid: str(value["object_uid"]) for uid, value in revision_documents.items()
+        }
+        relation_documents = {
+            str(value["relation_revision_uid"]): value
             for value in documents.values()
             if value.get("resource_type") == "relation_assertion_revision"
         }
-        profiles = {
-            str(value["profile_revision_uid"])
+        relation_revisions = set(relation_documents)
+        record_documents = {
+            str(value["record_uid"]): value
+            for value in documents.values()
+            if value.get("resource_type") == "immutable_record"
+        }
+        profile_documents = {
+            str(value["profile_revision_uid"]): value
             for value in documents.values()
             if value.get("resource_type") == "profile_revision"
         }
-        rules = {
-            str(value["rule_revision_uid"])
+        profiles = set(profile_documents)
+        rule_documents = {
+            str(value["rule_revision_uid"]): value
             for value in documents.values()
             if value.get("resource_type") == "rule_definition_revision"
         }
+        rules = set(rule_documents)
         configurations = {
             str(value["configuration_uid"])
             for value in documents.values()
             if value.get("resource_type") == "configuration_snapshot"
         }
+        validation_runs = {
+            str(value["validation_run_uid"])
+            for value in documents.values()
+            if value.get("resource_type") == "validation_run"
+        }
+        findings = {
+            str(value["finding_uid"])
+            for value in documents.values()
+            if value.get("resource_type") == "validation_finding"
+        }
+        provenance_uids = {
+            str(value["provenance_uid"])
+            for value in documents.values()
+            if value.get("resource_type") == "provenance_record"
+        }
+        human_keys: dict[tuple[str, str], str] = {}
+        unqualified_human_keys: dict[str, set[str]] = {}
+        aliases: dict[str, str] = {}
+        for object_uid, value in object_documents.items():
+            key = (str(value["namespace"]), str(value["human_key"]))
+            previous = human_keys.setdefault(key, object_uid)
+            if previous != object_uid:
+                raise IntegrityError("human key is not unique inside its namespace")
+            unqualified_human_keys.setdefault(str(value["human_key"]), set()).add(object_uid)
+            for alias in value.get("aliases", []):
+                if not isinstance(alias, dict) or not isinstance(alias.get("value"), str):
+                    continue
+                alias_value = str(alias["value"])
+                previous_alias = aliases.setdefault(alias_value, object_uid)
+                if previous_alias != object_uid:
+                    raise IntegrityError(f"alias is ambiguous: {alias_value}")
+        for alias_value, object_uid in aliases.items():
+            if unqualified_human_keys.get(alias_value, {object_uid}) != {object_uid}:
+                raise IntegrityError(f"alias conflicts with a Human Key: {alias_value}")
+        revision_numbers: set[tuple[str, int]] = set()
+        for revision_uid, value in revision_documents.items():
+            number_key = (str(value["object_uid"]), int(value["revision_number"]))
+            if number_key in revision_numbers:
+                raise IntegrityError("revision number is not unique for its logical object")
+            revision_numbers.add(number_key)
+            parent_uid = value.get("parent_revision_uid")
+            if parent_uid is None:
+                if value["revision_number"] != 1:
+                    raise IntegrityError("root revision number must be one")
+                continue
+            parent = revision_documents.get(str(parent_uid))
+            if (
+                parent is None
+                or parent["object_uid"] != value["object_uid"]
+                or int(parent["revision_number"]) >= int(value["revision_number"])
+            ):
+                raise IntegrityError(f"revision parent lineage is invalid: {revision_uid}")
+        relation_numbers: set[tuple[str, int]] = set()
+        for relation_uid, value in relation_documents.items():
+            number_key = (str(value["assertion_uid"]), int(value["revision_number"]))
+            if number_key in relation_numbers:
+                raise IntegrityError("relation revision number is not unique")
+            relation_numbers.add(number_key)
+            parent_uid = value.get("parent_relation_revision_uid")
+            if parent_uid is None:
+                if value["revision_number"] != 1:
+                    raise IntegrityError("root relation revision number must be one")
+                continue
+            parent = relation_documents.get(str(parent_uid))
+            if (
+                parent is None
+                or parent["assertion_uid"] != value["assertion_uid"]
+                or int(parent["revision_number"]) >= int(value["revision_number"])
+            ):
+                raise IntegrityError(f"relation parent lineage is invalid: {relation_uid}")
+        subject_uids = objects | set(revisions) | relation_revisions | set(configurations)
+        for record_uid, value in record_documents.items():
+            if str(value["subject_uid"]) not in subject_uids:
+                raise IntegrityError(f"immutable record subject is unavailable: {record_uid}")
+            supersedes = value.get("supersedes_record_uid")
+            if supersedes is not None and str(supersedes) not in record_documents:
+                raise IntegrityError(f"superseded immutable record is unavailable: {record_uid}")
+        trusted_actor_uids = {
+            str(value["actor_uid"])
+            for value in documents.values()
+            if value.get("resource_type") == "trusted_actor"
+        }
+        for value in documents.values():
+            if value.get("resource_type") == "trusted_actor":
+                revoked = value.get("revoked_by_record_uid")
+                if revoked is not None and str(revoked) not in record_documents:
+                    raise IntegrityError("trusted actor revocation record is unavailable")
+            if value.get("resource_type") == "delegation_grant" and str(
+                value["issued_by"]
+            ) not in trusted_actor_uids:
+                raise IntegrityError("delegation issuer is not a trusted actor")
+            if (
+                value.get("resource_type") == "approval_attestation"
+                and str(value["provenance_uid"]) not in provenance_uids
+            ):
+                raise IntegrityError("approval provenance is unavailable")
         for path, value in documents.items():
             resource_type = value.get("resource_type")
             if resource_type is None:
@@ -671,6 +1328,7 @@ class GitCanonicalRepository:
             hash_field = {
                 "baseline_manifest": "manifest_hash",
                 "audit_anchor": "anchor_hash",
+                "review_package": "package_hash",
             }.get(str(resource_type), "content_hash")
             if hash_field in value and value[hash_field] != document_hash(value, hash_field):
                 raise IntegrityError(f"canonical candidate contains invalid hash: {path}")
@@ -696,12 +1354,59 @@ class GitCanonicalRepository:
                     raise IntegrityError(
                         "snapshot closure references unavailable canonical revisions"
                     )
+                missing_deviations = set(
+                    value.get("active_deviation_revision_uids", [])
+                    or value.get("deviation_revision_uids", [])
+                ) - set(revisions)
+                if missing_deviations:
+                    raise IntegrityError("snapshot references unavailable deviations")
             if resource_type == "profile_revision":
                 missing_rules = set(value.get("rule_revision_uids", [])) - rules
                 if missing_rules:
                     raise IntegrityError("profile references unavailable rule revisions")
+            if resource_type == "configuration_snapshot":
+                selected_profiles = tuple(
+                    ProfileRevision.model_validate(profile_documents[str(uid)])
+                    for uid in value["profile_revision_uids"]
+                )
+                referenced_rules = {
+                    uid
+                    for profile in selected_profiles
+                    for uid in profile.rule_revision_uids
+                }
+                selected_rules = tuple(
+                    RuleDefinition.model_validate(rule_documents[uid])
+                    for uid in referenced_rules
+                )
+                try:
+                    effective = ProfileCompiler().compile(
+                        selected_profiles, selected_rules
+                    )
+                except (TypeError, ValueError) as error:
+                    raise IntegrityError(
+                        f"configuration Effective Model is invalid: {error}"
+                    ) from error
+                if effective.effective_model_hash != value["effective_model_hash"]:
+                    raise IntegrityError("configuration Effective Model hash is stale")
+                for deviation_uid in value["active_deviation_revision_uids"]:
+                    if revision_documents[str(deviation_uid)].get("kind") != "deviation":
+                        raise IntegrityError("active deviation is not a deviation revision")
             if resource_type == "baseline_manifest" and value["configuration_uid"] not in configurations:
                 raise IntegrityError("baseline references unavailable configuration")
+            if resource_type == "validation_finding" and value["validation_run_uid"] not in validation_runs:
+                raise IntegrityError("validation finding references unavailable validation run")
+            if resource_type == "validation_run":
+                if value["configuration_uid"] not in configurations:
+                    raise IntegrityError("validation run references unavailable configuration")
+                if set(value["finding_uids"]) - findings:
+                    raise IntegrityError("validation run references unavailable findings")
+            if resource_type == "review_package":
+                if value["configuration_uid"] not in configurations:
+                    raise IntegrityError("review package references unavailable configuration")
+                if set(value["validation_run_uids"]) - validation_runs:
+                    raise IntegrityError("review package references unavailable validation runs")
+                if set(value["open_finding_uids"]) - findings:
+                    raise IntegrityError("review package references unavailable findings")
 
     @staticmethod
     def _document_uid(document: dict[str, Any]) -> str | None:
@@ -709,6 +1414,7 @@ class GitCanonicalRepository:
             "entity_uid", "revision_uid", "relation_revision_uid", "record_uid",
             "profile_revision_uid", "configuration_uid", "baseline_uid", "actor_uid",
             "delegation_uid", "transaction_uid", "provenance_uid", "anchor_uid",
+            "validation_run_uid", "finding_uid", "package_uid",
         ):
             value = document.get(name)
             if isinstance(value, str):
@@ -729,6 +1435,10 @@ class GitCanonicalRepository:
             "delegation_grant": f"canonical/delegations/{resource.get('delegation_uid')}.json",
             "approval_attestation": f"canonical/approvals/{resource.get('approval_uid')}.json",
             "rule_definition_revision": f"canonical/rules/{resource.get('rule_revision_uid')}.json",
+            "validation_run": f"canonical/validation/runs/{resource.get('validation_run_uid')}.json",
+            "validation_finding": f"canonical/validation/findings/{resource.get('finding_uid')}.json",
+            "review_package": f"canonical/review_packages/{resource.get('package_uid')}.json",
+            "provenance_record": f"canonical/provenance/{resource.get('provenance_uid')}.json",
         }
         if resource_type == "relation_assertion_revision":
             return (
@@ -816,6 +1526,35 @@ class GitCanonicalRepository:
     def _provenance_record(
         transaction: SemanticTransaction, generated_at: str
     ) -> dict[str, Any]:
+        generated_fields = (
+            "entity_uid",
+            "revision_uid",
+            "relation_revision_uid",
+            "record_uid",
+            "profile_revision_uid",
+            "rule_revision_uid",
+            "configuration_uid",
+            "baseline_uid",
+            "approval_uid",
+            "validation_run_uid",
+            "finding_uid",
+            "package_uid",
+        )
+        used_fields = (
+            "object_uid",
+            "parent_revision_uid",
+            "parent_relation_revision_uid",
+            "subject_uid",
+            "supersedes_record_uid",
+        )
+        package = next(
+            (
+                item.payload
+                for item in transaction.operations
+                if item.payload.get("resource_type") == "review_package"
+            ),
+            None,
+        )
         record: dict[str, Any] = {
             "schema_version": "1.0",
             "resource_type": "provenance_record",
@@ -823,26 +1562,37 @@ class GitCanonicalRepository:
             "subject_uid": transaction.transaction_uid,
             "kind": "generated",
             "responsible_actor_uid": transaction.actor,
-            "tool_uids": ["018f0000-0000-7000-8000-000000000099"],
+            "performed_by_actor_uid": transaction.actor,
+            "on_behalf_of_actor_uid": None,
+            "tool_uids": [],
+            "tool_identity": "lesr-runtime/0.5.0a2",
             "delegation_uid": transaction.delegation_uid,
-            "source_uids": sorted(
+            "used_uids": sorted(
                 {
-                    uid
+                    str(uid)
                     for operation in transaction.operations
-                    for uid in (
-                        operation.payload.get("entity_uid"),
-                        operation.payload.get("object_uid"),
-                        operation.payload.get("revision_uid"),
-                        operation.payload.get("relation_revision_uid"),
-                        operation.payload.get("record_uid"),
-                        operation.payload.get("profile_revision_uid"),
-                        operation.payload.get("rule_revision_uid"),
-                        operation.payload.get("configuration_uid"),
-                        operation.payload.get("baseline_uid"),
-                    )
+                    for name in used_fields
+                    for uid in [operation.payload.get(name)]
                     if isinstance(uid, str)
                 }
             ),
+            "generated_uids": sorted(
+                {
+                    str(uid)
+                    for operation in transaction.operations
+                    for name in generated_fields
+                    for uid in [operation.payload.get(name)]
+                    if isinstance(uid, str)
+                }
+                | {transaction.transaction_uid}
+            ),
+            "review_package_uid": package.get("package_uid") if package else None,
+            "validation_run_uids": sorted(
+                str(item.payload["validation_run_uid"])
+                for item in transaction.operations
+                if item.payload.get("resource_type") == "validation_run"
+            ),
+            "context_bundle_hash": package.get("evaluation_context_hash") if package else None,
             "generated_at": generated_at,
         }
         record["content_hash"] = semantic_hash(record)

@@ -35,6 +35,7 @@ from lesr.domain.rules import (
     ValueCell,
     ValueState,
     detect_direct_conflict,
+    evaluate_rule,
     project_to_rego,
     project_to_shacl,
 )
@@ -219,6 +220,60 @@ def test_schema_definition_compiles_and_runs_all_fixture_kinds() -> None:
         RuleOutcome.INDETERMINATE,
         RuleOutcome.SUPPRESSED_BY_DEVIATION,
     }
+
+
+def test_schema_aggregate_constraint_is_executable_not_schema_only() -> None:
+    definition = source()
+    aggregate = {
+        "op": "aggregate",
+        "function": "count",
+        "path": {"roles": ["verified_by"], "max_depth": 1},
+        "comparison": "gte",
+        "expected": 1,
+    }
+    definition = RuleDefinition.model_validate(
+        definition.model_dump(mode="json", exclude={"content_hash"})
+        | {"constraints": [aggregate]}
+    )
+    SchemaCatalog().validate(
+        "rule-definition.schema.json",
+        definition.model_dump(mode="json", exclude_none=True),
+    )
+    result = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        definition
+    )
+    assert result.passed
+    assert result.ast is not None
+    assert result.ast.constraints[0].to_data() == aggregate
+
+
+def test_external_evaluation_kind_is_preserved_and_requires_evidence() -> None:
+    definition = source()
+    fixtures = []
+    for fixture in definition.fixtures:
+        environment_value = dict(fixture.environment)
+        environment_value["external_rule_outcomes"] = {
+            definition.rule_revision_uid: fixture.expected_outcome.value
+        }
+        fixtures.append(fixture.model_copy(update={"environment": environment_value}))
+    definition = RuleDefinition.model_validate(
+        definition.model_dump(mode="json", exclude={"content_hash"})
+        | {
+            "evaluation": {
+                "kind": "external_tool",
+                "validator_uid": "static-analyzer",
+                "advisory_only": False,
+            },
+            "fixtures": [item.model_dump(mode="json") for item in fixtures],
+        }
+    )
+    result = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        definition
+    )
+    assert result.passed and result.ast is not None
+    assert result.ast.evaluation.kind == "external_tool"
+    without_evidence = evaluate_rule(result.ast, environment(), UNITS)
+    assert without_evidence.outcome is RuleOutcome.NOT_EVALUATED
     incomplete = definition.model_copy(update={"fixtures": definition.fixtures[:1]})
     assert not RuleCompiler({"safety_level": str}, UNITS).compile(incomplete).passed
 
