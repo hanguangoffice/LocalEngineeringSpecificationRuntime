@@ -8,6 +8,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -216,7 +217,7 @@ def _protect_private_key(value: bytes) -> bytes:
         return value
     source, source_buffer = _blob(value)
     output = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
+    crypt32 = _windows_library("crypt32")
     if not crypt32.CryptProtectData(
         ctypes.byref(source),
         "LESR Ed25519 private key",
@@ -230,7 +231,7 @@ def _protect_private_key(value: bytes) -> bytes:
     try:
         return ctypes.string_at(output.pbData, output.cbData)
     finally:
-        ctypes.windll.kernel32.LocalFree(output.pbData)
+        _windows_library("kernel32").LocalFree(output.pbData)
         del source_buffer
 
 
@@ -243,7 +244,7 @@ def _unprotect_private_key(value: bytes, protection: str) -> bytes:
         raise PermissionError("private key protection is unavailable for this user/platform")
     source, source_buffer = _blob(value)
     output = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
+    crypt32 = _windows_library("crypt32")
     if not crypt32.CryptUnprotectData(
         ctypes.byref(source), None, None, None, None, 0, ctypes.byref(output)
     ):
@@ -251,5 +252,12 @@ def _unprotect_private_key(value: bytes, protection: str) -> bytes:
     try:
         return ctypes.string_at(output.pbData, output.cbData)
     finally:
-        ctypes.windll.kernel32.LocalFree(output.pbData)
+        _windows_library("kernel32").LocalFree(output.pbData)
         del source_buffer
+
+
+def _windows_library(name: str) -> Any:
+    loader = getattr(ctypes, "windll", None)
+    if loader is None:
+        raise OSError("Windows native library loader is unavailable")
+    return getattr(loader, name)
