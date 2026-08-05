@@ -56,7 +56,7 @@ def test_revision_is_deeply_immutable_and_hash_is_deterministic() -> None:
     )
     assert canonical_json(revision) == canonical_json(revision)
     with pytest.raises(ValidationError):
-        revision.revision_number = 2  # type: ignore[misc]
+        revision.revision_number = 2
 
 
 def test_alias_and_fragment_are_revision_scoped() -> None:

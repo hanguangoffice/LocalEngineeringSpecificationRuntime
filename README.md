@@ -60,3 +60,18 @@ uv run pytest
 uv run ruff check .
 uv run mypy src prototypes
 ```
+
+Current gate status:
+
+| Gate | Status |
+|---|---|
+| P1 Semantic Kernel | PASS |
+| P2 Rule Compiler | PASS |
+| P3 Configuration/Context | PASS |
+| P4 Git Transaction | PASS |
+| P5 MCP Adapter | BLOCKED_CLIENT_VALIDATION |
+
+The P5 code, stdio protocol test, and Codex live probe pass. Claude Code cannot
+currently complete even a control prompt without MCP, so the required second
+client evidence is pending. In accordance with the design baseline,
+`src/lesr` has not been replaced. See `docs/prototype-results/GATE-SUMMARY.md`.
