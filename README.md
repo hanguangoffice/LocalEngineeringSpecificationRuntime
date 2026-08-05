@@ -1,11 +1,16 @@
 # LESR
 
+> **Development status:** `LESR_Solution_Design_Baseline_v1.0/` is the current
+> design authority. The implementation under `src/lesr` is the superseded
+> v0.1 YAML MVP and is retained only as a runnable reference while the P1-P5
+> prototype gates are evaluated.
+
 Local Engineering Specification Runtime (LESR) turns Git-managed engineering
 specifications into structured, auditable local objects.
 
-## Current implementation
+## Legacy implementation
 
-The Phase 0–7 MVP is implemented: structured YAML facts, Profile validation,
+The legacy MVP provides structured YAML facts, Profile validation,
 SQLite/FTS5 retrieval, controlled change and baselines, context construction,
 MCP query tools, and the `examples/home-control` project.
 
@@ -41,3 +46,33 @@ lesr import-accept demo specifications/demo-standard.md CAND-... `
 
 Acceptance binds the reviewed source and candidate identity, then writes the
 draft Artifact, its first version snapshot, and an attributed audit event.
+
+## v1.0 prototype gates
+
+The new semantic model is developed in `prototypes/lesr_v1` and does not import
+the legacy domain model. Gate reports live in `docs/prototype-results`. Run the
+quality suite with Python 3.12 through uv:
+
+```powershell
+uv sync --all-extras
+uv run python scripts/verify_baseline_manifest.py
+uv run pytest
+uv run ruff check .
+uv run mypy src prototypes
+```
+
+Current gate status:
+
+| Gate | Status |
+|---|---|
+| P1 Semantic Kernel | PASS |
+| P2 Rule Compiler | PASS |
+| P3 Configuration/Context | PASS |
+| P4 Git Transaction | PASS |
+| P5 MCP Adapter | PASS (approved client substitution) |
+
+The P5 code, independent stdio `ClientSession`, and Codex live probe pass.
+Claude Code cannot currently complete even a control prompt without MCP, so on
+2026-08-05 the acceptance evidence was explicitly changed to Codex plus the
+independent stdio protocol client. The final `src/lesr` cutover remains a
+separate reviewed change. See `docs/prototype-results/GATE-SUMMARY.md`.

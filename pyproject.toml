@@ -25,10 +25,6 @@ lesr = "lesr.cli.main:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/lesr"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
-
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -36,3 +32,11 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "prototypes/tests"]
+addopts = "-q"
+pythonpath = ["."]

@@ -1,6 +1,9 @@
 # Local Engineering Specification Runtime（LESR）
 ## 本地工程规范运行时——Codex 实现规格
 
+> **SUPERSEDED:** 本文档仅保留为 v0.1 YAML MVP 的历史施工规格。当前设计权威为
+> `LESR_Solution_Design_Baseline_v1.0/`；任何冲突以新基线为准。
+
 > 本文档用于直接交给 Codex 新会话，作为项目实现的主规格。  
 > 实现过程中应优先保证：结构清晰、接口稳定、可测试、可扩展、数据可审计。  
 > 不要把项目扩张成完整的企业级 ALM 平台，也不要优先开发复杂图形界面。
