@@ -326,16 +326,14 @@ class GitCanonicalRepository:
                 "CREATE TABLE documents (path TEXT PRIMARY KEY, json TEXT NOT NULL, "
                 "source_commit TEXT NOT NULL);"
             )
-            listing = self._git(
-                "ls-tree", "-r", "--name-only", source_commit, "canonical"
-            ).splitlines()
             rows: list[tuple[str, str, str]] = []
-            for path in listing:
+            for path, blob in self._tree_entries(source_commit):
+                if not path.startswith("canonical/"):
+                    continue
                 if not path.endswith(".json"):
                     continue
-                content = self.read_bytes(source_commit, path)
-                if content is not None:
-                    rows.append((path, content.decode("utf-8"), source_commit))
+                content = self._read_blob(blob)
+                rows.append((path, content.decode("utf-8"), source_commit))
             connection.executemany("INSERT INTO documents VALUES (?, ?, ?)", rows)
         return source_commit
 
@@ -349,25 +347,20 @@ class GitCanonicalRepository:
         return value
 
     def read_bytes(self, commit: str, path: str) -> bytes | None:
-        result = subprocess.run(
-            ["git", "-C", str(self.path), "show", f"{commit}:{path}"],
-            check=False,
-            capture_output=True,
+        normalized = PurePosixPath(path).as_posix()
+        blob = next(
+            (blob for actual, blob in self._tree_entries(commit) if actual == normalized),
+            None,
         )
-        if result.returncode != 0:
-            return None
-        return result.stdout
+        return self._read_blob(blob) if blob is not None else None
 
     def checkpoint_payload(self, checkpoint: CheckpointResult) -> dict[str, Any]:
-        path = (
-            f"workspaces/{self._safe_component('WS-' + checkpoint.checkpoint_uid)}/"
-            f"checkpoints/{checkpoint.checkpoint_uid}.json"
+        actual = next(
+            path
+            for path, _ in self._tree_entries(checkpoint.commit)
+            if path.startswith("workspaces/")
+            and path.endswith(f"/{checkpoint.checkpoint_uid}.json")
         )
-        listing = self._git(
-            "ls-tree", "-r", "--name-only", checkpoint.commit, "workspaces"
-        ).splitlines()
-        actual = next(item for item in listing if item.endswith(f"/{checkpoint.checkpoint_uid}.json"))
-        del path
         value = self.read_json(checkpoint.commit, actual)
         if value is None:
             raise IntegrityError("checkpoint payload is missing")
@@ -428,9 +421,42 @@ class GitCanonicalRepository:
 
     def _stage_bytes(self, path: str, content: bytes, env: dict[str, str]) -> None:
         blob = self._git("hash-object", "-w", "--stdin", input_bytes=content)
+        entry = f"100644 {blob}\t".encode("ascii") + path.encode("utf-8") + b"\0"
         self._git(
-            "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", extra_env=env
+            "update-index", "-z", "--index-info", input_bytes=entry, extra_env=env
         )
+
+    def _tree_entries(self, commit: str) -> tuple[tuple[str, str], ...]:
+        result = subprocess.run(
+            ["git", "-C", str(self.path), "ls-tree", "-r", "-z", commit],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise CanonicalError(
+                f"git ls-tree failed: {result.stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        entries: list[tuple[str, str]] = []
+        for record in result.stdout.split(b"\0"):
+            if not record:
+                continue
+            metadata, raw_path = record.split(b"\t", 1)
+            _, object_type, object_id = metadata.split(b" ", 2)
+            if object_type == b"blob":
+                entries.append((raw_path.decode("utf-8"), object_id.decode("ascii")))
+        return tuple(entries)
+
+    def _read_blob(self, blob: str) -> bytes:
+        result = subprocess.run(
+            ["git", "-C", str(self.path), "cat-file", "blob", blob],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise CanonicalError(
+                f"git cat-file failed: {result.stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        return result.stdout
 
     def _commit_tree(self, tree: str, parents: tuple[str, ...], message: str) -> str:
         arguments = ["commit-tree", tree]
