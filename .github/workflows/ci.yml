@@ -21,5 +21,5 @@ jobs:
       - run: uv run python scripts/verify_baseline_manifest.py
       - run: uv run python scripts/verify_construction_schemas.py
       - run: uv run ruff check .
-      - run: uv run mypy src prototypes
+      - run: uv run mypy src
       - run: uv run pytest

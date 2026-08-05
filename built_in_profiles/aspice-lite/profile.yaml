@@ -1,5 +1,0 @@
-id: aspice-lite
-name: ASPICE-like Engineering Profile
-version: 0.1.0
-artifact_types: [system_requirement, software_requirement, software_design, test_specification, change_request, baseline]
-default_workflow: engineering-artifact-workflow

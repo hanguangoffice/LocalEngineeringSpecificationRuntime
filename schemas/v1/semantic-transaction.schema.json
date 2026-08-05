@@ -16,10 +16,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["object_uid", "revision_uid"],
+        "required": ["revision_uid", "content_hash"],
         "properties": {
-          "object_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
-          "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"}
+          "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+          "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
         }
       }
     },

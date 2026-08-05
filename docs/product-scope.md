@@ -1,5 +1,8 @@
 # LESR 产品范围与首批验证方案
 
+> **SUPERSEDED:** 本文保留为早期产品探索记录，其中 YAML/Artifact 描述不适用于 v1。
+> 当前需求权威为 `LESR_Solution_Design_Baseline_v1.0/`。
+
 ## 1. 产品定位
 
 Local Engineering Specification Runtime（LESR）不是一个单纯的 MCP
