@@ -69,9 +69,10 @@ Current gate status:
 | P2 Rule Compiler | PASS |
 | P3 Configuration/Context | PASS |
 | P4 Git Transaction | PASS |
-| P5 MCP Adapter | BLOCKED_CLIENT_VALIDATION |
+| P5 MCP Adapter | PASS (approved client substitution) |
 
-The P5 code, stdio protocol test, and Codex live probe pass. Claude Code cannot
-currently complete even a control prompt without MCP, so the required second
-client evidence is pending. In accordance with the design baseline,
-`src/lesr` has not been replaced. See `docs/prototype-results/GATE-SUMMARY.md`.
+The P5 code, independent stdio `ClientSession`, and Codex live probe pass.
+Claude Code cannot currently complete even a control prompt without MCP, so on
+2026-08-05 the acceptance evidence was explicitly changed to Codex plus the
+independent stdio protocol client. The final `src/lesr` cutover remains a
+separate reviewed change. See `docs/prototype-results/GATE-SUMMARY.md`.

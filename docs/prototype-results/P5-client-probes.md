@@ -39,7 +39,9 @@ Date: 2026-08-05 (Asia/Shanghai)
 
 ## Gate consequence
 
-Protocol subprocess tests and Codex pass. Claude cannot currently establish a
-normal model session, so it cannot supply the second-client evidence. P5 remains
-`BLOCKED_CLIENT_VALIDATION`; P1-P5 are therefore not all passed, and the legacy
-runtime must not be replaced yet.
+The independent MCP `ClientSession` subprocess tests and Codex both pass and
+exercise different client implementations. Claude cannot currently establish a
+normal model session. On 2026-08-05 the project owner approved Codex plus the
+independent stdio client as the current P5 acceptance evidence, so P5 is `PASS`
+with a documented client substitution. Claude validation is deferred and must
+not be represented as passed.

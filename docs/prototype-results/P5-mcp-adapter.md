@@ -1,6 +1,6 @@
 # P5 MCP Adapter
 
-**Gate status: BLOCKED_CLIENT_VALIDATION**
+**Gate status: PASS (approved client substitution)**
 
 ## Question and hypothesis
 
@@ -45,10 +45,12 @@ protocol-independent start/status/cancel/result fallback.
 
 ## Decision and reversal cost
 
-The adapter boundary and Codex probe pass. Final P5 acceptance still requires a
-successful Claude Code probe; until that record exists the long-lived runtime
-cutover remains blocked. Reversal cost is low because only `p5_mcp.py` imports
-the SDK.
+The adapter boundary, independent stdio client and Codex probe pass. On
+2026-08-05 the project owner accepted the independent MCP `ClientSession` plus
+Codex as the P5 client evidence because Claude Code cannot establish even a
+non-MCP control session in the current environment. Claude remains a deferred
+interoperability check rather than an LESR gate blocker. Reversal cost is low
+because only `p5_mcp.py` imports the SDK.
 
 ## Code to keep / delete
 
@@ -57,5 +59,6 @@ domain service and experimental tool naming after live-client evidence.
 
 ## Open issues
 
-Record two live clients, response pagination limits, authentication mapping,
-async task transport and adapter version negotiation before final cutover.
+Record a Claude Code probe when its endpoint/session is repaired. Response
+pagination limits, authentication mapping, async task transport and adapter
+version negotiation remain final-runtime work.
