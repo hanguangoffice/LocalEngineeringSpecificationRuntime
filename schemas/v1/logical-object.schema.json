@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/logical-object.schema.json",
+  "title": "LESR Logical Object",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "entity_uid", "namespace", "human_key", "kind", "core_class", "facets", "aliases", "external_identities", "created_at"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "logical_object"},
+    "entity_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "namespace": {"$ref": "common.schema.json#/$defs/non_empty"},
+    "human_key": {"$ref": "common.schema.json#/$defs/non_empty"},
+    "kind": {"$ref": "common.schema.json#/$defs/non_empty"},
+    "core_class": {"enum": ["governed_object", "immutable_record", "change_workspace", "configuration_snapshot", "presentation_resource", "supporting_resource"]},
+    "facets": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "alias_type", "valid_from", "introduced_by"],
+        "properties": {
+          "value": {"$ref": "common.schema.json#/$defs/non_empty"},
+          "alias_type": {"$ref": "common.schema.json#/$defs/non_empty"},
+          "valid_from": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+          "valid_to": {"oneOf": [{"$ref": "common.schema.json#/$defs/utc_timestamp"}, {"type": "null"}]},
+          "introduced_by": {"$ref": "common.schema.json#/$defs/uuid7"}
+        }
+      }
+    },
+    "external_identities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["system", "namespace", "external_id"],
+        "properties": {
+          "system": {"$ref": "common.schema.json#/$defs/non_empty"},
+          "namespace": {"$ref": "common.schema.json#/$defs/non_empty"},
+          "external_id": {"$ref": "common.schema.json#/$defs/non_empty"},
+          "external_revision": {"type": ["string", "null"]},
+          "uri": {"type": ["string", "null"], "format": "uri"},
+          "source_hash": {"oneOf": [{"$ref": "common.schema.json#/$defs/sha256"}, {"type": "null"}]}
+        }
+      }
+    },
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+  },
+  "examples": [{"schema_version":"1.0","resource_type":"logical_object","entity_uid":"018f0000-0000-7000-8000-000000000001","namespace":"demo","human_key":"REQ-1","kind":"software_requirement","core_class":"governed_object","facets":["authored","traceability"],"aliases":[],"external_identities":[],"created_at":"2026-08-05T00:00:00Z"}]
+}

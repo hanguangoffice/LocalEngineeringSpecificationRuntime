@@ -1,0 +1,21 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/workspace.schema.json",
+  "title":"LESR Change Workspace",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schema_version","resource_type","workspace_uid","base_commit","base_configuration_uid","effective_model_hash","delegation_uid","state","working_copies","checkpoint_uids","created_at"],
+  "properties":{
+    "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
+    "resource_type":{"const":"change_workspace"},
+    "workspace_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "base_commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},
+    "base_configuration_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},
+    "delegation_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "state":{"enum":["open","active","paused","submitted","under_review","approved_to_apply","applied","aborted","archived","conflicted"]},
+    "working_copies":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["object_uid","base_revision_uid","fields","proposed_relation_revision_uids"],"properties":{"object_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"base_revision_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"fields":{"type":"array","items":{"$ref":"common.schema.json#/$defs/semantic_field"}},"proposed_relation_revision_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true}}}},
+    "checkpoint_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/immutable-record.schema.json",
+  "title": "LESR Immutable Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "record_uid", "record_type", "subject_uid", "actor_uid", "actor_type", "occurred_at", "fields", "content_hash"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "immutable_record"},
+    "record_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "record_type": {"$ref": "common.schema.json#/$defs/non_empty"},
+    "subject_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "actor_type": {"$ref": "common.schema.json#/$defs/actor_type"},
+    "occurred_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "fields": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/semantic_field"}},
+    "supersedes_record_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+    "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  },
+  "examples": [{"schema_version":"1.0","resource_type":"immutable_record","record_uid":"018f0000-0000-7000-8000-000000000007","record_type":"lifecycle","subject_uid":"018f0000-0000-7000-8000-000000000002","actor_uid":"018f0000-0000-7000-8000-000000000008","actor_type":"human","occurred_at":"2026-08-05T00:00:00Z","fields":[{"path":"/to_state","value":"approved"}],"supersedes_record_uid":null,"content_hash":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]
+}

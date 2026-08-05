@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/relation-identity.schema.json",
+  "title":"LESR Relation Assertion Identity",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schema_version","resource_type","assertion_uid","created_at"],
+  "properties":{
+    "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
+    "resource_type":{"const":"relation_assertion_identity"},
+    "assertion_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"}
+  }
+}

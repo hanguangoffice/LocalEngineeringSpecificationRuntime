@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/context-contract.schema.json",
+  "title": "LESR Context Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "context_uid", "evaluation_context", "selections", "omitted_candidates", "selection_trace", "completeness", "token_estimate", "content_hash"],
+  "properties": {
+    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "resource_type": {"const": "context_contract"},
+    "context_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "evaluation_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configuration_uid", "operation", "risk_class", "target_uids"],
+      "properties": {
+        "configuration_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+        "workspace_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+        "baseline_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+        "operation": {"type": "string", "minLength": 1},
+        "risk_class": {"$ref": "common.schema.json#/$defs/risk_class"},
+        "target_uids": {"type": "array", "minItems": 1, "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true}
+      }
+    },
+    "selections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section", "resource_uid", "revision_uid", "reason"],
+        "properties": {
+          "section": {"enum": ["invariant", "mandatory", "conditional", "supporting", "negative", "deviation", "conflict", "unknown"]},
+          "resource_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+          "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "omitted_candidates": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
+    "selection_trace": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "completeness": {"enum": ["complete_under_model", "incomplete_budget", "incomplete_configuration", "incomplete_confidentiality", "indeterminate"]},
+    "token_estimate": {"type": "integer", "minimum": 0},
+    "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  }
+}
