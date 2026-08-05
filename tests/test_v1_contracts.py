@@ -111,21 +111,18 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
         "query",
         "traverse",
         "impact",
-        "build_context",
-        "open_workspace",
-        "propose_operation",
-        "prepare_review",
-        "apply_transaction",
-        "start_task",
-        "task_status",
-        "cancel_task",
-        "task_result",
+        "context_plan",
+        "workspace_open",
+        "workspace_edit",
+        "workspace_submit",
+        "apply",
+        "context_trace",
     } == set(tools)
     for name in (
-        "open_workspace",
-        "propose_operation",
-        "prepare_review",
-        "apply_transaction",
+        "workspace_open",
+        "workspace_edit",
+        "workspace_submit",
+        "apply",
     ):
         properties = set(tools[name].inputSchema["properties"])
         assert REQUIRED_WRITE_FIELDS <= properties

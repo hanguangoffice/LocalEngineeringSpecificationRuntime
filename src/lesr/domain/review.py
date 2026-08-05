@@ -145,12 +145,21 @@ class ReviewPackage(FrozenModel):
     effective_model_hash: str
     prepared_by_actor_uid: str
     created_at: datetime
+    subject_hash: str = ""
     package_hash: str = ""
 
     @model_validator(mode="after")
     def calculate_hash(self) -> ReviewPackage:
         if not self.candidate_scope:
             raise ValueError("review package candidate scope cannot be empty")
+        subject_document = self.model_dump(mode="json")
+        subject_document["comment_hashes"] = []
+        subject_document.pop("subject_hash", None)
+        subject_document.pop("package_hash", None)
+        expected_subject = semantic_hash(subject_document)
+        if self.subject_hash and self.subject_hash != expected_subject:
+            raise ValueError("subject_hash is invalid")
+        object.__setattr__(self, "subject_hash", expected_subject)
         expected = document_hash(self.model_dump(mode="json"), "package_hash")
         if self.package_hash and self.package_hash != expected:
             raise ValueError("package_hash is invalid")
@@ -185,7 +194,10 @@ class GovernanceEvaluator:
         revoked = {item.approval_uid for item in revocations if item.revoked_at <= now}
         resolved_comments = {item.comment_hash for item in resolutions}
         package_comments = {
-            item.comment_hash for item in comments if item.comment_hash in package.comment_hashes
+            item.comment_hash
+            for item in comments
+            if item.package_hash == package.subject_hash
+            and item.comment_hash in package.comment_hashes
         }
         if set(package.comment_hashes) != package_comments:
             reasons.append("REVIEW_COMMENT_EVIDENCE_MISSING")

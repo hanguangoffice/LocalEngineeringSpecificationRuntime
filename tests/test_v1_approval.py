@@ -17,7 +17,7 @@ def test_ed25519_approval_binds_package_model_scope_and_role(tmp_path) -> None:
     key_document = json.loads(next((tmp_path / "keys").glob("*.json")).read_text())
     assert "private_key" not in key_document
     assert key_document["protection"] == (
-        "windows-dpapi-current-user" if os.name == "nt" else "filesystem-user-only"
+        "windows-dpapi-current-user" if os.name == "nt" else "scrypt-aesgcm-pkcs8"
     )
     payload = ApprovalPayload(
         package_hash="sha256:package",

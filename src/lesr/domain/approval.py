@@ -6,6 +6,7 @@ import base64
 import ctypes
 import json
 import os
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+    load_der_private_key,
+)
 from platformdirs import user_config_path
 from pydantic import Field, model_validator
 
@@ -126,12 +135,18 @@ class SignedApproval(FrozenModel):
 class ApprovalKeyStore:
     """User-local private keys; only public trust records enter Canonical State."""
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, password: str | None = None) -> None:
         self.root = root or user_config_path("lesr", appauthor=False) / "keys"
+        configured = password or os.environ.get("LESR_KEY_PASSWORD")
+        self._fallback_password = (
+            configured.encode("utf-8")
+            if configured is not None
+            else secrets.token_bytes(32)
+            if root is not None
+            else None
+        )
 
-    def generate(
-        self, actor_uid: str, display_name: str, roles: tuple[str, ...]
-    ) -> TrustedActor:
+    def generate(self, actor_uid: str, display_name: str, roles: tuple[str, ...]) -> TrustedActor:
         private = Ed25519PrivateKey.generate()
         public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         trust = TrustedActor(
@@ -142,32 +157,54 @@ class ApprovalKeyStore:
         )
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / f"{trust.key_uid}.json"
-        value = {
+        private_der = private.private_bytes(Encoding.DER, PrivateFormat.PKCS8, NoEncryption())
+        value: dict[str, str | int] = {
             "algorithm": "Ed25519",
             "actor_uid": actor_uid,
             "key_uid": trust.key_uid,
-            "protection": "windows-dpapi-current-user" if os.name == "nt" else "filesystem-user-only",
-            "protected_private_key": base64.b64encode(
-                _protect_private_key(private.private_bytes_raw())
-            ).decode("ascii"),
         }
+        if os.name == "nt":
+            value |= {
+                "protection": "windows-dpapi-current-user",
+                "protected_private_key": base64.b64encode(_protect_private_key(private_der)).decode(
+                    "ascii"
+                ),
+            }
+        elif _store_in_secret_service(trust.key_uid, private_der):
+            value["protection"] = "secret-service"
+        else:
+            if self._fallback_password is None:
+                raise PermissionError(
+                    "Secret Service is unavailable; LESR_KEY_PASSWORD is required"
+                )
+            salt = secrets.token_bytes(16)
+            nonce = secrets.token_bytes(12)
+            key = _derive_scrypt(self._fallback_password, salt)
+            value |= {
+                "protection": "scrypt-aesgcm-pkcs8",
+                "salt": base64.b64encode(salt).decode("ascii"),
+                "nonce": base64.b64encode(nonce).decode("ascii"),
+                "protected_private_key": base64.b64encode(
+                    AESGCM(key).encrypt(nonce, private_der, trust.key_uid.encode("utf-8"))
+                ).decode("ascii"),
+                "scrypt_n": 1 << 15,
+                "scrypt_r": 8,
+                "scrypt_p": 1,
+            }
         path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8", newline="\n")
         path.chmod(0o600)
         return trust
 
-    def sign(
-        self, trust: TrustedActor, role: str, payload: ApprovalPayload
-    ) -> SignedApproval:
+    def sign(self, trust: TrustedActor, role: str, payload: ApprovalPayload) -> SignedApproval:
         if role not in trust.roles:
             raise PermissionError(f"actor is not trusted for role: {role}")
         path = self.root / f"{trust.key_uid}.json"
         value = json.loads(path.read_text(encoding="utf-8"))
-        private = Ed25519PrivateKey.from_private_bytes(
-            _unprotect_private_key(
-                base64.b64decode(value["protected_private_key"], validate=True),
-                str(value["protection"]),
-            )
-        )
+        private_der = self._unlock_private_key(value, trust.key_uid)
+        loaded = load_der_private_key(private_der, password=None)
+        if not isinstance(loaded, Ed25519PrivateKey):
+            raise PermissionError("stored approval key is not Ed25519")
+        private = loaded
         approval_uid = uuid7_candidate()
         provenance_uid = uuid7_candidate()
         issued_at = datetime.now(UTC)
@@ -197,6 +234,28 @@ class ApprovalKeyStore:
             provenance_uid=provenance_uid,
         )
 
+    def _unlock_private_key(self, value: dict[str, Any], key_uid: str) -> bytes:
+        protection = str(value["protection"])
+        if protection == "secret-service":
+            private_der = _load_from_secret_service(key_uid)
+            if private_der is None:
+                raise PermissionError("Secret Service key is unavailable or locked")
+            return private_der
+        protected = base64.b64decode(value["protected_private_key"], validate=True)
+        if protection == "windows-dpapi-current-user":
+            return _unprotect_private_key(protected, protection)
+        if protection == "scrypt-aesgcm-pkcs8":
+            if self._fallback_password is None:
+                raise PermissionError("password is required to unlock the private key")
+            salt = base64.b64decode(value["salt"], validate=True)
+            nonce = base64.b64decode(value["nonce"], validate=True)
+            key = _derive_scrypt(self._fallback_password, salt)
+            try:
+                return AESGCM(key).decrypt(nonce, protected, key_uid.encode("utf-8"))
+            except ValueError as error:
+                raise PermissionError("private key password is invalid") from error
+        raise PermissionError("private key protection is unsupported")
+
 
 def verify_approval(
     approval: SignedApproval,
@@ -211,7 +270,11 @@ def verify_approval(
         raise PermissionError("approval actor/key does not match the trust record")
     if approval.actor_role not in trust.roles:
         raise PermissionError("approval role is not trusted")
-    if trust.revoked or instant < trust.valid_from or (trust.valid_to and instant >= trust.valid_to):
+    if (
+        trust.revoked
+        or instant < trust.valid_from
+        or (trust.valid_to and instant >= trust.valid_to)
+    ):
         raise PermissionError("approval key is not currently trusted")
     if approval.expires_at and instant >= approval.expires_at:
         raise PermissionError("approval has expired")
@@ -221,9 +284,7 @@ def verify_approval(
         raise PermissionError("approval does not bind the effective model")
     if approval.scope_hash != semantic_hash(approval.scope):
         raise PermissionError("approval scope hash is invalid")
-    public = Ed25519PublicKey.from_public_bytes(
-        base64.b64decode(trust.public_key, validate=True)
-    )
+    public = Ed25519PublicKey.from_public_bytes(base64.b64decode(trust.public_key, validate=True))
     try:
         public.verify(
             base64.b64decode(approval.signature, validate=True),
@@ -269,10 +330,6 @@ def _protect_private_key(value: bytes) -> bytes:
 
 
 def _unprotect_private_key(value: bytes, protection: str) -> bytes:
-    if protection == "filesystem-user-only":
-        if os.name == "nt":
-            raise PermissionError("unprotected private key is forbidden on Windows")
-        return value
     if protection != "windows-dpapi-current-user" or os.name != "nt":
         raise PermissionError("private key protection is unavailable for this user/platform")
     source, source_buffer = _blob(value)
@@ -294,3 +351,29 @@ def _windows_library(name: str) -> Any:
     if loader is None:
         raise OSError("Windows native library loader is unavailable")
     return getattr(loader, name)
+
+
+def _derive_scrypt(password: bytes, salt: bytes) -> bytes:
+    return Scrypt(salt=salt, length=32, n=1 << 15, r=8, p=1).derive(password)
+
+
+def _store_in_secret_service(key_uid: str, private_der: bytes) -> bool:
+    try:
+        import keyring
+
+        keyring.set_password(
+            "lesr.approval", key_uid, base64.b64encode(private_der).decode("ascii")
+        )
+        return True
+    except Exception:  # noqa: BLE001 - keyring backend exception types are not stable
+        return False
+
+
+def _load_from_secret_service(key_uid: str) -> bytes | None:
+    try:
+        import keyring
+
+        value = keyring.get_password("lesr.approval", key_uid)
+        return base64.b64decode(value, validate=True) if value else None
+    except Exception:  # noqa: BLE001 - keyring backend exception types are not stable
+        return None

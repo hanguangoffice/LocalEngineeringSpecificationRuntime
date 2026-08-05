@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluation suite="lesr-1.0-readonly" contract="1.0.0">
+  <qa_pair><question>Resolve Human Key REQ-SW-0001 and report its exact Revision UID.</question><answer>018f0000-0000-7000-8000-000000000002</answer></qa_pair>
+  <qa_pair><question>Which Kind is assigned to REQ-SW-0001?</question><answer>software_requirement</answer></qa_pair>
+  <qa_pair><question>Resolve alias REQ-OLD-0001 and report the current Logical Object UID without guessing a Revision.</question><answer>018f0000-0000-7000-8000-000000000001</answer></qa_pair>
+  <qa_pair><question>Query for reconnect and report the title of REQ-SW-0001.</question><answer>MQTT reconnect</answer></qa_pair>
+  <qa_pair><question>What canonical format version does repository health report?</question><answer>1.0.0</answer></qa_pair>
+  <qa_pair><question>Does the MCP capability contract expose migration to an AI client?</question><answer>no</answer></qa_pair>
+  <qa_pair><question>Does the MCP capability contract expose private-key signing?</question><answer>no</answer></qa_pair>
+  <qa_pair><question>When Context cannot find a mandatory relation, what completeness code must be returned?</question><answer>INCOMPLETE_MISSING_RELATION</answer></qa_pair>
+  <qa_pair><question>Can a Proposed relation grant Formal Trace Credit?</question><answer>no</answer></qa_pair>
+  <qa_pair><question>When an Impact traversal reaches its depth bound with unseen neighbors, what completeness code is returned?</question><answer>INCOMPLETE_MAX_DEPTH</answer></qa_pair>
+</evaluation>

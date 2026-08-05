@@ -104,8 +104,9 @@ def test_partial_conditional_approvals_jointly_cover_scope_and_quorum(tmp_path: 
 
 
 def test_open_comment_and_pre_apply_revocation_both_block(tmp_path: Path) -> None:
+    review_subject = package()
     comment = ReviewComment(
-        package_hash=HASHES[10],
+        package_hash=review_subject.subject_hash,
         resource_uid=UIDS[3],
         location="/statement",
         author_uid=UIDS[10],

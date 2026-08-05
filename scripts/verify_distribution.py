@@ -4,6 +4,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import tomllib
 import venv
@@ -15,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_SCHEMAS = {
     path.name for path in (ROOT / "schemas" / "v1").glob("*.schema.json")
 }
+RUNTIME_ROOTS = (
+    ROOT / "src" / "lesr",
+    ROOT / "schemas" / "v1",
+)
 
 
 def verify(distribution: Path | None = None) -> int:
@@ -32,8 +37,11 @@ def verify(distribution: Path | None = None) -> int:
     if wrong_versions:
         raise ValueError(f"distribution contains another LESR version: {wrong_versions}")
     wheels = [path for path in artifacts if path.suffix == ".whl"]
+    sdists = [path for path in artifacts if path.name.endswith(".tar.gz")]
     if len(wheels) != 1:
         raise ValueError(f"expected one {version} wheel, found: {wheels}")
+    if len(sdists) != 1:
+        raise ValueError(f"expected one {version} sdist, found: {sdists}")
     wheel = wheels[0]
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
@@ -70,18 +78,57 @@ def verify(distribution: Path | None = None) -> int:
         for name, source in source_files.items():
             if archive.read(name) != source.read_bytes():
                 raise ValueError(f"wheel source differs byte-for-byte from src: {name}")
+        expected_assets = {
+            path.relative_to(ROOT / "src").as_posix(): path
+            for path in (ROOT / "src" / "lesr" / "web").rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        }
+        expected_assets["lesr/py.typed"] = ROOT / "src" / "lesr" / "py.typed"
+        for name, source in expected_assets.items():
+            if name not in names:
+                raise ValueError(f"wheel is missing runtime asset: {name}")
+            if archive.read(name) != source.read_bytes():
+                raise ValueError(f"wheel asset differs byte-for-byte from src: {name}")
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         if metadata["Version"] != version:
             raise ValueError(
                 f"wheel metadata version {metadata['Version']} differs from {version}"
             )
+    _verify_sdist(sdists[0], version)
     _installed_smoke(wheel, version)
     print(
-        f"Verified installed wheel {wheel.name}: exact source, metadata, "
-        f"and {len(EXPECTED_SCHEMAS)} schemas."
+        f"Verified {wheel.name} and {sdists[0].name}: exact runtime source/assets, "
+        f"metadata, {len(EXPECTED_SCHEMAS)} schemas, and isolated installation."
     )
     return 0
+
+
+def _verify_sdist(sdist: Path, version: str) -> None:
+    prefix = f"lesr-{version}/"
+    with tarfile.open(sdist, "r:gz") as archive:
+        members = {item.name: item for item in archive.getmembers() if item.isfile()}
+        expected: dict[str, Path] = {}
+        for root in RUNTIME_ROOTS:
+            for path in root.rglob("*"):
+                if path.is_file():
+                    if "__pycache__" in path.parts or path.suffix == ".pyc":
+                        continue
+                    expected[prefix + path.relative_to(ROOT).as_posix()] = path
+        for name, source in expected.items():
+            member = members.get(name)
+            if member is None:
+                raise ValueError(f"sdist is missing runtime source: {name}")
+            extracted = archive.extractfile(member)
+            if extracted is None or extracted.read() != source.read_bytes():
+                raise ValueError(f"sdist source differs byte-for-byte: {name}")
+        forbidden = [
+            name
+            for name in members
+            if "/prototypes/" in name or name.lower().endswith(".pdf")
+        ]
+        if forbidden:
+            raise ValueError(f"sdist contains prototype/licensed material: {forbidden}")
 
 
 def _installed_smoke(wheel: Path, version: str) -> None:

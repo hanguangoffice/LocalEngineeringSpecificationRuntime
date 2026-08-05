@@ -1,1 +1,17 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://lesr.dev/schemas/v1/graph-snapshot.schema.json","title":"Configuration-bound Graph Snapshot","type":"object","additionalProperties":false,"required":["schema_version","resource_type","snapshot_uid","configuration_uid","canonical_commit","effective_model_hash","workspace_uid","checkpoint_uid","evaluation_time","selected_revision_uids","relation_revision_uids","candidate_overlay_hash","unresolved_external_endpoints","snapshot_hash"],"properties":{"schema_version":{"const":"1.0"},"resource_type":{"const":"graph_snapshot"},"snapshot_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"configuration_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"canonical_commit":{"type":"string"},"effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},"workspace_uid":{"type":["string","null"]},"checkpoint_uid":{"type":["string","null"]},"evaluation_time":{"$ref":"common.schema.json#/$defs/utc_timestamp"},"selected_revision_uids":{"type":"array","uniqueItems":true,"items":{"$ref":"common.schema.json#/$defs/uuid7"}},"relation_revision_uids":{"type":"array","uniqueItems":true,"items":{"$ref":"common.schema.json#/$defs/uuid7"}},"candidate_overlay_hash":{"type":["string","null"],"pattern":"^sha256:[0-9a-f]{64}$"},"unresolved_external_endpoints":{"type":"array","items":{"type":"string"}},"snapshot_hash":{"$ref":"common.schema.json#/$defs/sha256"}}}
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://lesr.dev/schemas/v1/graph-snapshot.schema.json",
+  "title":"Configuration-bound Graph Snapshot",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","resource_type","snapshot_uid","configuration_uid","canonical_commit","effective_model_hash","workspace_uid","checkpoint_uid","evaluation_time","nodes","relations","candidate_overlay_hash","unresolved_external_endpoints","snapshot_hash"],
+  "properties":{
+    "schema_version":{"const":"1.0"},"resource_type":{"const":"graph_snapshot"},
+    "snapshot_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"configuration_uid":{"type":"string","minLength":1},
+    "canonical_commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},"effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},
+    "workspace_uid":{"type":["string","null"]},"checkpoint_uid":{"type":["string","null"]},"evaluation_time":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
+    "nodes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["revision","lifecycle_state","source"],"properties":{"revision":{"$ref":"revision.schema.json"},"lifecycle_state":{"type":"string"},"source":{"enum":["canonical","candidate"]}}}},
+    "relations":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["assertion","relation_type_revision_uid","lifecycle_state","source"],"properties":{"assertion":{"$ref":"relation-assertion.schema.json"},"relation_type_revision_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"lifecycle_state":{"type":"string"},"source":{"enum":["canonical","candidate"]}}}},
+    "candidate_overlay_hash":{"type":["string","null"],"pattern":"^sha256:[0-9a-f]{64}$"},
+    "unresolved_external_endpoints":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"snapshot_hash":{"$ref":"common.schema.json#/$defs/sha256"}
+  }
+}

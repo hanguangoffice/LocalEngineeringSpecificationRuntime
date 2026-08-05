@@ -1,21 +1,15 @@
 {
-  "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://lesr.dev/schemas/v1/workspace.schema.json",
-  "title":"LESR Change Workspace",
-  "type":"object",
-  "additionalProperties":false,
-  "required":["schema_version","resource_type","workspace_uid","base_commit","base_configuration_uid","effective_model_hash","delegation_uid","state","working_copies","checkpoint_uids","created_at"],
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://lesr.dev/schemas/v1/workspace.schema.json","title":"LESR 1.0 Change Workspace",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","resource_type","workspace_uid","base_commit","configuration_uid","effective_model_hash","delegation_uid","actor_uid","working_copies","checkpoint_uids","state","created_at"],
   "properties":{
-    "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
-    "resource_type":{"const":"change_workspace"},
-    "workspace_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
-    "base_commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},
-    "base_configuration_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
-    "effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},
-    "delegation_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
-    "state":{"enum":["open","active","paused","submitted","under_review","approved_to_apply","applied","aborted","archived","conflicted"]},
-    "working_copies":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["object_uid","base_revision_uid","fields","proposed_relation_revision_uids"],"properties":{"object_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"base_revision_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"fields":{"type":"array","items":{"$ref":"common.schema.json#/$defs/semantic_field"}},"proposed_relation_revision_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true}}}},
-    "checkpoint_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
-    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"}
-  }
+    "schema_version":{"const":"1.0"},"resource_type":{"const":"change_workspace"},"workspace_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "base_commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},"configuration_uid":{"type":"string","minLength":1},"effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},
+    "delegation_uid":{"type":"string","minLength":1},"actor_uid":{"type":"string","minLength":1},
+    "working_copies":{"type":"array","items":{"$ref":"#/$defs/working_copy"}},"checkpoint_uids":{"type":"array","uniqueItems":true,"items":{"$ref":"common.schema.json#/$defs/uuid7"}},
+    "state":{"enum":["editable","submitted"]},"created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"}
+  },
+  "$defs":{"working_copy":{"type":"object","additionalProperties":false,"required":["schema_version","resource_type","workspace_uid","object_uid","base_revision_uid","base_revision_number","human_key","kind","facets","effective_model_hash","delegation_uid","draft_fields","draft_fragments","relation_proposals","requested_lifecycle_state","validation_state","edit_log","state","working_state_hash"],"properties":{
+    "schema_version":{"const":"1.0"},"resource_type":{"const":"working_copy"},"workspace_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"object_uid":{"$ref":"common.schema.json#/$defs/uuid7"},"base_revision_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},"base_revision_number":{"type":"integer","minimum":0},"human_key":{"type":"string","minLength":1},"kind":{"type":"string","minLength":1},"facets":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"effective_model_hash":{"$ref":"common.schema.json#/$defs/sha256"},"delegation_uid":{"type":"string"},"draft_fields":{"type":"array","items":{"$ref":"common.schema.json#/$defs/semantic_field"}},"draft_fragments":{"type":"array","items":{"type":"object"}},"relation_proposals":{"type":"array","items":{"$ref":"relation-assertion.schema.json"}},"requested_lifecycle_state":{"type":["string","null"]},"validation_state":{"enum":["not_run","pass","fail","indeterminate"]},"edit_log":{"type":"array","items":{"$ref":"edit-operation.schema.json"}},"state":{"enum":["editable","submitted"]},"working_state_hash":{"$ref":"common.schema.json#/$defs/sha256"}
+  }} }
 }

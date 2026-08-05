@@ -167,13 +167,7 @@ def uuid7_candidate(timestamp_ms: int | None = None) -> str:
         raise ValueError("timestamp_ms must fit in 48 bits")
     rand_a = secrets.randbits(12)
     rand_b = secrets.randbits(62)
-    integer = (
-        (milliseconds << 80)
-        | (0x7 << 76)
-        | (rand_a << 64)
-        | (0b10 << 62)
-        | rand_b
-    )
+    integer = (milliseconds << 80) | (0x7 << 76) | (rand_a << 64) | (0b10 << 62) | rand_b
     return str(uuid.UUID(int=integer))
 
 
@@ -266,9 +260,7 @@ class Revision(FrozenModel):
 
     @model_validator(mode="after")
     def calculate_content_hash(self) -> Revision:
-        payload = self.model_dump(
-            mode="json", exclude={"content_hash"}, exclude_none=True
-        )
+        payload = self.model_dump(mode="json", exclude={"content_hash"}, exclude_none=True)
         calculated = semantic_hash(payload)
         if self.content_hash and self.content_hash != calculated:
             raise ValueError("content_hash does not match immutable revision content")
@@ -330,9 +322,7 @@ class LifecycleProjector:
                 conflicts.append(f"{record.record_uid}: lifecycle record has no to_state")
                 continue
             if from_state is not None and from_state != state:
-                conflicts.append(
-                    f"{record.record_uid}: expected {from_state}, projected {state}"
-                )
+                conflicts.append(f"{record.record_uid}: expected {from_state}, projected {state}")
                 continue
             state = to_state
             applied.append(record.record_uid)
@@ -395,13 +385,12 @@ class RelationEndpoint(FrozenModel):
 
 class RelationAssertion(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
-    resource_type: Literal["relation_assertion_revision"] = (
-        "relation_assertion_revision"
-    )
+    resource_type: Literal["relation_assertion_revision"] = "relation_assertion_revision"
     assertion_uid: str = Field(default_factory=uuid7_candidate)
     relation_revision_uid: str = Field(default_factory=uuid7_candidate)
     revision_number: int = Field(default=1, ge=1)
     parent_relation_revision_uid: str | None = None
+    relation_type_revision_uid: str | None = None
     predicate: str
     core_role: CoreRelationRole
     source: RelationEndpoint
