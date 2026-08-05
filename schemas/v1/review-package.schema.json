@@ -1,18 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lesr.dev/schemas/v1/review-package.schema.json",
-  "title": "LESR Immutable Review Package",
+  "title": "LESR 1.0 Immutable Review Package",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "package_uid", "workspace_uid", "base_commit", "configuration_uid", "candidate_hash", "base_revision_uids", "candidate_revision_uids", "relation_changes", "disposition_changes", "semantic_diff", "impact_analysis", "validation_run_uids", "validation_summary_hash", "open_finding_uids", "effective_model_hash", "evaluation_context_hash", "prepared_by_actor_uid", "required_review_roles", "minimum_approval_count", "preparer_independence_required", "created_at", "package_hash"],
+  "required": ["schema_version", "resource_type", "package_uid", "workspace_uid", "base_commit", "configuration_uid", "candidate_hash", "effective_model_hash", "prepared_by_actor_uid", "created_at", "package_hash"],
+  "oneOf": [
+    {
+      "required": ["candidate_scope", "semantic_diff_hash", "graph_snapshot_hash", "context_bundle_hash", "impact_report_hash", "validation_hash", "finding_hashes", "comment_hashes", "review_policy", "subject_hash"],
+      "not": {"required": ["candidate_revision_uids"]}
+    },
+    {
+      "required": ["base_revision_uids", "candidate_revision_uids", "relation_changes", "disposition_changes", "semantic_diff", "impact_analysis", "validation_run_uids", "validation_summary_hash", "open_finding_uids", "evaluation_context_hash", "required_review_roles", "minimum_approval_count", "preparer_independence_required"],
+      "not": {"required": ["subject_hash"]}
+    }
+  ],
   "properties": {
-    "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
+    "schema_version": {"const": "1.0"},
     "resource_type": {"const": "review_package"},
     "package_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "workspace_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
     "configuration_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "candidate_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "candidate_scope": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "semantic_diff_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "graph_snapshot_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "context_bundle_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "impact_report_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "validation_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "finding_hashes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/sha256"}},
+    "comment_hashes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/sha256"}},
+    "review_policy": {"type": "object", "additionalProperties": false, "required": ["stages", "require_preparer_independence", "require_comment_resolution"], "properties": {"stages": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["stage", "role", "minimum_count"], "properties": {"stage": {"type": "string"}, "role": {"type": "string"}, "minimum_count": {"type": "integer", "minimum": 1}}}}, "require_preparer_independence": {"type": "boolean"}, "require_comment_resolution": {"type": "boolean"}}},
+    "subject_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "base_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
     "candidate_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
     "relation_changes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/canonical_value"}},
@@ -22,12 +42,12 @@
     "validation_run_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
     "validation_summary_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "open_finding_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
-    "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "evaluation_context_hash": {"$ref": "common.schema.json#/$defs/sha256"},
-    "prepared_by_actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "required_review_roles": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
     "minimum_approval_count": {"type": "integer", "minimum": 1},
     "preparer_independence_required": {"type": "boolean"},
+    "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "prepared_by_actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
     "package_hash": {"$ref": "common.schema.json#/$defs/sha256"}
   }

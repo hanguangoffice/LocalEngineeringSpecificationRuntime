@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/capability-descriptor.schema.json",
+  "title": "LESR Capability Descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "access", "cli", "mcp", "persistent_task"],
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]+$"},
+    "access": {"enum": ["read", "write", "admin"]},
+    "cli": {"type": "boolean"},
+    "mcp": {"type": "boolean"},
+    "persistent_task": {"type": "boolean"}
+  }
+}

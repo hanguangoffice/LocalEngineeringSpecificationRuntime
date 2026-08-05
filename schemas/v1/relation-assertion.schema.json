@@ -12,6 +12,7 @@
     "relation_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "revision_number": {"type": "integer", "minimum": 1},
     "parent_relation_revision_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+    "relation_type_revision_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
     "predicate": {"$ref": "common.schema.json#/$defs/non_empty"},
     "core_role": {"enum": ["organizes", "composes", "refines", "realizes", "verifies", "constrains", "applies_to", "depends_on", "impacts", "evidences", "governs", "authorizes", "derives_from", "supersedes", "conflicts_with", "references"]},
     "source": {"$ref": "common.schema.json#/$defs/relation_endpoint"},

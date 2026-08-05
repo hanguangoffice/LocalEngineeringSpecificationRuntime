@@ -19,6 +19,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
+from lesr.domain.catalog import RepositoryManifest, default_repository_manifest
 from lesr.domain.profiles import ProfileCompiler, ProfileRevision
 from lesr.domain.rules import (
     EnforcementEffect,
@@ -231,14 +232,253 @@ class GitCanonicalRepository:
             self._git("config", "user.email", "lesr-runtime@invalid.local")
         existing = self._try_git("rev-parse", "--verify", self.CANONICAL_REF)
         if existing is not None:
+            self.require_v1_manifest(existing)
             return existing
-        tree = self._git("mktree", input_text="")
+        manifest = default_repository_manifest().model_dump(mode="json")
+        blob = self._git(
+            "hash-object",
+            "-w",
+            "--stdin",
+            input_bytes=(canonical_json(manifest) + "\n").encode("utf-8"),
+        )
+        tree = self._git(
+            "mktree",
+            input_bytes=f"100644 blob {blob}\t.repository-manifest.json\n".encode("ascii"),
+        )
         commit = self._commit_tree(tree, (), "Initialize LESR canonical state")
         self._git("update-ref", self.CANONICAL_REF, commit)
         return commit
 
+    def require_v1_manifest(self, commit: str | None = None) -> dict[str, Any]:
+        """Reject pre-1.0 and malformed repositories at the authority boundary."""
+
+        selected = commit or self.current_commit()
+        value = self.read_json(selected, ".repository-manifest.json")
+        if value is None:
+            raise IntegrityError(
+                "LESR-MANIFEST-MISSING: 0.5 repositories are incompatible with runtime 1.0"
+            )
+        try:
+            self.schemas.validate("repository-manifest.schema.json", value)
+            manifest = RepositoryManifest.model_validate(value)
+        except (JsonSchemaValidationError, ValueError) as error:
+            raise IntegrityError(f"LESR-MANIFEST-INVALID: {error}") from error
+        return manifest.model_dump(mode="json")
+
     def current_commit(self) -> str:
         return self._git("rev-parse", "--verify", self.CANONICAL_REF)
+
+    def apply_candidate(
+        self,
+        *,
+        base_commit: str,
+        candidate: Any,
+        review_package: Any,
+        approvals: tuple[SignedApproval, ...],
+        trust: tuple[TrustedActor, ...],
+        evaluation_time: datetime,
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+        comments: tuple[Any, ...] = (),
+        resolutions: tuple[Any, ...] = (),
+        satisfactions: tuple[Any, ...] = (),
+        revocations: tuple[Any, ...] = (),
+        validation_recalculator: Callable[[], str] | None = None,
+        projection_updater: ProjectionUpdater | None = None,
+        fault_injector: FaultInjector | None = None,
+    ) -> ApplyResult:
+        """Atomically promote an evaluated 1.0 Candidate; governance is recomputed upstream."""
+
+        from lesr.domain.review import (
+            ApprovalRevocation,
+            CommentResolution,
+            ConditionSatisfaction,
+            GovernanceEvaluator,
+            ReviewComment,
+            ReviewPackage,
+        )
+        from lesr.domain.workspace import CandidateRevisionSet
+
+        selected_candidate = CandidateRevisionSet.model_validate(candidate)
+        package = ReviewPackage.model_validate(review_package)
+        if selected_candidate.candidate_hash != package.candidate_hash:
+            raise IntegrityError("review package does not bind candidate")
+        if selected_candidate.effective_model_hash != package.effective_model_hash:
+            raise IntegrityError("review package does not bind effective model")
+        if not approvals:
+            raise ApprovalError("candidate apply requires human approval")
+        decision = GovernanceEvaluator.evaluate(
+            package,
+            approvals,
+            trust,
+            tuple(ReviewComment.model_validate(item) for item in comments),
+            tuple(CommentResolution.model_validate(item) for item in resolutions),
+            tuple(ConditionSatisfaction.model_validate(item) for item in satisfactions),
+            tuple(ApprovalRevocation.model_validate(item) for item in revocations),
+            now=evaluation_time,
+        )
+        if not decision.allowed:
+            raise ApprovalError("; ".join(decision.reasons))
+        if validation_recalculator is None:
+            raise IntegrityError("Git transaction boundary requires validation recalculation")
+        if validation_recalculator() != package.validation_hash:
+            raise IntegrityError("review package validation result changed before apply")
+        current = self.current_commit()
+        if current != base_commit:
+            raise ConcurrencyConflict(
+                f"canonical base changed: expected {base_commit}, got {current}"
+            )
+        idempotency_hash = semantic_hash({"idempotency_key": idempotency_key})
+        idempotency_path = f"canonical/idempotency/{idempotency_hash.removeprefix('sha256:')}.json"
+        previous = self.read_json(current, idempotency_path)
+        transaction_hash = semantic_hash(
+            {
+                "base_commit": package.base_commit,
+                "candidate_hash": selected_candidate.candidate_hash,
+                "review_package_hash": package.package_hash,
+                "approval_uids": tuple(item.approval_uid for item in approvals),
+                "actor_uid": actor_uid,
+                "delegation_uid": delegation_uid,
+                "idempotency_key_hash": idempotency_hash,
+            }
+        )
+        if previous is not None:
+            if previous.get("transaction_hash") != transaction_hash:
+                raise IdempotencyConflict("idempotency key was used for another candidate")
+            commits = self._git(
+                "log",
+                current,
+                "--diff-filter=A",
+                "--format=%H",
+                "--reverse",
+                "--",
+                idempotency_path,
+            ).splitlines()
+            if not commits:
+                raise IntegrityError("idempotency record has no introducing commit")
+            return ApplyResult(commits[0], transaction_hash, True, False)
+        transaction_uid = uuid7_candidate()
+        applied_at = self._utc_now()
+        index = self.path / ".git" / f"lesr-index-{uuid7_candidate()}"
+        env = {"GIT_INDEX_FILE": str(index)}
+        projection_stale = False
+        try:
+            self._git("read-tree", current, extra_env=env)
+            self._inject(fault_injector, "staging")
+            operation_hashes: list[str] = []
+            for revision in selected_candidate.revisions:
+                value = revision.model_dump(mode="json", exclude_none=True)
+                path = f"canonical/revisions/{revision.revision_uid}.json"
+                self._stage_json(path, value, env)
+                operation_hashes.append(semantic_hash({"path": path, "value": value}))
+                if revision.parent_revision_uid is None:
+                    from lesr.domain.semantic import LogicalObject
+
+                    logical = LogicalObject(
+                        entity_uid=revision.object_uid,
+                        namespace="project",
+                        human_key=revision.human_key,
+                        kind=revision.kind,
+                        facets=revision.facets,
+                        created_at=revision.created_at,
+                    ).model_dump(mode="json", exclude_none=True)
+                    object_path = f"canonical/objects/{revision.object_uid}.json"
+                    self._stage_json(object_path, logical, env)
+                    operation_hashes.append(semantic_hash({"path": object_path, "value": logical}))
+            for relation in selected_candidate.relation_revisions:
+                value = relation.model_dump(mode="json", exclude_none=True)
+                path = f"canonical/relation_assertions/{relation.relation_revision_uid}.json"
+                self._stage_json(path, value, env)
+                operation_hashes.append(semantic_hash({"path": path, "value": value}))
+            package_path = f"canonical/review_packages/{package.package_uid}.json"
+            self._stage_json(package_path, package.model_dump(mode="json", exclude_none=True), env)
+            operation_hashes.append(
+                semantic_hash({"path": package_path, "value": package.package_hash})
+            )
+            for approval in approvals:
+                self._stage_json(
+                    f"canonical/approvals/{approval.approval_uid}.json",
+                    approval.model_dump(mode="json", exclude_none=True),
+                    env,
+                )
+            applied_change = {
+                "schema_version": "1.0",
+                "resource_type": "applied_change",
+                "transaction_uid": transaction_uid,
+                "transaction_hash": transaction_hash,
+                "base_commit": base_commit,
+                "candidate_hash": selected_candidate.candidate_hash,
+                "effective_model_hash": package.effective_model_hash,
+                "review_package_hash": package.package_hash,
+                "operation_hashes": operation_hashes,
+                "approval_uids": [item.approval_uid for item in approvals],
+                "actor_uid": actor_uid,
+                "delegation_uid": delegation_uid,
+                "idempotency_key_hash": idempotency_hash,
+                "applied_at": applied_at,
+            }
+            applied_change["content_hash"] = semantic_hash(applied_change)
+            self._stage_json(
+                f"canonical/applied_changes/{transaction_uid}.json",
+                applied_change,
+                env,
+            )
+            audit = {
+                "schema_version": "1.0",
+                "resource_type": "audit_anchor",
+                "anchor_uid": transaction_uid,
+                "transaction_uid": transaction_uid,
+                "previous_anchor_hash": self._audit_tail(current),
+                "event_hashes": [
+                    transaction_hash,
+                    package.package_hash,
+                    *(semantic_hash(item.model_dump(mode="json")) for item in approvals),
+                ],
+                "created_at": applied_at,
+            }
+            audit["anchor_hash"] = semantic_hash(audit)
+            self._stage_json(f"canonical/audit_anchors/{transaction_uid}.json", audit, env)
+            idempotency = {
+                "transaction_uid": transaction_uid,
+                "transaction_hash": transaction_hash,
+            }
+            self._stage_json(idempotency_path, idempotency, env)
+            self._inject(fault_injector, "write_tree")
+            tree = self._git("write-tree", extra_env=env)
+            commit = self._commit_tree(
+                tree, (current,), f"Apply LESR Candidate {selected_candidate.candidate_uid}"
+            )
+            self._inject(fault_injector, "update_ref")
+            self._git("update-ref", self.CANONICAL_REF, commit, current)
+            self._inject(fault_injector, "projection")
+            if projection_updater is not None:
+                try:
+                    projection_updater(commit)
+                except Exception:  # noqa: BLE001 - projection is explicitly non-authoritative
+                    projection_stale = True
+            return ApplyResult(commit, transaction_hash, False, projection_stale)
+        finally:
+            index.unlink(missing_ok=True)
+
+    def _audit_tail(self, commit: str) -> str | None:
+        anchors = [
+            value
+            for path, value in self.documents(commit)
+            if path.startswith("canonical/audit_anchors/")
+        ]
+        if not anchors:
+            return None
+        hashes = {str(item["anchor_hash"]) for item in anchors}
+        referenced = {
+            str(item["previous_anchor_hash"])
+            for item in anchors
+            if item.get("previous_anchor_hash") is not None
+        }
+        tails = hashes - referenced
+        if len(tails) != 1:
+            raise IntegrityError("audit anchor chain has no unique tail")
+        return next(iter(tails))
 
     def idempotency_record(self, idempotency_key: str) -> dict[str, Any] | None:
         current = self.current_commit()
@@ -274,9 +514,7 @@ class GitCanonicalRepository:
             self._validate_operation(operation)
         transaction_hash = transaction.hash()
         idempotency_hash = semantic_hash({"idempotency_key": transaction.idempotency_key})
-        idempotency_path = (
-            f"canonical/idempotency/{idempotency_hash.removeprefix('sha256:')}.json"
-        )
+        idempotency_path = f"canonical/idempotency/{idempotency_hash.removeprefix('sha256:')}.json"
         previous = self.read_json(current, idempotency_path)
         if previous is not None:
             if previous.get("transaction_hash") != transaction_hash:
@@ -412,9 +650,7 @@ class GitCanonicalRepository:
                 projection_stale = True
         return ApplyResult(commit, transaction_hash, False, projection_stale)
 
-    def _validate_governance(
-        self, current: str, transaction: SemanticTransaction
-    ) -> None:
+    def _validate_governance(self, current: str, transaction: SemanticTransaction) -> None:
         current_documents = [value for _, value in self.documents(current)]
         configurations = {
             str(value["configuration_uid"]): value
@@ -520,9 +756,7 @@ class GitCanonicalRepository:
         ):
             raise ApprovalError("Validation Run finding set is incomplete")
         expected_observations, expected_findings, expected_outcome = (
-            self._recompute_rule_observations(
-            current_documents, configuration, state_operations
-        )
+            self._recompute_rule_observations(current_documents, configuration, state_operations)
         )
         recorded_observations = sorted(
             (
@@ -569,9 +803,7 @@ class GitCanonicalRepository:
         expected_summary = semantic_hash(
             {
                 "run": run["content_hash"],
-                "findings": [
-                    findings[str(uid)]["content_hash"] for uid in run["finding_uids"]
-                ],
+                "findings": [findings[str(uid)]["content_hash"] for uid in run["finding_uids"]],
             }
         )
         if package["validation_summary_hash"] != expected_summary:
@@ -582,8 +814,7 @@ class GitCanonicalRepository:
         if set(package["open_finding_uids"]) != open_finding_uids:
             raise ApprovalError("Review Package finding set is incomplete")
         if any(
-            finding["blocking"] and finding["status"] == "open"
-            for finding in findings.values()
+            finding["blocking"] and finding["status"] == "open" for finding in findings.values()
         ):
             raise ApprovalError("blocking validation findings remain open")
         signed = tuple(
@@ -703,10 +934,9 @@ class GitCanonicalRepository:
                         f"active deviation has no canonical approval record: {deviation_uid}"
                     )
                 valid_until = deviation_fields.get("/valid_until")
-                if (
-                    not isinstance(valid_until, str)
-                    or datetime.fromisoformat(valid_until) <= datetime.now(UTC)
-                ):
+                if not isinstance(valid_until, str) or datetime.fromisoformat(
+                    valid_until
+                ) <= datetime.now(UTC):
                     raise ApprovalError(
                         f"active deviation is expired or has no validity: {deviation_uid}"
                     )
@@ -715,9 +945,7 @@ class GitCanonicalRepository:
                     str(revision["revision_uid"]),
                 }:
                     continue
-                deviation_rule_revision_uid = str(
-                    deviation_fields.get("/rule_revision_uid", "")
-                )
+                deviation_rule_revision_uid = str(deviation_fields.get("/rule_revision_uid", ""))
                 deviation_rule = next(
                     (
                         item
@@ -728,8 +956,7 @@ class GitCanonicalRepository:
                 )
                 if deviation_rule is None or not deviation_rule.deviation_allowed:
                     raise ApprovalError(
-                        "deviation does not reference a relaxable effective rule: "
-                        f"{deviation_uid}"
+                        f"deviation does not reference a relaxable effective rule: {deviation_uid}"
                     )
                 active_deviations[deviation_rule.rule_uid] = str(deviation_uid)
             environment = EvaluationEnvironment(
@@ -761,20 +988,24 @@ class GitCanonicalRepository:
                 if evaluated.outcome in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
                     continue
                 suppressed = evaluated.outcome is RuleOutcome.SUPPRESSED_BY_DEVIATION
-                blocking = False if suppressed else (
-                    evaluated.enforcement.value in blocking_effects
-                    or (
-                        evaluated.outcome
-                        in {
-                            RuleOutcome.INDETERMINATE,
-                            RuleOutcome.EVALUATOR_ERROR,
-                            RuleOutcome.NOT_EVALUATED,
-                        }
-                        and evaluated.enforcement
-                        not in {
-                            EnforcementEffect.ALLOW,
-                            EnforcementEffect.ALLOW_WITH_OBSERVATION,
-                        }
+                blocking = (
+                    False
+                    if suppressed
+                    else (
+                        evaluated.enforcement.value in blocking_effects
+                        or (
+                            evaluated.outcome
+                            in {
+                                RuleOutcome.INDETERMINATE,
+                                RuleOutcome.EVALUATOR_ERROR,
+                                RuleOutcome.NOT_EVALUATED,
+                            }
+                            and evaluated.enforcement
+                            not in {
+                                EnforcementEffect.ALLOW,
+                                EnforcementEffect.ALLOW_WITH_OBSERVATION,
+                            }
+                        )
                     )
                 )
                 expected_findings.append(
@@ -813,9 +1044,7 @@ class GitCanonicalRepository:
             outcome,
         )
 
-    def _authorize_transaction(
-        self, current: str, transaction: SemanticTransaction
-    ) -> None:
+    def _authorize_transaction(self, current: str, transaction: SemanticTransaction) -> None:
         """Enforce trust at the transaction boundary, including one-time bootstrap."""
         current_documents = [value for _, value in self.documents(current)]
         current_trust = [
@@ -930,9 +1159,7 @@ class GitCanonicalRepository:
         env = {"GIT_INDEX_FILE": str(index_path)}
         try:
             self._git("read-tree", parent, extra_env=env)
-            checkpoint_path = (
-                f"workspaces/{workspace}/checkpoints/{checkpoint_uid}.json"
-            )
+            checkpoint_path = f"workspaces/{workspace}/checkpoints/{checkpoint_uid}.json"
             self._stage_json(
                 checkpoint_path,
                 {
@@ -1025,7 +1252,9 @@ class GitCanonicalRepository:
                         )
                     )
             connection.executemany("INSERT INTO documents VALUES (?, ?, ?)", rows)
-            connection.executemany("INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)", resource_rows)
+            connection.executemany(
+                "INSERT INTO resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)", resource_rows
+            )
             connection.executemany("INSERT INTO aliases VALUES (?, ?)", alias_rows)
             connection.executemany("INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?)", relation_rows)
             connection.executemany(
@@ -1081,7 +1310,9 @@ class GitCanonicalRepository:
 
     def recover_workspaces(self) -> tuple[dict[str, Any], ...]:
         """Recover the newest checkpoint for every persistent workspace ref."""
-        refs = self._try_git("for-each-ref", "--format=%(refname) %(objectname)", "refs/lesr/workspaces/")
+        refs = self._try_git(
+            "for-each-ref", "--format=%(refname) %(objectname)", "refs/lesr/workspaces/"
+        )
         if not refs:
             return ()
         recovered: list[dict[str, Any]] = []
@@ -1143,9 +1374,7 @@ class GitCanonicalRepository:
             raise IntegrityError("semantic operation payload has no resource_type")
         allowed = _OPERATION_RESOURCE_TYPES.get(operation.operation_type, frozenset())
         if resource_type not in allowed:
-            raise IntegrityError(
-                f"{operation.operation_type} cannot create {resource_type}"
-            )
+            raise IntegrityError(f"{operation.operation_type} cannot create {resource_type}")
         schema_name = _RESOURCE_SCHEMAS.get(resource_type)
         if schema_name is None:
             raise IntegrityError(f"unsupported canonical resource type: {resource_type}")
@@ -1167,9 +1396,7 @@ class GitCanonicalRepository:
                 f"canonical path does not match resource identity: expected {expected_path}"
             )
 
-    def _validate_candidate(
-        self, commit: str, operations: tuple[SemanticOperation, ...]
-    ) -> None:
+    def _validate_candidate(self, commit: str, operations: tuple[SemanticOperation, ...]) -> None:
         documents = {path: value for path, value in self.documents(commit)}
         documents.update((operation.relative_path, operation.payload) for operation in operations)
         object_documents = {
@@ -1183,9 +1410,7 @@ class GitCanonicalRepository:
             for value in documents.values()
             if value.get("resource_type") == "revision"
         }
-        revisions = {
-            uid: str(value["object_uid"]) for uid, value in revision_documents.items()
-        }
+        revisions = {uid: str(value["object_uid"]) for uid, value in revision_documents.items()}
         relation_documents = {
             str(value["relation_revision_uid"]): value
             for value in documents.values()
@@ -1301,9 +1526,10 @@ class GitCanonicalRepository:
                 revoked = value.get("revoked_by_record_uid")
                 if revoked is not None and str(revoked) not in record_documents:
                     raise IntegrityError("trusted actor revocation record is unavailable")
-            if value.get("resource_type") == "delegation_grant" and str(
-                value["issued_by"]
-            ) not in trusted_actor_uids:
+            if (
+                value.get("resource_type") == "delegation_grant"
+                and str(value["issued_by"]) not in trusted_actor_uids
+            ):
                 raise IntegrityError("delegation issuer is not a trusted actor")
             if (
                 value.get("resource_type") == "approval_attestation"
@@ -1348,7 +1574,9 @@ class GitCanonicalRepository:
                         )
             if resource_type in {"configuration_snapshot", "baseline_manifest"}:
                 missing_revisions = set(value.get("revision_uids", [])) - set(revisions)
-                missing_relations = set(value.get("relation_revision_uids", [])) - relation_revisions
+                missing_relations = (
+                    set(value.get("relation_revision_uids", [])) - relation_revisions
+                )
                 missing_profiles = set(value.get("profile_revision_uids", [])) - profiles
                 if missing_revisions or missing_relations or missing_profiles:
                     raise IntegrityError(
@@ -1370,18 +1598,13 @@ class GitCanonicalRepository:
                     for uid in value["profile_revision_uids"]
                 )
                 referenced_rules = {
-                    uid
-                    for profile in selected_profiles
-                    for uid in profile.rule_revision_uids
+                    uid for profile in selected_profiles for uid in profile.rule_revision_uids
                 }
                 selected_rules = tuple(
-                    RuleDefinition.model_validate(rule_documents[uid])
-                    for uid in referenced_rules
+                    RuleDefinition.model_validate(rule_documents[uid]) for uid in referenced_rules
                 )
                 try:
-                    effective = ProfileCompiler().compile(
-                        selected_profiles, selected_rules
-                    )
+                    effective = ProfileCompiler().compile(selected_profiles, selected_rules)
                 except (TypeError, ValueError) as error:
                     raise IntegrityError(
                         f"configuration Effective Model is invalid: {error}"
@@ -1391,9 +1614,15 @@ class GitCanonicalRepository:
                 for deviation_uid in value["active_deviation_revision_uids"]:
                     if revision_documents[str(deviation_uid)].get("kind") != "deviation":
                         raise IntegrityError("active deviation is not a deviation revision")
-            if resource_type == "baseline_manifest" and value["configuration_uid"] not in configurations:
+            if (
+                resource_type == "baseline_manifest"
+                and value["configuration_uid"] not in configurations
+            ):
                 raise IntegrityError("baseline references unavailable configuration")
-            if resource_type == "validation_finding" and value["validation_run_uid"] not in validation_runs:
+            if (
+                resource_type == "validation_finding"
+                and value["validation_run_uid"] not in validation_runs
+            ):
                 raise IntegrityError("validation finding references unavailable validation run")
             if resource_type == "validation_run":
                 if value["configuration_uid"] not in configurations:
@@ -1411,10 +1640,21 @@ class GitCanonicalRepository:
     @staticmethod
     def _document_uid(document: dict[str, Any]) -> str | None:
         for name in (
-            "entity_uid", "revision_uid", "relation_revision_uid", "record_uid",
-            "profile_revision_uid", "configuration_uid", "baseline_uid", "actor_uid",
-            "delegation_uid", "transaction_uid", "provenance_uid", "anchor_uid",
-            "validation_run_uid", "finding_uid", "package_uid",
+            "entity_uid",
+            "revision_uid",
+            "relation_revision_uid",
+            "record_uid",
+            "profile_revision_uid",
+            "configuration_uid",
+            "baseline_uid",
+            "actor_uid",
+            "delegation_uid",
+            "transaction_uid",
+            "provenance_uid",
+            "anchor_uid",
+            "validation_run_uid",
+            "finding_uid",
+            "package_uid",
         ):
             value = document.get(name)
             if isinstance(value, str):
@@ -1458,7 +1698,10 @@ class GitCanonicalRepository:
             "delegation_uid": transaction.delegation_uid,
         }
         identifiers.update(
-            {f"approval[{index}]": item.approval_uid for index, item in enumerate(transaction.approvals)}
+            {
+                f"approval[{index}]": item.approval_uid
+                for index, item in enumerate(transaction.approvals)
+            }
         )
         for name, value in identifiers.items():
             if not re.fullmatch(
@@ -1523,9 +1766,7 @@ class GitCanonicalRepository:
         }
 
     @staticmethod
-    def _provenance_record(
-        transaction: SemanticTransaction, generated_at: str
-    ) -> dict[str, Any]:
+    def _provenance_record(transaction: SemanticTransaction, generated_at: str) -> dict[str, Any]:
         generated_fields = (
             "entity_uid",
             "revision_uid",
@@ -1660,9 +1901,7 @@ class GitCanonicalRepository:
     def _stage_bytes(self, path: str, content: bytes, env: dict[str, str]) -> None:
         blob = self._git("hash-object", "-w", "--stdin", input_bytes=content)
         entry = f"100644 {blob}\t".encode("ascii") + path.encode("utf-8") + b"\0"
-        self._git(
-            "update-index", "-z", "--index-info", input_bytes=entry, extra_env=env
-        )
+        self._git("update-index", "-z", "--index-info", input_bytes=entry, extra_env=env)
 
     def _tree_entries(self, commit: str) -> tuple[tuple[str, str], ...]:
         result = subprocess.run(

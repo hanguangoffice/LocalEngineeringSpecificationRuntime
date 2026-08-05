@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lesr"
-version = "0.5.0a2"
+version = "1.0.0rc1"
 description = "Local Engineering Specification Runtime"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,10 +16,14 @@ dependencies = [
   "cryptography>=45.0",
   "platformdirs>=4.3",
   "pypdf>=6.0,<7",
+  "fastapi>=0.116,<1",
+  "uvicorn>=0.35,<1",
+  "jinja2>=3.1,<4",
+  "keyring>=25.6,<26",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.9", "mypy>=1.14", "types-jsonschema>=4.23"]
+dev = ["pytest>=8.0", "ruff>=0.9", "mypy>=1.14", "types-jsonschema>=4.23", "httpx>=0.28,<1", "playwright>=1.54,<2"]
 
 [project.scripts]
 lesr = "lesr.cli.main:app"
@@ -45,4 +49,8 @@ package = true
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
-markers = ["local_corpus: uses uncommitted local evaluation documents"]
+markers = [
+  "local_corpus: uses uncommitted local evaluation documents",
+  "playwright: launches the packaged local Web UI in Chromium",
+  "performance: executes fixed LESR performance datasets",
+]

@@ -909,7 +909,7 @@ class RepositoryDomainService:
                 ErrorCategory.INDETERMINATE,
                 str(exc),
                 (request.workspace_uid,),
-                suggested="workspace.propose_operation",
+                suggested="workspace.edit",
             )
         result = {
             "workspace_uid": request.workspace_uid,
@@ -1059,7 +1059,7 @@ class RepositoryDomainService:
                 ErrorCategory.AUTHORIZATION,
                 str(exc),
                 (request.workspace_uid,),
-                suggested="approval.sign",
+                suggested=None,
             )
         transaction = SemanticTransaction(
             transaction_uid=str(request.operation["transaction_uid"]),
@@ -1817,7 +1817,7 @@ class RepositoryDomainService:
                 ErrorCategory.NOT_FOUND,
                 "workspace does not exist",
                 (request.workspace_uid,),
-                suggested="open_workspace",
+                suggested="workspace.open",
             )
         delegation = self.by_uid.get(request.delegation_uid)
         if delegation is None or delegation.get("resource_type") != "delegation_grant":
