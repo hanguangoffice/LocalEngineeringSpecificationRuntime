@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from lesr.adapters.git import (
 )
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.mcp import create_server
+from lesr.adapters.operations import RepositoryMaintenance, TaskStore, plan_workspace_gc
 from lesr.adapters.pdf_import import preview_pdf
 from lesr.application.contracts import RiskClass, WriteEnvelope
 from lesr.application.service import RepositoryDomainService
@@ -23,6 +25,7 @@ from lesr.domain.approval import (
     ApprovalPayload,
     TrustedActor,
 )
+from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import document_hash, uuid7_candidate
 
 app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
@@ -33,6 +36,7 @@ baseline_app = typer.Typer(no_args_is_help=True)
 projection_app = typer.Typer(no_args_is_help=True)
 reconcile_app = typer.Typer(no_args_is_help=True)
 mcp_app = typer.Typer(no_args_is_help=True)
+task_app = typer.Typer(no_args_is_help=True)
 app.add_typer(context_app, name="context")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(approval_app, name="approval")
@@ -40,6 +44,7 @@ app.add_typer(baseline_app, name="baseline")
 app.add_typer(projection_app, name="projection")
 app.add_typer(reconcile_app, name="reconcile")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(task_app, name="task")
 
 
 def emit(value: Any) -> None:
@@ -51,6 +56,59 @@ def read_object(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise typer.BadParameter(f"expected a JSON object: {path}")
     return value
+
+
+@app.command("capabilities")
+def show_capabilities() -> None:
+    emit(
+        {
+            "contract_version": RUNTIME_CONTRACT_VERSION,
+            "capabilities": [item.model_dump(mode="json") for item in CAPABILITIES],
+        }
+    )
+
+
+@task_app.command("enqueue")
+def enqueue_task(project: Path, task_type: str, request: Path) -> None:
+    emit(TaskStore(project).enqueue(task_type, read_object(request)).model_dump(mode="json"))
+
+
+@task_app.command("status")
+def task_status(project: Path, task_uid: str) -> None:
+    emit(TaskStore(project).get(task_uid).model_dump(mode="json"))
+
+
+@task_app.command("cancel")
+def task_cancel(project: Path, task_uid: str) -> None:
+    emit(TaskStore(project).request_cancel(task_uid).model_dump(mode="json"))
+
+
+@app.command("backup")
+def backup_repository(project: Path, destination: Path) -> None:
+    result = RepositoryMaintenance(project).backup(destination)
+    emit(
+        {
+            "bundle": str(result.bundle),
+            "manifest": str(result.manifest),
+            "bundle_sha256": result.bundle_sha256,
+        }
+    )
+
+
+@app.command("restore")
+def restore_repository(source: Path, destination: Path) -> None:
+    emit({"canonical_commit": RepositoryMaintenance.restore(source, destination)})
+
+
+@app.command("migrate")
+def migrate_repository(project: Path, target_version: str, dry_run: bool = True) -> None:
+    emit(RepositoryMaintenance(project).migration_plan(target_version, dry_run=dry_run))
+
+
+@app.command("gc")
+def garbage_collect_workspaces(project: Path, dry_run: bool = True) -> None:
+    del project
+    emit(plan_workspace_gc((), (), now=datetime.now(UTC), dry_run=dry_run).model_dump(mode="json"))
 
 
 @app.command("init")
@@ -173,11 +231,7 @@ def trace(
     predicate: str | None = None,
     max_depth: int = 4,
 ) -> None:
-    emit(
-        RepositoryDomainService(project).traverse(
-            start_uid, predicate, max_depth
-        ).payload()
-    )
+    emit(RepositoryDomainService(project).traverse(start_uid, predicate, max_depth).payload())
 
 
 @app.command("impact")
@@ -195,9 +249,9 @@ def build_context(
     token_budget: int = 4096,
 ) -> None:
     emit(
-        RepositoryDomainService(project).build_context(
-            task_type, tuple(target), token_budget, configuration_uid, actor_uid
-        ).payload()
+        RepositoryDomainService(project)
+        .build_context(task_type, tuple(target), token_budget, configuration_uid, actor_uid)
+        .payload()
     )
 
 
@@ -233,7 +287,13 @@ def checkpoint_workspace(project: Path, workspace_uid: str, state: Path) -> None
     result = repository.create_checkpoint(
         workspace_uid, read_object(state), CheckpointStrategy.WORKSPACE_REF
     )
-    emit({"checkpoint_uid": result.checkpoint_uid, "commit": result.commit, "git_reference": result.git_reference})
+    emit(
+        {
+            "checkpoint_uid": result.checkpoint_uid,
+            "commit": result.commit,
+            "git_reference": result.git_reference,
+        }
+    )
 
 
 @workspace_app.command("propose")
@@ -248,7 +308,8 @@ def propose_workspace_operation(
     dry_run: bool = False,
 ) -> None:
     emit(
-        RepositoryDomainService(project).propose_operation(
+        RepositoryDomainService(project)
+        .propose_operation(
             WriteEnvelope(
                 workspace_uid,
                 expected_base,
@@ -259,7 +320,8 @@ def propose_workspace_operation(
                 RiskClass.MEDIUM,
                 read_object(operation_file),
             )
-        ).payload()
+        )
+        .payload()
     )
 
 
@@ -275,7 +337,8 @@ def build_review_package(
     dry_run: bool = False,
 ) -> None:
     emit(
-        RepositoryDomainService(project).prepare_review(
+        RepositoryDomainService(project)
+        .prepare_review(
             WriteEnvelope(
                 workspace_uid,
                 expected_base,
@@ -286,7 +349,8 @@ def build_review_package(
                 RiskClass.HIGH,
                 {"configuration_uid": configuration_uid},
             )
-        ).payload()
+        )
+        .payload()
     )
 
 
@@ -334,7 +398,11 @@ def approval_keygen(
     role: list[str],
     key_root: Path | None = None,
 ) -> None:
-    emit(ApprovalKeyStore(key_root).generate(actor_uid, display_name, tuple(role)).model_dump(mode="json"))
+    emit(
+        ApprovalKeyStore(key_root)
+        .generate(actor_uid, display_name, tuple(role))
+        .model_dump(mode="json")
+    )
 
 
 @approval_app.command("sign")

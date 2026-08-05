@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from lesr.application.contracts import (
     RiskClass,
     WriteEnvelope,
 )
+from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 
 
 def create_server(domain: LESRDomainPort) -> FastMCP:
@@ -23,8 +23,8 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
     def capabilities() -> dict[str, Any]:
         """Negotiate the versioned LESR domain capability groups."""
         return {
-            "domain_contract": "1.0",
-            "capabilities": [asdict(item) for item in domain.capabilities()],
+            "domain_contract": RUNTIME_CONTRACT_VERSION,
+            "capabilities": [item.model_dump(mode="json") for item in CAPABILITIES if item.mcp],
         }
 
     @server.tool()
