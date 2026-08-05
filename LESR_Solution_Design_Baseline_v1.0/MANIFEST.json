@@ -1,0 +1,418 @@
+{
+  "package": "LESR Solution Design Baseline",
+  "version": "1.0",
+  "revision": "final-consistency-pass",
+  "stage": "ready-for-prototype",
+  "generated_at": "2026-08-01T17:52:02.708340+00:00",
+  "file_count_excluding_manifest": 81,
+  "markdown_count": 81,
+  "decision_record_count": 27,
+  "internal_reference_errors": 0,
+  "files": [
+    {
+      "path": "00_设计阶段与决策方法.md",
+      "bytes": 4050,
+      "sha256": "a39c4777eb45b03231f75c2c780949e1856013e5472f3b7add4ecdf6a4e60c66"
+    },
+    {
+      "path": "01_问题定义与使用场景.md",
+      "bytes": 3936,
+      "sha256": "c5db6a3cca7e15ddb34a4f57cddbef6d00c03809ccc27d30075f7756840f6d16"
+    },
+    {
+      "path": "02_设计原则与系统边界.md",
+      "bytes": 3194,
+      "sha256": "35883da2044c66ea232b0a5bc0bfa6f105430944d2133ddb1edd919ebada85f7"
+    },
+    {
+      "path": "03_概念架构与备选形态.md",
+      "bytes": 3158,
+      "sha256": "ce701aae819003f82ac84cde4576e1c0d2c002a02486b169bb08830c88cff41b"
+    },
+    {
+      "path": "04A_顶层语义类别与Facet能力模型.md",
+      "bytes": 3070,
+      "sha256": "0b7db732151dab3e77bbcd3ec087faca5d55a690dfb289745a72fd78cde92d59"
+    },
+    {
+      "path": "04B_对象粒度Fragment与提升机制.md",
+      "bytes": 2440,
+      "sha256": "eab9d6a8e6409a3bc155f12ed8fd2aaa5cbc6bd78e24fd19da45dff384cbec78"
+    },
+    {
+      "path": "04C_身份命名空间别名与血缘模型.md",
+      "bytes": 5533,
+      "sha256": "54c053905e1e1cc92378e48aa33565841ce3e9d8bfd92fc1ec5339d6cb9471bd"
+    },
+    {
+      "path": "04_核心语义模型.md",
+      "bytes": 4737,
+      "sha256": "5083c02e7bc1b08e28f09a85faf4760ace9ccb01f0c7f9fbe38a78c75ff7ffe0"
+    },
+    {
+      "path": "05A_规范模态执行后果与冲突模型.md",
+      "bytes": 7061,
+      "sha256": "7c89587bb38c3d0dd1a0f77610dc71c02eaf50544acd3f29c1297b6b6188f9c6"
+    },
+    {
+      "path": "05B_RuleExpression元模型.md",
+      "bytes": 3539,
+      "sha256": "338cf80ad37b13f761b301a303d58ee50d51072c8e10a0438c693f0da0826f1a"
+    },
+    {
+      "path": "05C_Applicability表达式与三值逻辑.md",
+      "bytes": 3064,
+      "sha256": "1521f9938ef4a33205e38d7de7e45160ee2d8dcdf53ac0e14ce5274d02536276"
+    },
+    {
+      "path": "05D_ConstraintAST类型单位路径与聚合.md",
+      "bytes": 3576,
+      "sha256": "1338b6e78883b472d7ceaa372e408a5867c83231f8945d86d7a256cdff0204c8"
+    },
+    {
+      "path": "05E_权威例外偏离与规则冲突解析.md",
+      "bytes": 3254,
+      "sha256": "b6de6734b3de6cf9a0af7dbdf416ca5de4eccc0614f9076f9af6da9fe12207bd"
+    },
+    {
+      "path": "05F_RuleCompiler解释映射与测试夹具.md",
+      "bytes": 2784,
+      "sha256": "741e59c1895ddc6465fd7368c4ec6bd76d0782643adb9cfa58d8a0989aa478f8"
+    },
+    {
+      "path": "05_Profile组合裁剪与偏离.md",
+      "bytes": 2272,
+      "sha256": "65d9adc34f0f34738e0a0c6f436a633c1e3c60c07d5bedb8959b5b7afc84ca71"
+    },
+    {
+      "path": "06_规则与校验执行模型.md",
+      "bytes": 2126,
+      "sha256": "1836aa69572a75b50e0917975d1e6035c9422e7273984a15abc08ec1d179cfd4"
+    },
+    {
+      "path": "07A_ContextContract完整性与渐进披露.md",
+      "bytes": 2352,
+      "sha256": "ffe224e95ae5fd739325e2ae852aad46af235bc95c72c1426c58cfd1ff86ce90"
+    },
+    {
+      "path": "07_AI上下文与注意力模型.md",
+      "bytes": 1630,
+      "sha256": "f59e679739e38f32321998cb2e9f61fc5dcc10745c5014c6d695fdbe183ac8dc"
+    },
+    {
+      "path": "08A_WorkingCopyRevision与GitCheckpoint.md",
+      "bytes": 5103,
+      "sha256": "41255b572cd6e3ef4e92c6709dc15b8e573b5b0196054a7a36f027aab199d549"
+    },
+    {
+      "path": "08_查询受控写入与委托会话.md",
+      "bytes": 2281,
+      "sha256": "91e74158a48c7c47c2425dd934c6843e1ad2486c5c2eb32f7058e7cbf431d08a"
+    },
+    {
+      "path": "09A_关系角色谓词与追踪语义.md",
+      "bytes": 7438,
+      "sha256": "be1583d68a3c0d8da304b292f96c47abaf993d09deb1a42682e82d9020196035"
+    },
+    {
+      "path": "09B_生命周期有效版本与配置解析.md",
+      "bytes": 4572,
+      "sha256": "2365ff39afe6bd45437b77cf430f4972fd30d8fe7512c168f06b7380254fb771"
+    },
+    {
+      "path": "09C_来源证明责任与审计模型.md",
+      "bytes": 4821,
+      "sha256": "40168dc2922bfe2e109b8256a11ea151add037cdaefa9b07557bbdee7f36bede"
+    },
+    {
+      "path": "09D_EvaluationContext配置与EffectiveResolution.md",
+      "bytes": 2957,
+      "sha256": "eb0cbd07aa4d165dcbcadda09cf9973e9057d56f57970e0c525826c56b658d62"
+    },
+    {
+      "path": "09E_ReviewPackage评审意见与批准模型.md",
+      "bytes": 3363,
+      "sha256": "d50429792f7e6c9f686bff9dfb7933960ac2c496360a0db2f0110dbb2a787d04"
+    },
+    {
+      "path": "09F_生命周期事件与状态投影.md",
+      "bytes": 2830,
+      "sha256": "5c9ea3d67dc69af5b2e0969aa85d3601a66c065a232c70826fdbdccce41b9f82"
+    },
+    {
+      "path": "09_关系变更基线版本与来源证明.md",
+      "bytes": 3441,
+      "sha256": "04c88b9bb862485e22585ed3177371088ad3f62cfea0b82c4ddd4f08198718da"
+    },
+    {
+      "path": "10A_CanonicalState快照变更记录与Git权威.md",
+      "bytes": 3008,
+      "sha256": "0e63af2948b6621678a03e2a071f9bb00e97194352f8ce649e089bd81769cb76"
+    },
+    {
+      "path": "10B_语义事务原子性Merge与Rebase.md",
+      "bytes": 3617,
+      "sha256": "4312107b40742146ab95deee91dd886e693db4280bfe1d583f8de0a232e2f82a"
+    },
+    {
+      "path": "10_事实源Git与查询投影候选.md",
+      "bytes": 2290,
+      "sha256": "d7e25c0c1c773da73069417c0c6d06d24e1d32e7a9d95ad3bcba7a9191cce64c"
+    },
+    {
+      "path": "11A_MCP领域能力契约与版本策略.md",
+      "bytes": 2943,
+      "sha256": "c0553f5824cc9dcc96c7db888c0f727f68146c2c1d5306388be6f54464ce8274"
+    },
+    {
+      "path": "11_标准互操作与外部工具边界.md",
+      "bytes": 2869,
+      "sha256": "4023581282861049dd7f78a48a4e5e76d459b96c818c72222a803c0d519822b7"
+    },
+    {
+      "path": "12_安全信任与AI风险.md",
+      "bytes": 1931,
+      "sha256": "700495196cc6683eac3158a8e2e7ffe058c20f7bd915f83e43fefab6b95e9fc8"
+    },
+    {
+      "path": "13_质量属性与评价方法.md",
+      "bytes": 2544,
+      "sha256": "4d558c7e11423009401955a29a6563decf8348d4f45e614ae1d885ec1faf4634"
+    },
+    {
+      "path": "14_原型实验计划.md",
+      "bytes": 3435,
+      "sha256": "721f1ff86cd4522f0a77a479ebb39e2f65988b2d56f274bfedeb46a14bcbbca4"
+    },
+    {
+      "path": "15_开放问题与暂定决策表.md",
+      "bytes": 2443,
+      "sha256": "95fa71b84641891b04638cf244e9d40d6acb85a36187e9adfd18d6118f20ddcc"
+    },
+    {
+      "path": "16_下一阶段语义决策路线.md",
+      "bytes": 1311,
+      "sha256": "f34e27f96440486744fe7bcaa327e6fa23cfee87a5eaf74359077915d11cc650"
+    },
+    {
+      "path": "17_方案设计基线总结与原型准入.md",
+      "bytes": 4589,
+      "sha256": "ca9aedb9fc1b6c324384a155032187b50f6aa05546332c27d66bd244e0c7c0f9"
+    },
+    {
+      "path": "18_设计决策追踪矩阵.md",
+      "bytes": 1498,
+      "sha256": "641c1cb9b1c6ed47600fde4deb16ab37ec574fcd2fd114199cac348ff145d9e8"
+    },
+    {
+      "path": "19_最终方案验收清单.md",
+      "bytes": 2342,
+      "sha256": "3c54d32877ad949fe6c0bf7d66fb9d20089483792fc79105217d239c35ae8e9d"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 5293,
+      "sha256": "e69bf151c8a12af020207ff5c84c8ecd690a2f3bd0ab5d64b360ec5552a6ea76"
+    },
+    {
+      "path": "FILE_INDEX.md",
+      "bytes": 4888,
+      "sha256": "b4d49a6e84cc9e2b6a6a0cfdc016a85b03879d9e79620fb38b302488782472fc"
+    },
+    {
+      "path": "README.md",
+      "bytes": 7463,
+      "sha256": "62202d7445e43fb3520249e168367a97a972bbe3c4f017e80e747f628763252a"
+    },
+    {
+      "path": "决策记录/DD-001_Git为必需基础设施.md",
+      "bytes": 280,
+      "sha256": "cc04f93583404a407945e3bbb52f930409831e1763abd5f768815029642d63c6"
+    },
+    {
+      "path": "决策记录/DD-002_用户规范决定严格性.md",
+      "bytes": 238,
+      "sha256": "f6d276d3fbefd9a96b74f3a11e9c805e250dd84af11e3d129a8c31ad83f17c5d"
+    },
+    {
+      "path": "决策记录/DD-003_Scoped_Delegation.md",
+      "bytes": 316,
+      "sha256": "91d235d1d15f8d3aef45f3a0aa4b19612794b5186fd6cb2ca2d970e6d5196e6f"
+    },
+    {
+      "path": "决策记录/DD-004_语义粒度模型.md",
+      "bytes": 279,
+      "sha256": "f231c9049e0556abba13a9df16a46ab3aa3604e1944bef8fad61840c5704929b"
+    },
+    {
+      "path": "决策记录/DD-005_CoreClass_Facet_Kind.md",
+      "bytes": 344,
+      "sha256": "bb56c58dbaf1988e3348c306547a8f6fea7592098216593c03ebd21b27223221"
+    },
+    {
+      "path": "决策记录/DD-006_Markdown角色.md",
+      "bytes": 242,
+      "sha256": "4c48df7e6fc1e379468d0ccea3d9cc6abd886c898451ca4eb8902e78b0eafe67"
+    },
+    {
+      "path": "决策记录/DD-007_RelationAssertion.md",
+      "bytes": 273,
+      "sha256": "3eb26eba141079cadbad079b7d9bd543be81caeb033a7c5ea637b96dc7bb0882"
+    },
+    {
+      "path": "决策记录/DD-008_Observation与Issue分离.md",
+      "bytes": 234,
+      "sha256": "a59ac344317ed080974fb7a4e30bd7be813f44d0ea02e9455c1aa507e7429939"
+    },
+    {
+      "path": "决策记录/DD-009_核心关系角色与Profile关系类型.md",
+      "bytes": 767,
+      "sha256": "6ff5d27fad93c12a5f287db4d91394742ea2a1b7305042b738938ec74bc7c9f2"
+    },
+    {
+      "path": "决策记录/DD-010_规范模态与执行后果分离.md",
+      "bytes": 648,
+      "sha256": "987ee4bdf917f721ec96f06339a00c078828eae720bd80398c4a213b2282f2b1"
+    },
+    {
+      "path": "决策记录/DD-011_身份与工程编号分离.md",
+      "bytes": 455,
+      "sha256": "3a06c5fa844f5c84a66fc93720bbb90e506a8b3b5f9d0458641b7a0822c991c2"
+    },
+    {
+      "path": "决策记录/DD-012_WorkingCopy与Revision分离.md",
+      "bytes": 330,
+      "sha256": "efa8eaa963622f2eb038b80f6343c8de8c0b504ae1e51ee5a2d3373c4f5571f9"
+    },
+    {
+      "path": "决策记录/DD-013_GitCheckpoint策略.md",
+      "bytes": 360,
+      "sha256": "d4380cb29489871765bf3899ee7a3b5826d2edd8fe906ebf572929a1ba34b639"
+    },
+    {
+      "path": "决策记录/DD-014_关系默认绑定策略.md",
+      "bytes": 336,
+      "sha256": "b36b27fba163019dd457b57a0dd04a69e6c507d0ac5d47de342c279430ee5c2f"
+    },
+    {
+      "path": "决策记录/DD-015_Lifecycle三维分解.md",
+      "bytes": 362,
+      "sha256": "937e5d12cc4640e6f6539bcba9af566ebb460bc5376a1ff2723d9eddfdae64de"
+    },
+    {
+      "path": "决策记录/DD-016_Provenance责任角色.md",
+      "bytes": 363,
+      "sha256": "d9b8ad8a9bd3dd9c7f075336ffb2d3cfa7eab017c98f38f65995fdab6c4043e5"
+    },
+    {
+      "path": "决策记录/DD-017_Rule资源分离.md",
+      "bytes": 178,
+      "sha256": "20b54e700cd764e69cd5adfc305c59a2e0224a6e2583b4de28bc5248cf8231cf"
+    },
+    {
+      "path": "决策记录/DD-018_Applicability三值逻辑.md",
+      "bytes": 163,
+      "sha256": "728e601323fdd0bc0bb0b135514a0753f24a0469f5d3800e746734e4a9238d98"
+    },
+    {
+      "path": "决策记录/DD-019_ConstraintAST与类型单位.md",
+      "bytes": 180,
+      "sha256": "47d0e38a1b4aa5a75a53cf4d81b5e4e9242a14e5cb8c12baddf56a22f36795f0"
+    },
+    {
+      "path": "决策记录/DD-020_权威例外与冲突解析.md",
+      "bytes": 190,
+      "sha256": "68bd6f3b1e820fcf10bb13ca72cf33a91965e7b057d6833c10615dc0d610da6a"
+    },
+    {
+      "path": "决策记录/DD-021_RuleCompiler与Fixture.md",
+      "bytes": 155,
+      "sha256": "d312569993cb46b16e01ee19a23da82e97d614d94cc969888aca9dc746767b7a"
+    },
+    {
+      "path": "决策记录/DD-022_EvaluationContext与EffectiveResolution.md",
+      "bytes": 189,
+      "sha256": "889e0fae60fb668bb81755ac86de760cab3d42991e62da524c6dcf541d82f340"
+    },
+    {
+      "path": "决策记录/DD-023_ReviewPackage与Approval.md",
+      "bytes": 144,
+      "sha256": "25b1d54e73025561722e98293cf185be0411c7021b7348361bf6dbf4728d3eb9"
+    },
+    {
+      "path": "决策记录/DD-024_Git权威CanonicalState.md",
+      "bytes": 188,
+      "sha256": "1e72fc06dcf451cc3c6bc43664a76a8351839b2bedc4c057809aca6f5ef7d482"
+    },
+    {
+      "path": "决策记录/DD-025_语义事务与GitRef推进.md",
+      "bytes": 181,
+      "sha256": "54346d2606a0e6f6c26d636362ac852b3f585de459cbb7b2cf3fced708b5f36c"
+    },
+    {
+      "path": "决策记录/DD-026_MCP领域解耦.md",
+      "bytes": 139,
+      "sha256": "d88667771d470527a94a12ff737b456a379de6e63f9586b9bb5e1f4f2a67209b"
+    },
+    {
+      "path": "决策记录/DD-027_生命周期状态为不可变记录投影.md",
+      "bytes": 383,
+      "sha256": "64370a6341fb824727afbdee56f1e19c7808251b81fd1b328ee1633223f0646f"
+    },
+    {
+      "path": "术语表.md",
+      "bytes": 1874,
+      "sha256": "640be880cb39e8536deb0c8ddd0fad4c5bb4b9623ab4e75e4f87f018b2bbad6b"
+    },
+    {
+      "path": "示例/01_ASPICE_like规则AST.md",
+      "bytes": 894,
+      "sha256": "b68213f3a1a160dbc9a4e58591099c25d9ff43e34966f681026c57f89fe4e8df"
+    },
+    {
+      "path": "示例/02_MISRA_like外部工具规则.md",
+      "bytes": 730,
+      "sha256": "1c173299cbe369e1821592b2a4a7025d9f78af0ce6c2b573b73586b04ba02ecd"
+    },
+    {
+      "path": "示例/03_CAN接口规则.md",
+      "bytes": 622,
+      "sha256": "80060c75c82e6a08d5e85d98af0439ab4a02d1ef4af04d8d127576c6e09f707b"
+    },
+    {
+      "path": "示例/04_配置解析场景.md",
+      "bytes": 639,
+      "sha256": "46fc01731e579aeb0e1fccaf268de18d2421fd0ca573017a503e881a3605b92c"
+    },
+    {
+      "path": "示例/05_Review与Apply事务.md",
+      "bytes": 692,
+      "sha256": "b39c600e0842dbb9134d5c9a7d99e437a67e43589d55ccb09a56c3ebe1d4f5bb"
+    },
+    {
+      "path": "示例/06_MCP交互序列.md",
+      "bytes": 643,
+      "sha256": "f962112e4cd83b7f3ca7e5532aa0ed2a79d00d9d03539cc4e0a0a0f2db5c2d03"
+    },
+    {
+      "path": "附录_A_ASPICE与MISRA映射示例.md",
+      "bytes": 832,
+      "sha256": "d9ec061fa6456965468950c5fb4e20fb7fc390c42745ff74c7cbb670a2257bc5"
+    },
+    {
+      "path": "附录_B_端到端任务场景.md",
+      "bytes": 865,
+      "sha256": "2def3e7fb258e59deecdb6bb07cc2acd7576729357379cb9624e8275aed95722"
+    },
+    {
+      "path": "附录_C_未来Codex方案讨论提示词.md",
+      "bytes": 1693,
+      "sha256": "544c2a891f1ed61b089bc6a1c5bb575fc74a3b728af6c2c2b8c9aa1a6b95dbd5"
+    },
+    {
+      "path": "附录_D_参考标准与资料.md",
+      "bytes": 2767,
+      "sha256": "a3a3d9c5d2e81491178d657227ce302c838a924737001f5473f777a278be6517"
+    }
+  ]
+}
