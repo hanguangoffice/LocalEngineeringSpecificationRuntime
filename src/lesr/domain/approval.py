@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -31,7 +34,15 @@ class ApprovalPayload(FrozenModel):
     def scope_hash(self) -> str:
         return semantic_hash(self.scope)
 
-    def message(self) -> bytes:
+    def message(
+        self,
+        *,
+        approval_uid: str,
+        actor_uid: str,
+        actor_role: str,
+        issued_at: datetime,
+        provenance_uid: str,
+    ) -> bytes:
         expiry = (
             self.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
             if self.expires_at
@@ -40,7 +51,9 @@ class ApprovalPayload(FrozenModel):
         conditions_hash = semantic_hash({"conditions": self.conditions})
         return (
             "LESR-APPROVAL-V1\n"
-            f"{self.package_hash}\n{self.effective_model_hash}\n{self.scope_hash}\n"
+            f"{approval_uid}\n{actor_uid}\n{actor_role}\n"
+            f"{issued_at.astimezone(UTC).isoformat().replace('+00:00', 'Z')}\n"
+            f"{provenance_uid}\n{self.package_hash}\n{self.effective_model_hash}\n{self.scope_hash}\n"
             f"{self.approval_type}\n{conditions_hash}\n{expiry}"
         ).encode()
 
@@ -100,6 +113,15 @@ class SignedApproval(FrozenModel):
             conditions=self.conditions,
         )
 
+    def signed_message(self) -> bytes:
+        return self.signing_payload().message(
+            approval_uid=self.approval_uid,
+            actor_uid=self.actor_uid,
+            actor_role=self.actor_role,
+            issued_at=self.issued_at,
+            provenance_uid=self.provenance_uid,
+        )
+
 
 class ApprovalKeyStore:
     """User-local private keys; only public trust records enter Canonical State."""
@@ -124,7 +146,10 @@ class ApprovalKeyStore:
             "algorithm": "Ed25519",
             "actor_uid": actor_uid,
             "key_uid": trust.key_uid,
-            "private_key": base64.b64encode(private.private_bytes_raw()).decode("ascii"),
+            "protection": "windows-dpapi-current-user" if os.name == "nt" else "filesystem-user-only",
+            "protected_private_key": base64.b64encode(
+                _protect_private_key(private.private_bytes_raw())
+            ).decode("ascii"),
         }
         path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8", newline="\n")
         path.chmod(0o600)
@@ -138,10 +163,25 @@ class ApprovalKeyStore:
         path = self.root / f"{trust.key_uid}.json"
         value = json.loads(path.read_text(encoding="utf-8"))
         private = Ed25519PrivateKey.from_private_bytes(
-            base64.b64decode(value["private_key"], validate=True)
+            _unprotect_private_key(
+                base64.b64decode(value["protected_private_key"], validate=True),
+                str(value["protection"]),
+            )
         )
-        signature = private.sign(payload.message())
+        approval_uid = uuid7_candidate()
+        provenance_uid = uuid7_candidate()
+        issued_at = datetime.now(UTC)
+        signature = private.sign(
+            payload.message(
+                approval_uid=approval_uid,
+                actor_uid=trust.actor_uid,
+                actor_role=role,
+                issued_at=issued_at,
+                provenance_uid=provenance_uid,
+            )
+        )
         return SignedApproval(
+            approval_uid=approval_uid,
             package_hash=payload.package_hash,
             effective_model_hash=payload.effective_model_hash,
             scope=payload.scope,
@@ -149,10 +189,12 @@ class ApprovalKeyStore:
             approval_type=payload.approval_type,
             actor_uid=trust.actor_uid,
             actor_role=role,
+            issued_at=issued_at,
             expires_at=payload.expires_at,
             conditions=payload.conditions,
             key_uid=trust.key_uid,
             signature=base64.b64encode(signature).decode("ascii"),
+            provenance_uid=provenance_uid,
         )
 
 
@@ -185,7 +227,70 @@ def verify_approval(
     try:
         public.verify(
             base64.b64decode(approval.signature, validate=True),
-            approval.signing_payload().message(),
+            approval.signed_message(),
         )
     except (InvalidSignature, ValueError) as error:
         raise PermissionError("approval signature is invalid") from error
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _blob(value: bytes) -> tuple[_DataBlob, ctypes.Array[ctypes.c_char]]:
+    buffer = ctypes.create_string_buffer(value)
+    return (
+        _DataBlob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))),
+        buffer,
+    )
+
+
+def _protect_private_key(value: bytes) -> bytes:
+    if os.name != "nt":
+        return value
+    source, source_buffer = _blob(value)
+    output = _DataBlob()
+    crypt32 = _windows_library("crypt32")
+    if not crypt32.CryptProtectData(
+        ctypes.byref(source),
+        "LESR Ed25519 private key",
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(output),
+    ):
+        raise OSError("Windows DPAPI could not protect the LESR private key")
+    try:
+        return ctypes.string_at(output.pbData, output.cbData)
+    finally:
+        _windows_library("kernel32").LocalFree(output.pbData)
+        del source_buffer
+
+
+def _unprotect_private_key(value: bytes, protection: str) -> bytes:
+    if protection == "filesystem-user-only":
+        if os.name == "nt":
+            raise PermissionError("unprotected private key is forbidden on Windows")
+        return value
+    if protection != "windows-dpapi-current-user" or os.name != "nt":
+        raise PermissionError("private key protection is unavailable for this user/platform")
+    source, source_buffer = _blob(value)
+    output = _DataBlob()
+    crypt32 = _windows_library("crypt32")
+    if not crypt32.CryptUnprotectData(
+        ctypes.byref(source), None, None, None, None, 0, ctypes.byref(output)
+    ):
+        raise PermissionError("Windows DPAPI could not unlock the LESR private key")
+    try:
+        return ctypes.string_at(output.pbData, output.cbData)
+    finally:
+        _windows_library("kernel32").LocalFree(output.pbData)
+        del source_buffer
+
+
+def _windows_library(name: str) -> Any:
+    loader = getattr(ctypes, "windll", None)
+    if loader is None:
+        raise OSError("Windows native library loader is unavailable")
+    return getattr(loader, name)

@@ -26,6 +26,7 @@ class CompletenessStatus(StrEnum):
     INCOMPLETE_UNKNOWN_SCOPE = "incomplete_unknown_scope"
     INCOMPLETE_BUDGET = "incomplete_budget"
     INCOMPLETE_INDEX = "incomplete_index"
+    INCOMPLETE_CONFIDENTIALITY = "incomplete_confidentiality"
     INDETERMINATE_CONFIGURATION = "indeterminate_configuration"
     INDETERMINATE_PROFILE_CONFLICT = "indeterminate_profile_conflict"
 
@@ -152,15 +153,34 @@ class EffectiveResolver:
         )
         for object_uid in object_scope:
             candidates = by_object.get(object_uid, [])
-            selected = self._select_bound(object_uid, candidates, explicit, "explicit pinned")
-            if selected is None:
-                selected = self._select_bound(
-                    object_uid, candidates, workspace, "workspace candidate"
-                )
-            if selected is None:
-                selected = self._select_bound(
-                    object_uid, candidates, configured, "configuration membership"
-                )
+            selected: tuple[RevisionDescriptor, str] | None = None
+            binding_failed = False
+            for bindings, reason in (
+                (explicit, "explicit pinned"),
+                (workspace, "workspace candidate"),
+                (configured, "configuration membership"),
+            ):
+                if object_uid not in bindings:
+                    continue
+                requested_uid = bindings[object_uid]
+                selected = self._select_bound(object_uid, candidates, bindings, reason)
+                if selected is None:
+                    message = f"{object_uid}: {reason} revision {requested_uid} is unavailable"
+                    results.append(
+                        ObjectResolution(
+                            object_uid,
+                            ResolutionStatus.INDETERMINATE,
+                            None,
+                            message,
+                            tuple(item.revision_uid for item in candidates),
+                        )
+                    )
+                    conflicts.append(message)
+                    unknowns.append(message)
+                    binding_failed = True
+                break
+            if binding_failed:
+                continue
             if selected is None:
                 variant_matches = [
                     item
@@ -410,11 +430,14 @@ class ContextPlanner:
                         ),
                     )
         negative = list(stale)
+        mandatory_confidentiality_omissions = False
         for uid, selection in tuple(mandatory.items()) + tuple(conditional.items()):
             if selection.resource.sensitivity in policy.forbidden_sensitivities:
                 negative.append(
                     OmittedCandidate(selection.resource.revision_uid, "sensitivity boundary")
                 )
+                if uid in mandatory:
+                    mandatory_confidentiality_omissions = True
                 mandatory.pop(uid, None)
                 conditional.pop(uid, None)
         ordered_mandatory = sorted(
@@ -431,6 +454,8 @@ class ContextPlanner:
                 omitted.append(OmittedCandidate(item.resource.revision_uid, "token budget exceeded"))
         if resolution.closure_status in {ClosureStatus.INDETERMINATE, ClosureStatus.INCONSISTENT}:
             completeness = CompletenessStatus.INDETERMINATE_CONFIGURATION
+        elif mandatory_confidentiality_omissions:
+            completeness = CompletenessStatus.INCOMPLETE_CONFIDENTIALITY
         elif not index_complete:
             completeness = CompletenessStatus.INCOMPLETE_INDEX
         elif used > token_budget or omitted:

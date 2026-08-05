@@ -1,9 +1,11 @@
-# LESR v1
+# LESR runtime 0.5.0a2 — Design Baseline v1.0
 
 Local Engineering Specification Runtime is a Git-backed local semantic runtime
 for engineering specifications. `LESR_Solution_Design_Baseline_v1.0/` is the
 requirements authority and `docs/LESR_Codex_Construction_Spec_v1.0.md` is the
-frozen implementation contract.
+frozen implementation contract. Runtime maturity and design-baseline version are
+deliberately separate: `0.5.0a2` is an audit-remediation candidate, not a claim
+of production readiness or external certification.
 
 The v1 runtime separates Logical Objects, immutable Revisions and Records,
 versioned Relation Assertions, typed rules, explicit Evaluation Context,
@@ -31,17 +33,29 @@ is protected from line-ending conversion and verified byte-for-byte against its
 lesr init PROJECT
 lesr resolve PROJECT IDENTIFIER
 lesr inspect PROJECT UID
-lesr query PROJECT --kind software_requirement
-lesr context build PROJECT coding --target UID
-lesr workspace open PROJECT DELEGATION_UID
+lesr query PROJECT --kind software_requirement --text reconnect
+lesr trace PROJECT UID --max-depth 4
+lesr context build PROJECT coding CONFIGURATION_UID ACTOR_UID --target UID
+lesr workspace open PROJECT DELEGATION_UID ACTOR_UID IDEMPOTENCY_KEY
+lesr workspace propose PROJECT WORKSPACE_UID BASE ACTOR_UID DELEGATION_UID KEY operation.json
+lesr review-package PROJECT WORKSPACE_UID BASE CONFIGURATION_UID ACTOR_UID DELEGATION_UID KEY
 lesr approval keygen ACTOR_UID "Reviewer" --role technical
 lesr projection rebuild PROJECT
 lesr mcp serve PROJECT
 ```
 
-Human approval signing is deliberately CLI-only. MCP exposes versioned Resolve,
+Human approval signing is deliberately CLI-only. Trusted public keys and scoped
+Delegation Grants are established through the one-time `bootstrap` command; an
+optional signed governance bundle installs the initial Rule/Profile model, followed
+by the separately signed `init-configuration` command. Request-supplied trust records
+cannot authorize an Apply. MCP exposes versioned Resolve,
 Inspect, Query, Context, Workspace, Governance and Compliance capabilities but
 never arbitrary file, SQL, shell or private-key operations.
+
+`review-package` is not a JSON hashing helper. It evaluates the exact checkpointed
+Workspace using a Canonical Configuration and Profile policy. `apply` accepts the
+resulting Package UID and human approval files; it does not accept caller-authored
+operations, roles, findings or model hashes.
 
 ## Compatibility and recovery
 
@@ -53,3 +67,7 @@ moved into the production suite.
 
 P6 interoperability, UI, Chinese-specific tokenization, general plugin sandbox,
 SHACL/Rego execution and Claude Code re-validation remain explicit deferred work.
+
+Local rights-cleared PDF/Markdown import only creates reviewable Workspace
+candidates with page/section provenance. Encrypted or restricted PDFs are
+refused; source documents and extracted standard text are not committed.

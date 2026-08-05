@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -104,15 +105,48 @@ class LESRDomainPort(Protocol):
 
     def inspect(self, uid: str) -> DomainResult: ...
 
-    def query(self, kind: str | None, cursor: str | None, page_size: int) -> DomainResult: ...
+    def query(
+        self, kind: str | None, cursor: str | None, page_size: int, text: str | None = None
+    ) -> DomainResult: ...
+
+    def traverse(
+        self, start_uid: str, predicate: str | None, max_depth: int
+    ) -> DomainResult: ...
+
+    def impact(self, start_uid: str, max_depth: int) -> DomainResult: ...
 
     def build_context(
-        self, task_type: str, target_uids: tuple[str, ...], token_budget: int
+        self,
+        task_type: str,
+        target_uids: tuple[str, ...],
+        token_budget: int,
+        configuration_uid: str,
+        actor: str,
     ) -> DomainResult: ...
 
     def open_workspace(self, request: WriteEnvelope) -> DomainResult: ...
 
     def propose_operation(self, request: WriteEnvelope) -> DomainResult: ...
+
+    def prepare_review(self, request: WriteEnvelope) -> DomainResult: ...
+
+    def bootstrap_root_owner(
+        self,
+        trust: dict[str, Any],
+        delegation: dict[str, Any],
+        approval: dict[str, Any],
+        idempotency_key: str,
+        governance_operations: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult: ...
+
+    def initialize_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult: ...
 
     def apply_transaction(self, request: WriteEnvelope) -> DomainResult: ...
 
@@ -205,7 +239,13 @@ class InMemoryDomainService:
             )
         return DomainResult(resource)
 
-    def query(self, kind: str | None, cursor: str | None, page_size: int) -> DomainResult:
+    def query(
+        self,
+        kind: str | None,
+        cursor: str | None,
+        page_size: int,
+        text: str | None = None,
+    ) -> DomainResult:
         if not 1 <= page_size <= 100:
             return self._error(
                 "LESR-PAGE-SIZE-INVALID",
@@ -221,13 +261,36 @@ class InMemoryDomainService:
         items = sorted(self.resources.values(), key=lambda item: str(item["uid"]))
         if kind is not None:
             items = [item for item in items if item["kind"] == kind]
+        if text is not None:
+            needle = text.casefold()
+            items = [item for item in items if needle in str(item).casefold()]
         page = items[offset : offset + page_size]
         next_cursor = str(offset + page_size) if offset + page_size < len(items) else None
         return DomainResult({"items": page, "next_cursor": next_cursor, "total": len(items)})
 
-    def build_context(
-        self, task_type: str, target_uids: tuple[str, ...], token_budget: int
+    def traverse(
+        self, start_uid: str, predicate: str | None, max_depth: int
     ) -> DomainResult:
+        del predicate, max_depth
+        return self._error(
+            "LESR-RELATION-NOT-FOUND",
+            ErrorCategory.NOT_FOUND,
+            "the in-memory adapter has no canonical relation graph",
+            (start_uid,),
+        )
+
+    def impact(self, start_uid: str, max_depth: int) -> DomainResult:
+        return self.traverse(start_uid, None, max_depth)
+
+    def build_context(
+        self,
+        task_type: str,
+        target_uids: tuple[str, ...],
+        token_budget: int,
+        configuration_uid: str = "",
+        actor: str = "context-reader",
+    ) -> DomainResult:
+        del configuration_uid, actor
         missing = tuple(uid for uid in target_uids if uid not in self.resources)
         if missing:
             return self._error(
@@ -281,6 +344,47 @@ class InMemoryDomainService:
         if not request.dry_run:
             self.workspaces[request.workspace_uid]["operations"].append(request.operation)
         return DomainResult(proposal)
+
+    def prepare_review(self, request: WriteEnvelope) -> DomainResult:
+        error = self._validate_write(request, require_workspace=True)
+        if error is not None:
+            return error
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot produce authoritative validation evidence",
+            (request.workspace_uid,),
+        )
+
+    def bootstrap_root_owner(
+        self,
+        trust: dict[str, Any],
+        delegation: dict[str, Any],
+        approval: dict[str, Any],
+        idempotency_key: str,
+        governance_operations: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult:
+        del trust, delegation, approval, idempotency_key, governance_operations
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot bootstrap Canonical State",
+        )
+
+    def initialize_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult:
+        del configuration, approval, actor_uid, delegation_uid, idempotency_key
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot initialize Canonical governance",
+        )
 
     def apply_transaction(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=True)
@@ -418,10 +522,16 @@ class InMemoryDomainService:
 
 
 def _jsonable(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _jsonable(asdict(value))
     if isinstance(value, StrEnum):
         return value.value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat().replace("+00:00", "Z")
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [_jsonable(item) for item in sorted(value, key=str)]
     return value

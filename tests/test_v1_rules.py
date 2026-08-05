@@ -3,13 +3,18 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
+from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.rules import (
     AllOf,
     AnyOf,
     ApplicabilityResult,
+    AuthorityDeclaration,
     ConstantApplicability,
+    DeviationPolicy,
     EnforcementEffect,
+    EnforcementMapping,
     EvaluationEnvironment,
+    EvaluationSpecification,
     FieldEquals,
     FieldKnown,
     FieldRequired,
@@ -21,17 +26,20 @@ from lesr.domain.rules import (
     QuantityMaximum,
     RelationMinimum,
     RuleCompiler,
-    RuleFixture,
+    RuleDefinition,
+    RuleFixtureDefinition,
     RuleOutcome,
-    RuleSource,
+    RuleSourceText,
     UnitDefinition,
     UnitRegistry,
     ValueCell,
     ValueState,
     detect_direct_conflict,
+    evaluate_rule,
     project_to_rego,
     project_to_shacl,
 )
+from lesr.domain.semantic import semantic_hash
 
 UNITS = UnitRegistry(
     (
@@ -68,65 +76,104 @@ def environment(
     )
 
 
-def source() -> RuleSource:
-    rule_uid = "RULE-TRACE-1"
-    fixtures = (
-        RuleFixture("positive", FixtureKind.POSITIVE, environment(), RuleOutcome.PASS),
-        RuleFixture(
-            "negative", FixtureKind.NEGATIVE, environment(relation_count=0), RuleOutcome.FAIL
-        ),
-        RuleFixture(
-            "not-applicable",
+def environment_data(**overrides: object) -> dict[str, object]:
+    value = environment(**overrides)
+    return {
+        "target_kind": value.target_kind,
+        "fields": {
+            path: {"state": cell.state.value, "value": cell.value}
+            for path, cell in value.fields.items()
+        },
+        "relation_counts": value.relation_counts,
+        "operation": value.operation,
+        "active_exception_rule_uids": sorted(value.active_exception_rule_uids),
+        "active_deviation_rule_uids": sorted(value.active_deviation_rule_uids),
+        "conflicted_rule_uids": sorted(value.conflicted_rule_uids),
+        "schema_version": value.schema_version,
+    }
+
+
+def source() -> RuleDefinition:
+    rule_uid = "018f0000-0000-7000-8000-000000000101"
+    statement = "Approved requirements shall have verification trace."
+    cases = (
+        (FixtureKind.POSITIVE, environment_data(), RuleOutcome.PASS),
+        (FixtureKind.NEGATIVE, environment_data(relation_count=0), RuleOutcome.FAIL),
+        (
             FixtureKind.NOT_APPLICABLE,
-            environment(kind="software_design"),
+            environment_data(kind="software_design"),
             RuleOutcome.NOT_APPLICABLE,
         ),
-        RuleFixture(
-            "indeterminate",
+        (
             FixtureKind.INDETERMINATE,
-            environment(safety=ValueCell(ValueState.UNKNOWN)),
+            environment_data(safety=ValueCell(ValueState.UNKNOWN)),
             RuleOutcome.INDETERMINATE,
         ),
-        RuleFixture(
-            "exception",
+        (
             FixtureKind.EXCEPTION,
-            environment(active_exception_rule_uids=frozenset({rule_uid})),
+            environment_data(active_exception_rule_uids=frozenset({rule_uid})),
             RuleOutcome.NOT_APPLICABLE,
         ),
-        RuleFixture(
-            "deviation",
+        (
             FixtureKind.DEVIATION,
-            environment(
-                relation_count=0, active_deviation_rule_uids=frozenset({rule_uid})
+            environment_data(
+                relation_count=0,
+                active_deviation_rule_uids=frozenset({rule_uid}),
             ),
             RuleOutcome.SUPPRESSED_BY_DEVIATION,
         ),
-        RuleFixture(
-            "conflict",
+        (
             FixtureKind.CONFLICT,
-            environment(conflicted_rule_uids=frozenset({rule_uid})),
+            environment_data(conflicted_rule_uids=frozenset({rule_uid})),
             RuleOutcome.INDETERMINATE,
         ),
-        RuleFixture(
-            "migration",
-            FixtureKind.MIGRATION,
-            environment(schema_version=2),
-            RuleOutcome.PASS,
-        ),
+        (FixtureKind.MIGRATION, environment_data(schema_version=2), RuleOutcome.PASS),
     )
-    return RuleSource(
+    fixtures = tuple(
+        RuleFixtureDefinition(
+            fixture_uid=f"018f0000-0000-7000-8000-{index:012d}",
+            kind=kind,
+            environment=data,
+            expected_outcome=outcome,
+        )
+        for index, (kind, data, outcome) in enumerate(cases, 201)
+    )
+    return RuleDefinition(
         rule_uid=rule_uid,
-        revision_uid="RULE-TRACE-1@1",
-        schema_version=1,
-        authoritative_statement="Approved requirements shall have verification trace.",
-        interpretation_note="verified_by minimum one",
-        target_kind="software_requirement",
-        applicability=AllOf((KindIs("software_requirement"), FieldKnown("safety_level"))),
+        rule_revision_uid="018f0000-0000-7000-8000-000000000102",
+        source=RuleSourceText(
+            text=statement,
+            language="en",
+            source_hash=semantic_hash({"text": statement}),
+            interpretation_note="verified_by minimum one",
+        ),
+        target_selector=KindIs("software_requirement").to_data(),
+        applicability=AllOf(
+            (KindIs("software_requirement"), FieldKnown("safety_level"))
+        ).to_data(),
         modality=NormativeModality.OBLIGATION,
-        constraint=RelationMinimum("verified_by", 1),
-        enforcement={"approve_revision": EnforcementEffect.BLOCK_OPERATION},
-        authority="profile/aspice-like@1",
-        deviation_allowed=True,
+        constraints=(RelationMinimum("verified_by", 1).to_data(),),
+        evaluation=EvaluationSpecification(),
+        enforcement=(
+            EnforcementMapping(
+                operation="approve_revision",
+                effect=EnforcementEffect.BLOCK_OPERATION,
+            ),
+        ),
+        authority=AuthorityDeclaration(
+            source_uid="018f0000-0000-7000-8000-000000000103",
+            profile_revision_uid="018f0000-0000-7000-8000-000000000104",
+            issuer_uid="018f0000-0000-7000-8000-000000000105",
+            scope={"project": "demo"},
+            may_refine=True,
+            may_relax=False,
+            deviation_allowed=True,
+            non_overridable=False,
+        ),
+        exception_policy={},
+        deviation_policy=DeviationPolicy(
+            allowed=True, required_approval_roles=("risk_deviation",)
+        ),
         explanation_map={"constraint": "shall have verification trace"},
         fixtures=fixtures,
     )
@@ -155,9 +202,15 @@ def test_units_are_checked_by_dimension() -> None:
     assert constraint.evaluate(ok, UNITS).result == "evaluator_error"
 
 
-def test_compiler_requires_all_fixture_kinds_and_passes_reference_rule() -> None:
-    compiler = RuleCompiler({"statement": str, "safety_level": str}, UNITS)
-    result = compiler.compile(source())
+def test_schema_definition_compiles_and_runs_all_fixture_kinds() -> None:
+    definition = source()
+    SchemaCatalog().validate(
+        "rule-definition.schema.json",
+        definition.model_dump(mode="json", exclude_none=True),
+    )
+    result = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        definition
+    )
     assert result.passed
     assert result.ast is not None
     assert {outcome for _, outcome in result.fixture_outcomes} >= {
@@ -167,14 +220,69 @@ def test_compiler_requires_all_fixture_kinds_and_passes_reference_rule() -> None
         RuleOutcome.INDETERMINATE,
         RuleOutcome.SUPPRESSED_BY_DEVIATION,
     }
-    incomplete = replace(source(), fixtures=source().fixtures[:1])
-    assert not compiler.compile(incomplete).passed
 
 
-def test_unknown_path_and_unbounded_relation_path_fail_compilation_or_construction() -> None:
-    compiler = RuleCompiler({}, UNITS)
-    invalid = replace(source(), constraint=FieldRequired("missing"))
-    assert not compiler.compile(invalid).passed
+def test_schema_aggregate_constraint_is_executable_not_schema_only() -> None:
+    definition = source()
+    aggregate = {
+        "op": "aggregate",
+        "function": "count",
+        "path": {"roles": ["verified_by"], "max_depth": 1},
+        "comparison": "gte",
+        "expected": 1,
+    }
+    definition = RuleDefinition.model_validate(
+        definition.model_dump(mode="json", exclude={"content_hash"})
+        | {"constraints": [aggregate]}
+    )
+    SchemaCatalog().validate(
+        "rule-definition.schema.json",
+        definition.model_dump(mode="json", exclude_none=True),
+    )
+    result = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        definition
+    )
+    assert result.passed
+    assert result.ast is not None
+    assert result.ast.constraints[0].to_data() == aggregate
+
+
+def test_external_evaluation_kind_is_preserved_and_requires_evidence() -> None:
+    definition = source()
+    fixtures = []
+    for fixture in definition.fixtures:
+        environment_value = dict(fixture.environment)
+        environment_value["external_rule_outcomes"] = {
+            definition.rule_revision_uid: fixture.expected_outcome.value
+        }
+        fixtures.append(fixture.model_copy(update={"environment": environment_value}))
+    definition = RuleDefinition.model_validate(
+        definition.model_dump(mode="json", exclude={"content_hash"})
+        | {
+            "evaluation": {
+                "kind": "external_tool",
+                "validator_uid": "static-analyzer",
+                "advisory_only": False,
+            },
+            "fixtures": [item.model_dump(mode="json") for item in fixtures],
+        }
+    )
+    result = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        definition
+    )
+    assert result.passed and result.ast is not None
+    assert result.ast.evaluation.kind == "external_tool"
+    without_evidence = evaluate_rule(result.ast, environment(), UNITS)
+    assert without_evidence.outcome is RuleOutcome.NOT_EVALUATED
+    incomplete = definition.model_copy(update={"fixtures": definition.fixtures[:1]})
+    assert not RuleCompiler({"safety_level": str}, UNITS).compile(incomplete).passed
+
+
+def test_unknown_path_and_unbounded_relation_path_fail_compilation() -> None:
+    invalid = source().model_copy(
+        update={"constraints": (FieldRequired("missing").to_data(),)}
+    )
+    assert not RuleCompiler({}, UNITS).compile(invalid).passed
     try:
         RelationMinimum("verified_by", 1, maximum_depth=0)
     except ValueError as error:
@@ -184,7 +292,9 @@ def test_unknown_path_and_unbounded_relation_path_fail_compilation_or_constructi
 
 
 def test_modality_conflict_and_restricted_projections_are_explainable() -> None:
-    compiled = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(source())
+    compiled = RuleCompiler({"statement": str, "safety_level": str}, UNITS).compile(
+        source()
+    )
     assert compiled.ast is not None
     prohibition = replace(compiled.ast, modality=NormativeModality.PROHIBITION)
     assert detect_direct_conflict(compiled.ast, prohibition)

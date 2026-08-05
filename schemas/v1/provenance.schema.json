@@ -4,7 +4,7 @@
   "title":"LESR Provenance Record",
   "type":"object",
   "additionalProperties":false,
-  "required":["schema_version","resource_type","provenance_uid","subject_uid","kind","responsible_actor_uid","tool_uids","delegation_uid","source_uids","generated_at","content_hash"],
+  "required":["schema_version","resource_type","provenance_uid","subject_uid","kind","responsible_actor_uid","performed_by_actor_uid","tool_uids","tool_identity","delegation_uid","used_uids","generated_uids","validation_run_uids","generated_at","content_hash"],
   "properties":{
     "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
     "resource_type":{"const":"provenance_record"},
@@ -12,9 +12,16 @@
     "subject_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
     "kind":{"$ref":"common.schema.json#/$defs/provenance_kind"},
     "responsible_actor_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "performed_by_actor_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
+    "on_behalf_of_actor_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
     "tool_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "tool_identity":{"type":"string","minLength":1},
     "delegation_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
-    "source_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "used_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "generated_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "review_package_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
+    "validation_run_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "context_bundle_hash":{"oneOf":[{"$ref":"common.schema.json#/$defs/sha256"},{"type":"null"}]},
     "generated_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
     "content_hash":{"$ref":"common.schema.json#/$defs/sha256"}
   }

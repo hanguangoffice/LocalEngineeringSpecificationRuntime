@@ -33,6 +33,8 @@ REQUIRED_SCHEMAS = {
     "semantic-transaction.schema.json",
     "provenance.schema.json",
     "trusted-actor.schema.json",
+    "validation-finding.schema.json",
+    "validation-run.schema.json",
     "workspace.schema.json",
 }
 

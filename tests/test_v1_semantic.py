@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
+from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.semantic import (
     Alias,
     BindingMode,
@@ -52,11 +53,19 @@ def test_revision_is_deeply_immutable_and_hash_is_deterministic() -> None:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     assert revision.content_hash == semantic_hash(
-        revision.model_dump(mode="json", exclude={"content_hash"})
+        revision.model_dump(
+            mode="json", exclude={"content_hash"}, exclude_none=True
+        )
     )
     assert canonical_json(revision) == canonical_json(revision)
     with pytest.raises(ValidationError):
         revision.revision_number = 2
+
+
+@pytest.mark.parametrize("value", [1.25, float("nan"), float("inf")])
+def test_canonical_json_rejects_all_floating_point_values(value: float) -> None:
+    with pytest.raises((TypeError, ValueError), match="floating-point"):
+        canonical_json({"quantity": value})
 
 
 def test_alias_and_fragment_are_revision_scoped() -> None:
@@ -64,7 +73,7 @@ def test_alias_and_fragment_are_revision_scoped() -> None:
         value="REQ-OLD-1",
         alias_type="former_human_key",
         valid_from=datetime(2026, 1, 1, tzinfo=UTC),
-        introduced_by="CHG-1",
+        introduced_by="018f0000-0000-7000-8000-000000000010",
     )
     logical = LogicalObject(
         namespace="demo", human_key="REQ-NEW-1", kind="requirement", aliases=(alias,)
@@ -100,28 +109,94 @@ def test_relation_bindings_and_formal_trace_are_explicit() -> None:
 def test_lifecycle_is_projected_from_immutable_records() -> None:
     revision_uid = uuid7_candidate()
     submitted = LifecycleRecord(
+        record_type="lifecycle",
         subject_uid=revision_uid,
-        actor="author",
-        event_type=LifecycleEventType.REVISION_SUBMITTED,
-        from_state="draft",
-        to_state="in_review",
-        workflow_revision_uid="WF-1",
+        actor_uid="018f0000-0000-7000-8000-000000000011",
+        actor_type="human",
+        fields=(
+            SemanticField.from_value("/event_type", LifecycleEventType.REVISION_SUBMITTED),
+            SemanticField.from_value("/from_state", "draft"),
+            SemanticField.from_value("/to_state", "in_review"),
+            SemanticField.from_value(
+                "/workflow_revision_uid",
+                "018f0000-0000-7000-8000-000000000012",
+            ),
+        ),
         occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     approved = LifecycleRecord(
+        record_type="lifecycle",
         subject_uid=revision_uid,
-        actor="reviewer",
-        event_type=LifecycleEventType.REVISION_APPROVED,
-        from_state="in_review",
-        to_state="approved",
-        workflow_revision_uid="WF-1",
-        review_package_uid="RP-1",
+        actor_uid="018f0000-0000-7000-8000-000000000013",
+        actor_type="human",
+        fields=(
+            SemanticField.from_value("/event_type", LifecycleEventType.REVISION_APPROVED),
+            SemanticField.from_value("/from_state", "in_review"),
+            SemanticField.from_value("/to_state", "approved"),
+            SemanticField.from_value(
+                "/workflow_revision_uid",
+                "018f0000-0000-7000-8000-000000000012",
+            ),
+            SemanticField.from_value(
+                "/review_package_uid",
+                "018f0000-0000-7000-8000-000000000014",
+            ),
+        ),
         occurred_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     result = LifecycleProjector.project("draft", (submitted, approved))
     assert result.status is ProjectionStatus.APPROVED
-    conflict = approved.model_copy(update={"from_state": "draft"})
+    conflict = approved.model_copy(
+        update={
+            "fields": tuple(
+                SemanticField.from_value("/from_state", "draft")
+                if item.path == "/from_state"
+                else item
+                for item in approved.fields
+            )
+        }
+    )
     assert LifecycleProjector.project("draft", (submitted, conflict)).status is ProjectionStatus.INDETERMINATE
+
+
+def test_canonical_models_round_trip_through_frozen_schemas() -> None:
+    catalog = SchemaCatalog()
+    logical = LogicalObject(namespace="demo", human_key="REQ-1", kind="requirement")
+    revision = Revision(
+        object_uid=logical.entity_uid,
+        revision_number=1,
+        human_key=logical.human_key,
+        kind=logical.kind,
+        fields=(SemanticField.from_value("/statement", "shall reconnect"),),
+        provenance_origin=ProvenanceKind.AUTHORED,
+    )
+    relation = RelationAssertion(
+        predicate="verifies",
+        core_role=CoreRelationRole.VERIFIES,
+        source=RelationEndpoint(binding=BindingMode.LOGICAL, object_uid=logical.entity_uid),
+        target=RelationEndpoint(
+            binding=BindingMode.PINNED,
+            object_uid=logical.entity_uid,
+            revision_uid=revision.revision_uid,
+        ),
+        scope="demo",
+        provenance_kind=ProvenanceKind.ASSERTED,
+        formal_trace_categories=("verification",),
+    )
+    record = LifecycleRecord(
+        record_type="lifecycle",
+        subject_uid=revision.revision_uid,
+        actor_uid="018f0000-0000-7000-8000-000000000020",
+        actor_type="human",
+        fields=(SemanticField.from_value("/to_state", "approved"),),
+    )
+    for schema_name, model in (
+        ("logical-object.schema.json", logical),
+        ("revision.schema.json", revision),
+        ("relation-assertion.schema.json", relation),
+        ("immutable-record.schema.json", record),
+    ):
+        catalog.validate(schema_name, model.model_dump(mode="json", exclude_none=True))
 
 
 def test_gate_dataset_meets_the_baseline_shape() -> None:
