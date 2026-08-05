@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://lesr.dev/schemas/v1/relation-type.schema.json",
+  "title": "Relation Type Revision", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "relation_type_uid", "revision_uid", "predicate", "core_role", "source_kind_or_facet", "target_kind_or_facet", "allowed_bindings", "default_binding", "workflow_revision_uid", "formal_trace_categories", "content_hash"],
+  "properties": {
+    "schema_version": {"const": "1.0"}, "resource_type": {"const": "relation_type_revision"},
+    "relation_type_uid": {"$ref": "common.schema.json#/$defs/uuid7"}, "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "predicate": {"type": "string", "minLength": 1}, "core_role": {"type": "string", "minLength": 1},
+    "source_kind_or_facet": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "target_kind_or_facet": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "allowed_bindings": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["logical", "pinned", "fragment", "external"]}},
+    "default_binding": {"enum": ["logical", "pinned", "fragment", "external"]},
+    "workflow_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "formal_trace_categories": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "replaceable": {"type": "boolean"}, "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  }
+}

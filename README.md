@@ -1,11 +1,12 @@
-# LESR runtime 0.5.0a2 — Design Baseline v1.0
+# LESR runtime 1.0.0 (reconstruction in progress)
 
 Local Engineering Specification Runtime is a Git-backed local semantic runtime
 for engineering specifications. `LESR_Solution_Design_Baseline_v1.0/` is the
 requirements authority and `docs/LESR_Codex_Construction_Spec_v1.0.md` is the
 frozen implementation contract. Runtime maturity and design-baseline version are
-deliberately separate: `0.5.0a2` is an audit-remediation candidate, not a claim
-of production readiness or external certification.
+deliberately separate. The 0.5 recovery point is `runtime-0.5.0a2`; this branch
+implements the Gate 0–7 product contract and does not claim release qualification
+until every versioned Gate report is `PASS`.
 
 The v1 runtime separates Logical Objects, immutable Revisions and Records,
 versioned Relation Assertions, typed rules, explicit Evaluation Context,
@@ -44,7 +45,7 @@ lesr projection rebuild PROJECT
 lesr mcp serve PROJECT
 ```
 
-Human approval signing is deliberately CLI-only. Trusted public keys and scoped
+Human approval signing remains interactive and unavailable to MCP/AI. Trusted public keys and scoped
 Delegation Grants are established through the one-time `bootstrap` command; an
 optional signed governance bundle installs the initial Rule/Profile model, followed
 by the separately signed `init-configuration` command. Request-supplied trust records
@@ -65,8 +66,8 @@ migration tool. The untouched MVP is recoverable at Git tag
 the disposable prototype package has been removed after its invariant tests were
 moved into the production suite.
 
-P6 interoperability, UI, Chinese-specific tokenization, general plugin sandbox,
-SHACL/Rego execution and Claude Code re-validation remain explicit deferred work.
+P3 interoperability, multi-user service operation, Chinese-specific tokenization,
+general plugin sandbox, and SHACL/Rego execution remain explicit deferred work.
 
 Local rights-cleared PDF/Markdown import only creates reviewable Workspace
 candidates with page/section provenance. Encrypted or restricted PDFs are

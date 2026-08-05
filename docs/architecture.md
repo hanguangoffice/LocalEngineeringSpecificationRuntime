@@ -1,8 +1,24 @@
-# LESR MVP Architecture
+# LESR 1.0 architecture status
 
-> **SUPERSEDED:** 本文仅描述可从 `legacy-mvp-v0.1.0` 恢复的 YAML MVP。
-> v1 架构以 `LESR_Codex_Construction_Spec_v1.0.md` 和新版基线为准。
+LESR is a local, single-repository, single-user semantic engineering runtime.
+Git commit trees are canonical authority; SQLite/FTS5 and the task database are
+rebuildable local runtime state. Domain services mediate every authoritative write.
+CLI, MCP, and Web are adapters to one Capability Descriptor and do not embed a
+second policy evaluator.
 
-YAML is the Git-managed fact source. SQLite is a rebuildable FTS5 index.
-Domain services mediate all writes and append audit records. CLI and MCP are
-transport adapters; neither embeds business rules nor directly writes SQL.
+The 0.5 operation-queue workspace and shallow relation validation are superseded.
+The 1.0 dependency order is: frozen contracts; Profile semantic kernel; real
+Working Copy and Candidate State; immutable Graph Snapshot and pure evaluation;
+semantic rebase/reconciliation; review/approval/baseline governance; operations;
+then the local Web product.
+
+Status words are intentionally non-interchangeable:
+
+- **Architecture Validated**: an experiment supports a design decision.
+- **Feature Implemented**: production code and focused tests exist.
+- **Integrated**: every authority boundary consumes the same implementation.
+- **Release Gate Passed**: the versioned Gate report and all required suites pass.
+
+Earlier P1–P5 prototype reports are architectural evidence only. In particular,
+Bounded Path, Aggregate, Context completeness, Formal Trace, and client probes are
+not release claims unless their corresponding 1.0 Gate report is `PASS`.

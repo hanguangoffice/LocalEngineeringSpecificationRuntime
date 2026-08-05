@@ -19,6 +19,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
+from lesr.domain.catalog import RepositoryManifest, default_repository_manifest
 from lesr.domain.profiles import ProfileCompiler, ProfileRevision
 from lesr.domain.rules import (
     EnforcementEffect,
@@ -231,11 +232,38 @@ class GitCanonicalRepository:
             self._git("config", "user.email", "lesr-runtime@invalid.local")
         existing = self._try_git("rev-parse", "--verify", self.CANONICAL_REF)
         if existing is not None:
+            self.require_v1_manifest(existing)
             return existing
-        tree = self._git("mktree", input_text="")
+        manifest = default_repository_manifest().model_dump(mode="json")
+        blob = self._git(
+            "hash-object",
+            "-w",
+            "--stdin",
+            input_bytes=(canonical_json(manifest) + "\n").encode("utf-8"),
+        )
+        tree = self._git(
+            "mktree",
+            input_bytes=f"100644 blob {blob}\t.repository-manifest.json\n".encode("ascii"),
+        )
         commit = self._commit_tree(tree, (), "Initialize LESR canonical state")
         self._git("update-ref", self.CANONICAL_REF, commit)
         return commit
+
+    def require_v1_manifest(self, commit: str | None = None) -> dict[str, Any]:
+        """Reject pre-1.0 and malformed repositories at the authority boundary."""
+
+        selected = commit or self.current_commit()
+        value = self.read_json(selected, ".repository-manifest.json")
+        if value is None:
+            raise IntegrityError(
+                "LESR-MANIFEST-MISSING: 0.5 repositories are incompatible with runtime 1.0"
+            )
+        try:
+            self.schemas.validate("repository-manifest.schema.json", value)
+            manifest = RepositoryManifest.model_validate(value)
+        except (JsonSchemaValidationError, ValueError) as error:
+            raise IntegrityError(f"LESR-MANIFEST-INVALID: {error}") from error
+        return manifest.model_dump(mode="json")
 
     def current_commit(self) -> str:
         return self._git("rev-parse", "--verify", self.CANONICAL_REF)

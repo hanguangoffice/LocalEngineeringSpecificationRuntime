@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://lesr.dev/schemas/v1/workflow.schema.json",
+  "title": "Workflow Revision", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "workflow_uid", "revision_uid", "states", "initial_state", "transitions", "content_hash"],
+  "properties": {
+    "schema_version": {"const": "1.0"}, "resource_type": {"const": "workflow_revision"},
+    "workflow_uid": {"$ref": "common.schema.json#/$defs/uuid7"}, "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "states": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "initial_state": {"type": "string", "minLength": 1},
+    "transitions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from_state", "to_state", "roles", "guards", "evidence_kinds"], "properties": {"from_state": {"type": "string"}, "to_state": {"type": "string"}, "roles": {"type": "array", "items": {"type": "string"}}, "guards": {"type": "array", "items": {"type": "string"}}, "evidence_kinds": {"type": "array", "items": {"type": "string"}}}}},
+    "replaceable": {"type": "boolean"}, "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  }
+}

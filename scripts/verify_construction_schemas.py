@@ -9,34 +9,13 @@ from jsonschema import FormatChecker
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 
+from lesr.domain.catalog import SCHEMA_CATALOG
+
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas" / "v1"
-REQUIRED_SCHEMAS = {
-    "applied-change.schema.json",
-    "approval-attestation.schema.json",
-    "audit-anchor.schema.json",
-    "baseline-manifest.schema.json",
-    "canonical-resource.schema.json",
-    "common.schema.json",
-    "configuration.schema.json",
-    "context-contract.schema.json",
-    "delegation-grant.schema.json",
-    "domain-error.schema.json",
-    "immutable-record.schema.json",
-    "logical-object.schema.json",
-    "profile.schema.json",
-    "relation-assertion.schema.json",
-    "relation-identity.schema.json",
-    "review-package.schema.json",
-    "revision.schema.json",
-    "rule-definition.schema.json",
-    "semantic-transaction.schema.json",
-    "provenance.schema.json",
-    "trusted-actor.schema.json",
-    "validation-finding.schema.json",
-    "validation-run.schema.json",
-    "workspace.schema.json",
-}
+
+
+REQUIRED_SCHEMAS = set(SCHEMA_CATALOG)
 
 
 def load_schemas() -> dict[Path, dict[str, Any]]:

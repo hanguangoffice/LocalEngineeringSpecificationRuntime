@@ -61,6 +61,16 @@ class DomainErrorContract:
     suggested_capability: str | None = None
     correlation_id: str = field(default_factory=uuid7_candidate)
 
+    def __post_init__(self) -> None:
+        if self.suggested_capability is not None:
+            from lesr.domain.catalog import CAPABILITIES
+
+            names = {item.name for item in CAPABILITIES}
+            if self.suggested_capability not in names:
+                raise ValueError(
+                    f"unknown suggested capability: {self.suggested_capability}"
+                )
+
 
 @dataclass(frozen=True, slots=True)
 class DomainResult:
@@ -407,7 +417,7 @@ class InMemoryDomainService:
                 "expected base is stale",
                 (request.expected_base, self.base),
                 retryable=True,
-                suggested="rebase_workspace",
+                suggested="workspace.rebase",
             )
         required = {"review_package_hash", "approval_uid"}
         if not required <= request.operation.keys():
@@ -416,7 +426,7 @@ class InMemoryDomainService:
                 ErrorCategory.AUTHORIZATION,
                 "apply requires a review package hash and approval",
                 (request.workspace_uid,),
-                suggested="review",
+                suggested="workspace.submit",
             )
         result = {
             "workspace_uid": request.workspace_uid,
@@ -458,7 +468,7 @@ class InMemoryDomainService:
                 "task is still running",
                 (task_uid,),
                 retryable=True,
-                suggested="task_status",
+                suggested="repository.health",
             )
         return DomainResult(asdict(task))
 
@@ -471,7 +481,7 @@ class InMemoryDomainService:
                 ErrorCategory.NOT_FOUND,
                 "workspace does not exist",
                 (request.workspace_uid,),
-                suggested="open_workspace",
+                suggested="workspace.open",
             )
         missing = [
             name
