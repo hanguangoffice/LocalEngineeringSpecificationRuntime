@@ -13,7 +13,7 @@
     "rule_revision_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
     "subject_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
     "subject_revision_uid":{"oneOf":[{"$ref":"common.schema.json#/$defs/uuid7"},{"type":"null"}]},
-    "outcome":{"enum":["fail","indeterminate","evaluator_error","not_evaluated"]},
+    "outcome":{"enum":["fail","indeterminate","suppressed_by_deviation","evaluator_error","not_evaluated"]},
     "enforcement":{"enum":["allow","allow_with_observation","require_acknowledgement","require_review","require_deviation","block_operation"]},
     "blocking":{"type":"boolean"},
     "status":{"enum":["open","resolved","suppressed_by_deviation"]},

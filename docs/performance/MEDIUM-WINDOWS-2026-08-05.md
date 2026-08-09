@@ -1,4 +1,4 @@
-# Medium performance measurement — Windows — 2026-08-05
+# Medium Layer-1 semantic-kernel measurement — Windows — 2026-08-05
 
 - Dataset: 10,000 Objects / 50,000 Revisions / 100,000 Relations.
 - Semantics: exact pinned Relation Type Revision, complete Formal Trace credit checks,
@@ -14,4 +14,6 @@
 This local machine has less RAM and an older Windows version than the frozen reference
 condition, so this result is conservative supporting evidence rather than a replacement
 for the Windows 11/32 GiB release record. Cross-platform functional gates run separately
-in CI. No rule, trace, configuration, or transaction feature was disabled.
+in CI. This is a Graph/Context kernel microbenchmark: it does **not** measure Git,
+Projection, Rule compilation, Review, Apply, signing, HTTP, or Baseline latency and must
+not be quoted as end-to-end product performance.

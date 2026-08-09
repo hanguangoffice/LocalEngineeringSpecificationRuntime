@@ -132,6 +132,8 @@ class ReviewPackage(FrozenModel):
     workspace_uid: str
     base_commit: str
     configuration_uid: str
+    result_configuration_uid: str
+    result_configuration_hash: str
     candidate_hash: str
     candidate_scope: tuple[str, ...]
     semantic_diff_hash: str
@@ -197,10 +199,7 @@ class GovernanceEvaluator:
             item.comment_hash
             for item in comments
             if item.package_hash == package.subject_hash
-            and item.comment_hash in package.comment_hashes
         }
-        if set(package.comment_hashes) != package_comments:
-            reasons.append("REVIEW_COMMENT_EVIDENCE_MISSING")
         if (
             package.review_policy.require_comment_resolution
             and not package_comments <= resolved_comments

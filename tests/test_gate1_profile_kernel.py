@@ -7,6 +7,7 @@ from lesr.domain.model import (
     CompositionMode,
     EffectiveModelCompiler,
     FacetDefinitionRevision,
+    FieldDefinition,
     KindDefinitionRevision,
     NormativeProfileRevision,
     ProfileContribution,
@@ -24,7 +25,7 @@ from lesr.domain.semantic import (
     SemanticField,
 )
 
-UIDS = [f"018f0000-0000-7000-8000-{index:012d}" for index in range(1, 20)]
+UIDS = [f"018f0000-0000-7000-8000-{index:012d}" for index in range(1, 40)]
 
 
 def kernel() -> tuple[
@@ -154,3 +155,60 @@ def test_lifecycle_projection_uses_exact_workflow_revision() -> None:
     result = WorkflowProjector.project(workflow, (record,))
     assert result.state == "approved"
     assert result.conflicts == ()
+
+
+def test_refine_cannot_relax_profile_owned_field_contract() -> None:
+    base = FacetDefinitionRevision(
+        revision_uid=UIDS[20],
+        name="timing",
+        authority=100,
+        fields=(
+            FieldDefinition(
+                path="/deadline_ms",
+                value_type="integer",
+                required=True,
+                maximum="100",
+            ),
+        ),
+    )
+    relaxed = base.model_copy(
+        update={
+            "revision_uid": UIDS[21],
+            "fields": (
+                FieldDefinition(
+                    path="/deadline_ms",
+                    value_type="integer",
+                    required=False,
+                    maximum="200",
+                ),
+            ),
+            "content_hash": "",
+        }
+    )
+    foundation = NormativeProfileRevision(
+        profile_revision_uid=UIDS[22],
+        layer=ProfileLayer.FOUNDATION,
+        authority=100,
+        contributions=(
+            ProfileContribution(
+                mode=CompositionMode.EXTEND,
+                definition_revision_uid=base.revision_uid,
+            ),
+        ),
+    )
+    project = NormativeProfileRevision(
+        profile_revision_uid=UIDS[23],
+        layer=ProfileLayer.PROJECT,
+        authority=200,
+        contributions=(
+            ProfileContribution(
+                mode=CompositionMode.REFINE,
+                definition_revision_uid=relaxed.revision_uid,
+                target_revision_uid=base.revision_uid,
+            ),
+        ),
+    )
+    model = EffectiveModelCompiler().compile(
+        (foundation, project), (base, relaxed)
+    )
+    assert [item.code for item in model.conflicts] == ["LESR-REFINE-NOT-NARROWER"]

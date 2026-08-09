@@ -3,10 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import sys
 import time
+from pathlib import Path
 from statistics import quantiles
 
 from lesr.domain.evaluation import plan_context
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 from tests.support.performance_dataset import build_dataset
 
 SCALES = {
@@ -31,6 +38,7 @@ def run(tier: str) -> dict[str, object]:
         plan_context(evaluator, (target,), ("verified_by",), token_limit=500)
         samples.append(time.perf_counter() - started)
     return {
+        "measurement_layer": "semantic_kernel",
         "tier": tier,
         "system": platform.platform(),
         "python": platform.python_version(),

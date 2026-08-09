@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import ValidationError
@@ -45,9 +47,18 @@ from lesr.domain.evaluation import (
     RuleOperator,
     SemanticEvaluator,
     TruthValue,
+    ValidationTarget,
     analyze_impact,
     evaluate_constraint,
+    evaluate_path,
     plan_context,
+)
+from lesr.domain.governance import (
+    OperationDecision,
+    OperationDisposition,
+    ValidationFinding,
+    ValidationObservation,
+    ValidationRun,
 )
 from lesr.domain.merge import (
     ConflictResolution,
@@ -61,6 +72,7 @@ from lesr.domain.model import (
     EffectiveModel,
     EffectiveModelCompiler,
     FacetDefinitionRevision,
+    FieldDefinition,
     KindDefinitionRevision,
     NormativeProfileRevision,
     RelationTypeRevision,
@@ -81,13 +93,10 @@ from lesr.domain.review import (
     prepare_baseline,
 )
 from lesr.domain.rules import (
-    AggregateConstraint,
     EnforcementEffect,
     EvaluationEnvironment,
-    FieldRequired,
     FieldSymbol,
     Quantity,
-    RelationMinimum,
     RuleCompiler,
     RuleDefinition,
     RuleOutcome,
@@ -98,13 +107,13 @@ from lesr.domain.rules import (
 )
 from lesr.domain.semantic import (
     BindingMode,
+    ConfigurationSnapshot,
     Fragment,
     ImmutableRecord,
     ProvenanceKind,
     RelationAssertion,
     Revision,
     SemanticField,
-    document_hash,
     semantic_hash,
     uuid7_candidate,
 )
@@ -331,6 +340,16 @@ class LocalRuntimeService:
     ) -> DomainResult:
         try:
             configuration = self._configuration(configuration_uid)
+            model = self._effective_model(configuration_uid)
+            baselines = tuple(
+                str(item["baseline_uid"])
+                for item in self.documents
+                if item.get("resource_type") == "baseline_manifest"
+                and (
+                    item.get("configuration_uid") == configuration_uid
+                    or start_uid in set(item.get("revision_uids", ()))
+                )
+            )
             evaluator = self._evaluator(
                 configuration_uid, self._parse_evaluation_time(evaluation_time)
             )
@@ -339,7 +358,10 @@ class LocalRuntimeService:
                 (start_uid,),
                 maximum_depth=max_depth,
                 configuration_complete=configuration.get("closure_status") == "complete",
+                profile_conflicts=tuple(item.code for item in model.conflicts),
+                affected_rule_uids=model.rule_revision_uids,
                 affected_configuration_uids=(configuration_uid,),
+                affected_baseline_uids=baselines,
                 affected_deviation_uids=tuple(
                     str(item)
                     for item in configuration.get("active_deviation_revision_uids", ())
@@ -386,6 +408,9 @@ class LocalRuntimeService:
                 tuple(sorted(set(target_uids) | set(policy.invariant_object_uids))),
                 policy.mandatory_predicates,
                 token_limit=max(1, token_budget // 256),
+                conditional_predicates=policy.conditional_predicates,
+                mandatory_formal_trace=policy.mandatory_formal_trace,
+                forbidden_sensitivities=policy.forbidden_sensitivities,
             )
             self.task_store.put_artifact(
                 context.bundle_hash,
@@ -825,6 +850,9 @@ class LocalRuntimeService:
                 (submission.candidate.revisions[0].object_uid,),
                 selected_review_context[0].mandatory_predicates,
                 token_limit=500,
+                conditional_predicates=selected_review_context[0].conditional_predicates,
+                mandatory_formal_trace=selected_review_context[0].mandatory_formal_trace,
+                forbidden_sensitivities=selected_review_context[0].forbidden_sensitivities,
             )
             self.task_store.put_artifact(
                 context.bundle_hash,
@@ -841,6 +869,9 @@ class LocalRuntimeService:
                 maximum_depth=int(request.operation.get("maximum_depth", 3)),
             )
             validation = self._validate_submission(submission, evaluator)
+            result_configuration = self._next_configuration(
+                submission, evaluation_time=evaluation_time
+            )
             policy = self._review_policy(
                 submission.workspace.configuration_uid, "apply_transaction"
             )
@@ -848,6 +879,8 @@ class LocalRuntimeService:
                 workspace_uid=request.workspace_uid,
                 base_commit=submission.workspace.base_commit,
                 configuration_uid=submission.workspace.configuration_uid,
+                result_configuration_uid=result_configuration.configuration_uid,
+                result_configuration_hash=result_configuration.configuration_hash,
                 candidate_hash=submission.candidate.candidate_hash,
                 candidate_scope=tuple(item.object_uid for item in submission.candidate.revisions),
                 semantic_diff_hash=submission.semantic_diff.diff_hash,
@@ -872,6 +905,7 @@ class LocalRuntimeService:
                     "context_bundle": context.model_dump(mode="json"),
                     "impact_report": impact.model_dump(mode="json"),
                     "validation": validation,
+                    "result_configuration": result_configuration.model_dump(mode="json"),
                 }
                 self.repository.create_checkpoint(
                     request.workspace_uid,
@@ -893,6 +927,7 @@ class LocalRuntimeService:
                     "impact_report": impact.model_dump(mode="json"),
                     "validation": validation,
                     "review_package": package.model_dump(mode="json"),
+                    "result_configuration": result_configuration.model_dump(mode="json"),
                 }
             )
         except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
@@ -970,6 +1005,9 @@ class LocalRuntimeService:
                 base_commit=request.expected_base,
                 candidate=submission.candidate,
                 review_package=package,
+                result_configuration=self.review_evidence[package_uid][
+                    "result_configuration"
+                ],
                 approvals=approvals,
                 trust=trust,
                 comments=comments,
@@ -1009,6 +1047,7 @@ class LocalRuntimeService:
                     "transaction_hash": result.transaction_hash,
                     "idempotent_replay": result.idempotent_replay,
                     "projection_stale": result.projection_stale,
+                    "configuration_uid": result.configuration_uid,
                     "governance": decision.model_dump(mode="json"),
                 }
             )
@@ -1040,31 +1079,19 @@ class LocalRuntimeService:
             comment = ReviewComment.model_validate(
                 dict(request.operation["comment"]) | {"package_hash": package.subject_hash}
             )
-            replacement = ReviewPackage.model_validate(
-                package.model_dump(mode="json")
-                | {
-                    "comment_hashes": sorted(
-                        (*package.comment_hashes, comment.comment_hash)
-                    ),
-                    "subject_hash": "",
-                    "package_hash": "",
-                }
-            )
             if not request.dry_run:
-                self.reviews.pop(package_uid)
-                self.reviews[replacement.package_uid] = replacement
                 self.review_records.setdefault(request.workspace_uid, []).append(
                     comment.model_dump(mode="json")
                 )
                 self._checkpoint_workspace(
                     self.workspaces[request.workspace_uid],
-                    review_package=replacement,
+                    review_package=package,
                 )
             return DomainResult(
                 {
                     "comment": comment.model_dump(mode="json"),
-                    "review_package": replacement.model_dump(mode="json"),
-                    "approvals_invalidated": True,
+                    "review_package": package.model_dump(mode="json"),
+                    "approvals_invalidated": False,
                 }
             )
         except (KeyError, TypeError, ValueError, ValidationError) as error:
@@ -1147,6 +1174,9 @@ class LocalRuntimeService:
                 tuple(item.object_uid for item in revisions),
                 selected_context[0].mandatory_predicates,
                 token_limit=max(1, len(revisions) + len(evaluator.snapshot.relations)),
+                conditional_predicates=selected_context[0].conditional_predicates,
+                mandatory_formal_trace=selected_context[0].mandatory_formal_trace,
+                forbidden_sensitivities=selected_context[0].forbidden_sensitivities,
             )
             semantic_diff = {
                 "schema_version": "1.0",
@@ -1162,6 +1192,10 @@ class LocalRuntimeService:
                 workspace_uid=request.workspace_uid,
                 base_commit=request.expected_base,
                 configuration_uid=configuration_uid,
+                result_configuration_uid=configuration_uid,
+                result_configuration_hash=ConfigurationSnapshot.model_validate(
+                    configuration
+                ).configuration_hash,
                 candidate_hash=candidate.candidate_hash,
                 candidate_scope=(configuration_uid,),
                 semantic_diff_hash=str(semantic_diff["diff_hash"]),
@@ -1193,6 +1227,9 @@ class LocalRuntimeService:
                 "context_bundle": context.model_dump(mode="json"),
                 "impact_report": impact.model_dump(mode="json"),
                 "validation": validation,
+                "result_configuration": ConfigurationSnapshot.model_validate(
+                    configuration
+                ).model_dump(mode="json"),
             }
             if not request.dry_run:
                 self.reviews[package.package_uid] = package
@@ -2282,10 +2319,57 @@ class LocalRuntimeService:
             transition = transitions[0]
             if transition.roles and not actor_roles.intersection(transition.roles):
                 raise PermissionError("actor lacks the role required by Lifecycle Workflow")
-            if transition.guards or transition.evidence_kinds:
-                raise ValueError(
-                    "Lifecycle transition guards/evidence are not satisfied by the Edit Operation"
+            requests = tuple(
+                item
+                for item in copy.edit_log
+                if item.operation_type.value == "request_lifecycle_transition"
+                and item.value == copy.requested_lifecycle_state
+            )
+            if len(requests) != 1:
+                raise ValueError("Lifecycle transition has no unique Edit Operation evidence")
+            request = requests[0]
+            evidence_documents = tuple(
+                value
+                for value in self.documents
+                if any(
+                    value.get(field) in set(request.evidence_uids)
+                    for field in (
+                        "revision_uid",
+                        "record_uid",
+                        "finding_uid",
+                        "provenance_uid",
+                    )
                 )
+            )
+            evidence_kinds = {
+                str(value.get("kind") or value.get("record_type") or value.get("resource_type"))
+                for value in evidence_documents
+            }
+            missing_evidence = set(transition.evidence_kinds) - evidence_kinds
+            if missing_evidence:
+                raise ValueError(
+                    "Lifecycle transition is missing evidence: "
+                    + ", ".join(sorted(missing_evidence))
+                )
+            fields = {self._rule_path(item.path): item.value for item in copy.draft_fields}
+            for guard in transition.guards:
+                if guard.startswith("field:"):
+                    expression = guard.removeprefix("field:")
+                    path, separator, expected = expression.partition("=")
+                    actual = fields.get(self._rule_path(path))
+                    satisfied = actual is not None and (
+                        not separator or str(actual) == expected
+                    )
+                elif guard.startswith("attestation:"):
+                    satisfied = guard.removeprefix("attestation:") in set(
+                        request.human_attestations
+                    )
+                elif guard.startswith("evidence:"):
+                    satisfied = guard.removeprefix("evidence:") in evidence_kinds
+                else:
+                    raise ValueError(f"unsupported deterministic Workflow guard: {guard}")
+                if not satisfied:
+                    raise ValueError(f"Lifecycle Workflow guard is not satisfied: {guard}")
 
     def _configuration(self, configuration_uid: str) -> dict[str, Any]:
         try:
@@ -2298,6 +2382,55 @@ class LocalRuntimeService:
         except StopIteration as error:
             raise KeyError(f"configuration is not available: {configuration_uid}") from error
 
+    def _next_configuration(
+        self, submission: Submission, *, evaluation_time: datetime
+    ) -> ConfigurationSnapshot:
+        """Resolve the exact post-Apply configuration before review is signed."""
+
+        current = ConfigurationSnapshot.model_validate(
+            self._configuration(submission.workspace.configuration_uid)
+        )
+        revision_object = {
+            str(item["revision_uid"]): str(item["object_uid"])
+            for item in self.documents
+            if item.get("resource_type") == "revision"
+        }
+        selected_revisions = {
+            revision_object[uid]: uid
+            for uid in current.revision_uids
+            if uid in revision_object
+        }
+        for revision in submission.candidate.revisions:
+            selected_revisions[revision.object_uid] = revision.revision_uid
+
+        relation_assertion = {
+            str(item["relation_revision_uid"]): str(item["assertion_uid"])
+            for item in self.documents
+            if item.get("resource_type") == "relation_assertion_revision"
+        }
+        selected_relations = {
+            relation_assertion[uid]: uid
+            for uid in current.relation_revision_uids
+            if uid in relation_assertion
+        }
+        for relation in submission.candidate.relation_revisions:
+            selected_relations[relation.assertion_uid] = relation.relation_revision_uid
+
+        return ConfigurationSnapshot(
+            parent_configuration_uid=current.configuration_uid,
+            git_commit=submission.workspace.base_commit,
+            revision_uids=tuple(sorted(selected_revisions.values())),
+            relation_revision_uids=tuple(sorted(selected_relations.values())),
+            profile_revision_uids=current.profile_revision_uids,
+            active_deviation_revision_uids=current.active_deviation_revision_uids,
+            variant=current.variant,
+            valid_at=current.valid_at,
+            effective_model_hash=current.effective_model_hash,
+            closure_status=current.closure_status,
+            closure_reasons=current.closure_reasons,
+            created_at=evaluation_time,
+        )
+
     def _validate_submission(
         self,
         submission: Any,
@@ -2306,58 +2439,129 @@ class LocalRuntimeService:
         validation_run_uid: str | None = None,
         completed_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Compile and evaluate the exact Configuration rule set against one snapshot."""
+        """Compile once from the Effective Model and decide the requested operation."""
 
         configuration = self._configuration(submission.workspace.configuration_uid)
         model = self._effective_model(submission.workspace.configuration_uid)
-        selected_rule_uids = set(model.rule_revision_uids)
-        rule_values = [
-            value
-            for value in self.documents
-            if value.get("resource_type") == "rule_definition_revision"
-            and value.get("rule_revision_uid") in selected_rule_uids
-        ]
-        symbols: dict[str, type[Any] | FieldSymbol] = {}
-        for revision in submission.candidate.revisions:
-            for field in revision.fields:
-                path = field.path.removeprefix("/").replace("/", ".")
-                quantity = self._quantity(field.value)
-                if quantity is not None:
-                    symbols[path] = FieldSymbol(path, "quantity", quantity.unit)
-                else:
-                    symbols[path] = type(field.value)
+        evaluation_time = completed_at or evaluator.snapshot.evaluation_time
+        run_uid = validation_run_uid or uuid7_candidate()
         units = UnitRegistry(
-            (
-                UnitDefinition("s", "time", Decimal(1)),
-                UnitDefinition("ms", "time", Decimal("0.001")),
-                UnitDefinition("us", "time", Decimal("0.000001")),
-                UnitDefinition("m", "length", Decimal(1)),
-                UnitDefinition("mm", "length", Decimal("0.001")),
-                UnitDefinition("V", "voltage", Decimal(1)),
+            tuple(
+                UnitDefinition(item.unit, item.dimension, Decimal(item.scale_to_base))
+                for item in model.unit_registry
             )
         )
-        compiler = RuleCompiler(symbols, units)
-        findings: list[dict[str, Any]] = []
-        for raw_rule in sorted(rule_values, key=lambda item: str(item["rule_revision_uid"])):
+        schemas = self._effective_kind_schemas(model)
+        for revision in submission.candidate.revisions:
+            self._validate_revision_against_kind(revision, schemas, units)
+
+        selected_rule_uids = set(model.rule_revision_uids)
+        rule_values = sorted(
+            (
+                value
+                for value in self.documents
+                if value.get("resource_type") == "rule_definition_revision"
+                and value.get("rule_revision_uid") in selected_rule_uids
+            ),
+            key=lambda item: str(item["rule_revision_uid"]),
+        )
+        compiled_rules = []
+        compilation_failures: list[tuple[RuleDefinition, tuple[str, ...]]] = []
+        for raw_rule in rule_values:
             rule = RuleDefinition.model_validate(raw_rule)
-            compiled = compiler.compile(rule)
+            symbols = self._symbols_for_kind(rule.target_type, rule.target_selector, schemas)
+            compiled = RuleCompiler(symbols, units).compile(rule)
             if not compiled.passed or compiled.ast is None:
-                findings.append(
-                    {
-                        "rule_revision_uid": rule.rule_revision_uid,
-                        "subject_uid": submission.workspace.workspace_uid,
-                        "outcome": RuleOutcome.EVALUATOR_ERROR,
-                        "enforcement": EnforcementEffect.BLOCK_OPERATION,
-                        "explanation": [item.code for item in compiled.diagnostics],
-                    }
+                compilation_failures.append(
+                    (rule, tuple(item.code for item in compiled.diagnostics))
                 )
-                continue
-            predicates = {
-                str(predicate)
-                for constraint in compiled.ast.constraints
-                if (predicate := getattr(constraint, "predicate", None)) is not None
+            else:
+                compiled_rules.append((rule, compiled.ast))
+
+        observations: list[ValidationObservation] = []
+        findings: list[ValidationFinding] = []
+        for rule, diagnostics in compilation_failures:
+            finding_uid = self._stable_uuid7(
+                f"{run_uid}:{rule.rule_revision_uid}:compiler", evaluation_time
+            )
+            observations.append(
+                ValidationObservation(
+                    observation_uid=self._stable_uuid7(
+                        f"{finding_uid}:observation", evaluation_time
+                    ),
+                    rule_uid=rule.rule_uid,
+                    rule_revision_uid=rule.rule_revision_uid,
+                    target_uid=submission.workspace.workspace_uid,
+                    outcome=RuleOutcome.EVALUATOR_ERROR,
+                    enforcement=EnforcementEffect.BLOCK_OPERATION,
+                    explanation=list(diagnostics),
+                )
+            )
+            findings.append(
+                ValidationFinding(
+                    finding_uid=finding_uid,
+                    validation_run_uid=run_uid,
+                    rule_uid=rule.rule_uid,
+                    rule_revision_uid=rule.rule_revision_uid,
+                    subject_uid=submission.workspace.workspace_uid,
+                    outcome=RuleOutcome.EVALUATOR_ERROR,
+                    enforcement=EnforcementEffect.BLOCK_OPERATION,
+                    blocking=True,
+                    explanation=list(diagnostics),
+                    created_at=evaluation_time,
+                )
+            )
+
+        for revision in submission.candidate.revisions:
+            working_copy = next(
+                (
+                    item
+                    for item in submission.workspace.working_copies
+                    if item.object_uid == revision.object_uid
+                ),
+                None,
+            )
+            transition_operations = tuple(
+                item
+                for item in (working_copy.edit_log if working_copy is not None else ())
+                if item.operation_type.value == "request_lifecycle_transition"
+            )
+            evidence_uids = {
+                uid for item in transition_operations for uid in item.evidence_uids
             }
-            for revision in submission.candidate.revisions:
+            evidence_kinds = {
+                evaluator.nodes[uid].revision.kind
+                for uid in evidence_uids
+                if uid in evaluator.nodes
+            }
+            attestations = {
+                value
+                for item in transition_operations
+                for value in item.human_attestations
+            }
+            transition = (
+                (
+                    evaluator.nodes[revision.object_uid].lifecycle_state,
+                    str(transition_operations[-1].value),
+                )
+                if transition_operations and revision.object_uid in evaluator.nodes
+                else None
+            )
+            fields = {
+                self._rule_path(field.path): ValueCell.present(
+                    self._quantity(field.value) or field.value
+                )
+                for field in revision.fields
+            }
+            active_deviations = self._active_deviation_rules(
+                configuration, revision, compiled_rules, evaluation_time
+            )
+            for rule, ast in compiled_rules:
+                if ast.target_type.value != "revision" or ast.target_kind != revision.kind:
+                    continue
+                predicates = {
+                    item.predicate for item in ast.constraints if item.predicate is not None
+                }
                 relation_counts = {
                     predicate: evaluator.relation_count(
                         revision.object_uid,
@@ -2366,173 +2570,758 @@ class LocalRuntimeService:
                     )
                     for predicate in predicates
                 }
-                fields = {
-                    field.path.removeprefix("/").replace("/", "."): ValueCell.present(
-                        self._quantity(field.value) or field.value
+                relation_values = {
+                    predicate: self._relation_values(
+                        evaluator, revision.object_uid, predicate, ast.constraints
                     )
-                    for field in revision.fields
+                    for predicate in predicates
                 }
                 evaluated = evaluate_rule(
-                    compiled.ast,
+                    ast,
                     EvaluationEnvironment(
                         target_kind=revision.kind,
                         fields=fields,
                         relation_counts=relation_counts,
-                        operation="apply_candidate",
-                        active_deviation_rule_uids=frozenset(
-                            str(uid)
-                            for uid in configuration.get("active_deviation_rule_uids", ())
-                        ),
+                        relation_values=relation_values,
+                        operation="apply_transaction",
+                        active_deviation_rule_uids=frozenset(active_deviations),
+                        evidence_kinds=frozenset(evidence_kinds),
+                        lifecycle_transition=transition,
+                        human_attestations=frozenset(attestations),
                     ),
                     units,
                 )
                 semantic_results = []
-                constraint_environment = ConstraintEnvironment(
-                    target_uid=revision.object_uid,
-                    fields=tuple(
-                        (
-                            field.path.removeprefix("/").replace("/", "."),
-                            field.value,
-                        )
-                        for field in revision.fields
-                    ),
-                )
-                for constraint in compiled.ast.constraints:
-                    expression: ConstraintExpression | None = None
-                    if isinstance(constraint, FieldRequired):
-                        expression = ConstraintExpression(
-                            operator=RuleOperator.FIELD_REQUIRED,
-                            field_path=constraint.path,
-                        )
-                    elif isinstance(constraint, RelationMinimum):
-                        expression = ConstraintExpression(
-                            operator=(
-                                RuleOperator.FORMAL_TRACE
-                                if constraint.formal_trace_category is not None
-                                else RuleOperator.RELATION_CARDINALITY
+                for expression in ast.constraints:
+                    aggregate_values = self._aggregate_values(
+                        evaluator, revision.object_uid, expression
+                    )
+                    semantic_results.append(
+                        evaluate_constraint(
+                            evaluator,
+                            expression,
+                            ConstraintEnvironment(
+                                target_uid=revision.object_uid,
+                                fields=tuple(
+                                    (self._rule_path(item.path), item.value)
+                                    for item in revision.fields
+                                ),
+                                aggregate_values=aggregate_values,
+                                evidence_kinds=tuple(sorted(evidence_kinds)),
+                                lifecycle_transition=transition,
+                                human_attestations=tuple(sorted(attestations)),
                             ),
-                            predicate=constraint.predicate,
-                            direction=Direction(constraint.direction),
-                            binding=BindingMode(constraint.binding)
-                            if constraint.binding is not None
-                            else None,
-                            lifecycle_state=constraint.lifecycle_state,
-                            formal_trace_category=constraint.formal_trace_category,
-                            minimum=str(constraint.minimum),
                         )
-                    elif (
-                        isinstance(constraint, AggregateConstraint)
-                        and constraint.function == "count"
-                    ):
-                        count = evaluator.relation_count(
-                            revision.object_uid,
-                            predicate=constraint.predicate,
-                            direction=Direction.OUTGOING,
-                        )
-                        aggregate_environment = constraint_environment.model_copy(
-                            update={"aggregate_values": tuple("1" for _ in range(count))}
-                        )
-                        expression = ConstraintExpression(
-                            operator=RuleOperator.AGGREGATE_COUNT,
-                            expected=constraint.expected
-                            if isinstance(constraint.expected, int)
-                            else str(constraint.expected.value),
-                            comparison=constraint.comparison,
-                        )
-                        semantic_results.append(
-                            evaluate_constraint(evaluator, expression, aggregate_environment)
-                        )
-                        continue
-                    if expression is not None:
-                        semantic_results.append(
-                            evaluate_constraint(evaluator, expression, constraint_environment)
-                        )
-                # The graph-native evaluator refines constraints only after the
-                # typed rule pipeline has established applicability.  Otherwise
-                # a relation constraint could turn NOT_APPLICABLE into FAIL.
+                    )
                 if evaluated.outcome not in {
                     RuleOutcome.NOT_APPLICABLE,
                     RuleOutcome.INDETERMINATE,
+                    RuleOutcome.SUPPRESSED_BY_DEVIATION,
                 }:
-                    semantic_truths = {item.truth for item in semantic_results}
-                    if TruthValue.FALSE in semantic_truths:
+                    truths = {item.truth for item in semantic_results}
+                    if TruthValue.FALSE in truths:
                         evaluated = evaluated.__class__(
                             RuleOutcome.FAIL,
                             evaluated.applicability,
                             evaluated.constraint,
                             evaluated.enforcement,
                         )
-                    elif TruthValue.INDETERMINATE in semantic_truths:
+                    elif TruthValue.INDETERMINATE in truths:
                         evaluated = evaluated.__class__(
                             RuleOutcome.INDETERMINATE,
                             evaluated.applicability,
                             evaluated.constraint,
                             evaluated.enforcement,
                         )
-                if evaluated.outcome not in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
-                    findings.append(
-                        {
-                            "rule_revision_uid": rule.rule_revision_uid,
-                            "subject_uid": revision.revision_uid,
-                            "outcome": evaluated.outcome,
-                            "enforcement": evaluated.enforcement,
-                            "explanation": (
-                                [item.explanation for item in semantic_results]
-                                or [
-                                    evaluated.constraint.reason
-                                    if evaluated.constraint is not None
-                                    else evaluated.applicability.reason
-                                ]
-                            ),
-                        }
+                observation_uid = self._stable_uuid7(
+                    f"{run_uid}:{rule.rule_revision_uid}:{revision.revision_uid}:observation",
+                    evaluation_time,
+                )
+                explanation: Any = [item.explanation for item in semantic_results] or [
+                    evaluated.constraint.reason
+                    if evaluated.constraint is not None
+                    else evaluated.applicability.reason
+                ]
+                observations.append(
+                    ValidationObservation(
+                        observation_uid=observation_uid,
+                        rule_uid=rule.rule_uid,
+                        rule_revision_uid=rule.rule_revision_uid,
+                        target_uid=revision.object_uid,
+                        target_revision_uid=revision.revision_uid,
+                        outcome=evaluated.outcome,
+                        enforcement=evaluated.enforcement,
+                        explanation=explanation,
                     )
-        serialized = [
-            {
-                key: value.value if hasattr(value, "value") else value
-                for key, value in finding.items()
+                )
+                if evaluated.outcome in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
+                    continue
+                suppressed = evaluated.outcome is RuleOutcome.SUPPRESSED_BY_DEVIATION
+                finding_blocking = not suppressed and evaluated.enforcement in {
+                    EnforcementEffect.BLOCK_OPERATION,
+                    EnforcementEffect.REQUIRE_DEVIATION,
+                }
+                finding_uid = self._stable_uuid7(
+                    f"{run_uid}:{rule.rule_revision_uid}:{revision.revision_uid}:finding",
+                    evaluation_time,
+                )
+                findings.append(
+                    ValidationFinding(
+                        finding_uid=finding_uid,
+                        validation_run_uid=run_uid,
+                        rule_uid=rule.rule_uid,
+                        rule_revision_uid=rule.rule_revision_uid,
+                        subject_uid=revision.object_uid,
+                        subject_revision_uid=revision.revision_uid,
+                        outcome=evaluated.outcome,
+                        enforcement=evaluated.enforcement,
+                        blocking=finding_blocking,
+                        status="suppressed_by_deviation" if suppressed else "open",
+                        deviation_revision_uid=active_deviations.get(rule.rule_uid),
+                        explanation=explanation,
+                        created_at=evaluation_time,
+                    )
+                )
+
+        generic_targets: list[
+            tuple[
+                ValidationTarget,
+                str,
+                str,
+                str | None,
+                dict[str, ValueCell],
+                frozenset[str],
+                tuple[str, str] | None,
+                frozenset[str],
+            ]
+        ] = []
+        for relation in submission.candidate.relation_revisions:
+            generic_targets.append(
+                (
+                    ValidationTarget.RELATION,
+                    relation.predicate,
+                    relation.assertion_uid,
+                    relation.relation_revision_uid,
+                    {
+                        "predicate": ValueCell.present(relation.predicate),
+                        "source_binding": ValueCell.present(relation.source.binding.value),
+                        "target_binding": ValueCell.present(relation.target.binding.value),
+                        "provenance": ValueCell.present(relation.provenance_kind.value),
+                        "formal_trace_category_count": ValueCell.present(
+                            len(relation.formal_trace_categories)
+                        ),
+                    },
+                    frozenset(),
+                    None,
+                    frozenset(),
+                )
+            )
+        generic_targets.extend(
+            (
+                target_type,
+                kind,
+                target_uid,
+                None,
+                fields,
+                frozenset(),
+                None,
+                frozenset(),
+            )
+            for target_type, kind, target_uid, fields in (
+                (
+                    ValidationTarget.WORKSPACE,
+                    "workspace",
+                    submission.workspace.workspace_uid,
+                    {
+                        "state": ValueCell.present(submission.workspace.state.value),
+                        "working_copy_count": ValueCell.present(
+                            len(submission.workspace.working_copies)
+                        ),
+                        "candidate_revision_count": ValueCell.present(
+                            len(submission.candidate.revisions)
+                        ),
+                    },
+                ),
+                (
+                    ValidationTarget.CONFIGURATION,
+                    "configuration_snapshot",
+                    str(configuration["configuration_uid"]),
+                    {
+                        "closure_status": ValueCell.present(
+                            str(configuration.get("closure_status", "indeterminate"))
+                        ),
+                        "revision_count": ValueCell.present(
+                            len(configuration.get("revision_uids", ()))
+                        ),
+                        "relation_revision_count": ValueCell.present(
+                            len(configuration.get("relation_revision_uids", ()))
+                        ),
+                        "deviation_count": ValueCell.present(
+                            len(configuration.get("active_deviation_revision_uids", ()))
+                        ),
+                    },
+                ),
+                (
+                    ValidationTarget.ACTIVITY,
+                    "submit_review",
+                    submission.workspace.workspace_uid,
+                    {
+                        "evidence_count": ValueCell.present(
+                            sum(
+                                len(item.evidence_uids)
+                                for working_copy in submission.workspace.working_copies
+                                for item in working_copy.edit_log
+                            )
+                        ),
+                        "actor_uid": ValueCell.present(submission.workspace.actor_uid),
+                    },
+                ),
+                (
+                    ValidationTarget.OPERATION,
+                    "apply_transaction",
+                    submission.workspace.workspace_uid,
+                    {
+                        "operation": ValueCell.present("apply_transaction"),
+                        "risk_class": ValueCell.present("high"),
+                    },
+                ),
+            )
+        )
+        for copy in submission.workspace.working_copies:
+            if copy.requested_lifecycle_state is None:
+                continue
+            transition_operations = tuple(
+                item
+                for item in copy.edit_log
+                if item.operation_type.value == "request_lifecycle_transition"
+            )
+            transition_evidence_uids = frozenset(
+                uid for item in transition_operations for uid in item.evidence_uids
+            )
+            transition_evidence_kinds = frozenset(
+                str(
+                    value.get("kind")
+                    or value.get("record_type")
+                    or value.get("resource_type")
+                )
+                for value in self.documents
+                if any(
+                    value.get(field) in transition_evidence_uids
+                    for field in ("revision_uid", "record_uid", "finding_uid")
+                )
+            )
+            transition_attestations = frozenset(
+                value
+                for item in transition_operations
+                for value in item.human_attestations
+            )
+            current_state = (
+                evaluator.nodes[copy.object_uid].lifecycle_state
+                if copy.object_uid in evaluator.nodes
+                else self._initial_state_for_kind(copy.kind)
+            )
+            generic_targets.append(
+                (
+                    ValidationTarget.STATE_TRANSITION,
+                    copy.kind,
+                    copy.object_uid,
+                    copy.base_revision_uid,
+                    {
+                        "from_state": ValueCell.present(current_state),
+                        "to_state": ValueCell.present(copy.requested_lifecycle_state),
+                        "evidence_count": ValueCell.present(
+                            len(transition_evidence_uids)
+                        ),
+                        "attestation_count": ValueCell.present(
+                            len(transition_attestations)
+                        ),
+                    },
+                    transition_evidence_kinds,
+                    (current_state, copy.requested_lifecycle_state),
+                    transition_attestations,
+                )
+            )
+
+        for rule, ast in compiled_rules:
+            if ast.target_type is ValidationTarget.REVISION:
+                continue
+            for (
+                target_type,
+                target_kind,
+                target_uid,
+                target_revision_uid,
+                fields,
+                generic_evidence_kinds,
+                transition,
+                generic_attestations,
+            ) in generic_targets:
+                if target_type is not ast.target_type or target_kind != ast.target_kind:
+                    continue
+                evaluated = evaluate_rule(
+                    ast,
+                    EvaluationEnvironment(
+                        target_type=target_type,
+                        target_kind=target_kind,
+                        fields=fields,
+                        operation="apply_transaction",
+                        evidence_kinds=generic_evidence_kinds,
+                        lifecycle_transition=transition,
+                        human_attestations=generic_attestations,
+                    ),
+                    units,
+                )
+                observation_uid = self._stable_uuid7(
+                    f"{run_uid}:{rule.rule_revision_uid}:{target_uid}:observation",
+                    evaluation_time,
+                )
+                generic_explanation: Any = (
+                    evaluated.constraint.reason
+                    if evaluated.constraint is not None
+                    else evaluated.applicability.reason
+                )
+                observations.append(
+                    ValidationObservation(
+                        observation_uid=observation_uid,
+                        rule_uid=rule.rule_uid,
+                        rule_revision_uid=rule.rule_revision_uid,
+                        target_uid=target_uid,
+                        target_revision_uid=target_revision_uid,
+                        outcome=evaluated.outcome,
+                        enforcement=evaluated.enforcement,
+                        explanation=generic_explanation,
+                    )
+                )
+                if evaluated.outcome in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
+                    continue
+                finding_uid = self._stable_uuid7(
+                    f"{run_uid}:{rule.rule_revision_uid}:{target_uid}:finding",
+                    evaluation_time,
+                )
+                findings.append(
+                    ValidationFinding(
+                        finding_uid=finding_uid,
+                        validation_run_uid=run_uid,
+                        rule_uid=rule.rule_uid,
+                        rule_revision_uid=rule.rule_revision_uid,
+                        subject_uid=target_uid,
+                        subject_revision_uid=target_revision_uid,
+                        outcome=evaluated.outcome,
+                        enforcement=evaluated.enforcement,
+                        blocking=evaluated.enforcement
+                        in {
+                            EnforcementEffect.BLOCK_OPERATION,
+                            EnforcementEffect.REQUIRE_DEVIATION,
+                        },
+                        explanation=generic_explanation,
+                        created_at=evaluation_time,
+                    )
+                )
+
+        blocking_finding_uids = tuple(
+            item.finding_uid for item in findings if item.blocking
+        )
+        governance = tuple(
+            item.finding_uid
+            for item in findings
+            if not item.blocking
+            and item.status == "open"
+            and item.enforcement
+            in {
+                EnforcementEffect.REQUIRE_ACKNOWLEDGEMENT,
+                EnforcementEffect.REQUIRE_REVIEW,
             }
-            for finding in findings
-        ]
-        finding_hashes = tuple(semantic_hash(item) for item in serialized)
-        outcome = "pass" if not serialized else "indeterminate" if all(
-            item["outcome"] == RuleOutcome.INDETERMINATE.value for item in serialized
-        ) else "fail"
-        run: dict[str, Any] = {
-            "schema_version": "1.0",
-            "resource_type": "validation_run",
-            "validation_run_uid": validation_run_uid or uuid7_candidate(),
-            "workspace_uid": submission.workspace.workspace_uid,
-            "base_commit": submission.workspace.base_commit,
-            "configuration_uid": submission.workspace.configuration_uid,
-            "effective_model_hash": submission.workspace.effective_model_hash,
-            "candidate_hash": submission.candidate.candidate_hash,
-            "observations": [],
-            "finding_uids": [],
-            "outcome": outcome,
-            "completed_at": (completed_at or evaluator.snapshot.evaluation_time)
-            .astimezone(UTC)
-            .isoformat()
-            .replace("+00:00", "Z"),
-        }
-        run["content_hash"] = document_hash(run, "content_hash")
-        validation_hash = str(run["content_hash"])
+        )
+        informational = tuple(
+            item.finding_uid
+            for item in findings
+            if not item.blocking and item.finding_uid not in governance
+        )
+        disposition = (
+            OperationDisposition.BLOCK
+            if blocking_finding_uids
+            else OperationDisposition.REQUIRES_GOVERNANCE
+            if governance
+            else OperationDisposition.ALLOW_WITH_OBSERVATIONS
+            if informational
+            else OperationDisposition.ALLOW
+        )
+        decision = OperationDecision(
+            operation="apply_transaction",
+            disposition=disposition,
+            allowed_after_governance=not blocking_finding_uids,
+            blocking_finding_uids=blocking_finding_uids,
+            governance_finding_uids=governance,
+            observation_finding_uids=informational,
+            reasons=tuple(
+                f"{item.enforcement.value}:{item.rule_revision_uid}"
+                for item in findings
+                if item.blocking
+            ),
+        )
+        outcome: Literal["pass", "fail", "indeterminate"] = (
+            "fail" if blocking_finding_uids else "pass"
+        )
+        run = ValidationRun(
+            validation_run_uid=run_uid,
+            workspace_uid=submission.workspace.workspace_uid,
+            base_commit=submission.workspace.base_commit,
+            configuration_uid=submission.workspace.configuration_uid,
+            effective_model_hash=submission.workspace.effective_model_hash,
+            candidate_hash=submission.candidate.candidate_hash,
+            observations=tuple(observations),
+            finding_uids=tuple(item.finding_uid for item in findings),
+            operation_decision=decision,
+            outcome=outcome,
+            completed_at=evaluation_time,
+        )
+        serialized_findings = tuple(
+            item.model_dump(mode="json", exclude_none=True) for item in findings
+        )
         return {
             "snapshot_hash": evaluator.snapshot.snapshot_hash,
             "candidate_hash": submission.candidate.candidate_hash,
             "outcome": outcome,
-            "findings": serialized,
-            "finding_hashes": finding_hashes,
-            "validation_hash": validation_hash,
-            "validation_run": run,
+            "operation_decision": decision.model_dump(mode="json"),
+            "findings": serialized_findings,
+            "finding_hashes": tuple(item.content_hash for item in findings),
+            "validation_hash": run.content_hash,
+            "validation_run": run.model_dump(mode="json"),
         }
 
     @staticmethod
+    def _stable_uuid7(seed: str, occurred_at: datetime) -> str:
+        timestamp = int(occurred_at.timestamp() * 1000) & ((1 << 48) - 1)
+        payload = bytearray(timestamp.to_bytes(6, "big") + hashlib.sha256(seed.encode()).digest()[:10])
+        payload[6] = (payload[6] & 0x0F) | 0x70
+        payload[8] = (payload[8] & 0x3F) | 0x80
+        return str(uuid.UUID(bytes=bytes(payload)))
+
+    def _effective_kind_schemas(
+        self, model: EffectiveModel
+    ) -> dict[str, tuple[KindDefinitionRevision, dict[str, FieldDefinition]]]:
+        selected = set(model.definition_revision_uids)
+        facets = {
+            item.revision_uid: item
+            for item in (
+                FacetDefinitionRevision.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "facet_definition_revision"
+                and value.get("revision_uid") in selected
+            )
+        }
+        result: dict[str, tuple[KindDefinitionRevision, dict[str, FieldDefinition]]] = {}
+        for kind in (
+            KindDefinitionRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "kind_definition_revision"
+            and value.get("revision_uid") in selected
+        ):
+            fields: dict[str, FieldDefinition] = {}
+            for facet_uid in (
+                *kind.required_facet_revision_uids,
+                *kind.optional_facet_revision_uids,
+            ):
+                facet = facets.get(facet_uid)
+                if facet is None:
+                    raise ValueError(f"Kind references unavailable Facet revision: {facet_uid}")
+                for definition in facet.fields:
+                    path = self._rule_path(definition.path)
+                    previous = fields.setdefault(path, definition)
+                    if previous != definition:
+                        raise ValueError(f"Facet field contract conflicts at {definition.path}")
+            if kind.name in result:
+                raise ValueError(f"Effective Model defines Kind twice: {kind.name}")
+            result[kind.name] = (kind, fields)
+        return result
+
+    def _symbols_for_kind(
+        self,
+        target_type: ValidationTarget,
+        target_selector: dict[str, Any],
+        schemas: dict[str, tuple[KindDefinitionRevision, dict[str, FieldDefinition]]],
+    ) -> dict[str, type[Any] | FieldSymbol]:
+        kind_name = str(target_selector.get("kind", ""))
+        contract_symbols: dict[
+            ValidationTarget, dict[str, type[Any] | FieldSymbol]
+        ] = {
+            ValidationTarget.RELATION: {
+                "predicate": str,
+                "source_binding": str,
+                "target_binding": str,
+                "provenance": str,
+                "formal_trace_category_count": int,
+            },
+            ValidationTarget.WORKSPACE: {
+                "state": str,
+                "working_copy_count": int,
+                "candidate_revision_count": int,
+            },
+            ValidationTarget.CONFIGURATION: {
+                "closure_status": str,
+                "revision_count": int,
+                "relation_revision_count": int,
+                "deviation_count": int,
+            },
+            ValidationTarget.ACTIVITY: {"evidence_count": int, "actor_uid": str},
+            ValidationTarget.OPERATION: {"operation": str, "risk_class": str},
+            ValidationTarget.STATE_TRANSITION: {
+                "from_state": str,
+                "to_state": str,
+                "evidence_count": int,
+                "attestation_count": int,
+            },
+        }
+        if target_type is not ValidationTarget.REVISION:
+            return dict(contract_symbols[target_type])
+        if kind_name not in schemas:
+            raise ValueError(f"Rule target Kind is absent from Effective Model: {kind_name}")
+        symbols: dict[str, type[Any] | FieldSymbol] = {}
+        for path, definition in schemas[kind_name][1].items():
+            symbols[path] = (
+                FieldSymbol(path, "quantity", definition.unit)
+                if definition.value_type == "quantity"
+                else {
+                    "string": str,
+                    "timestamp": str,
+                    "integer": int,
+                    "boolean": bool,
+                    "object": dict,
+                    "array": list,
+                }[definition.value_type]
+            )
+        return symbols
+
+    def _validate_revision_against_kind(
+        self,
+        revision: Revision,
+        schemas: dict[str, tuple[KindDefinitionRevision, dict[str, FieldDefinition]]],
+        units: UnitRegistry,
+    ) -> None:
+        if revision.kind not in schemas:
+            raise ValueError(
+                f"Candidate Kind is not defined by the Effective Model: {revision.kind}"
+            )
+        definitions = schemas[revision.kind][1]
+        actual = {self._rule_path(item.path): item.value for item in revision.fields}
+        missing = sorted(
+            path for path, definition in definitions.items() if definition.required and path not in actual
+        )
+        unknown = sorted(set(actual) - set(definitions))
+        if missing or unknown:
+            raise ValueError(
+                f"Candidate violates Kind schema; missing={missing}, unknown={unknown}"
+            )
+        for path, value in actual.items():
+            definition = definitions[path]
+            if not self._field_value_matches(value, definition, units):
+                raise ValueError(
+                    f"Candidate field {path} violates {revision.kind} schema"
+                )
+
+    def _field_value_matches(
+        self, value: Any, definition: FieldDefinition, units: UnitRegistry
+    ) -> bool:
+        if definition.enum_values and value not in definition.enum_values:
+            return False
+        if definition.value_type == "quantity":
+            quantity = self._quantity(value)
+            if quantity is None or definition.unit is None:
+                return False
+            try:
+                units.compare(quantity, Quantity(quantity.value, definition.unit))
+            except ValueError:
+                return False
+            return True
+        expected = {
+            "string": str,
+            "timestamp": str,
+            "integer": int,
+            "boolean": bool,
+            "object": dict,
+            "array": list,
+        }[definition.value_type]
+        if expected is int and isinstance(value, bool):
+            return False
+        if not isinstance(value, expected):
+            return False
+        if isinstance(value, list):
+            if definition.minimum_items is not None and len(value) < definition.minimum_items:
+                return False
+            if definition.maximum_items is not None and len(value) > definition.maximum_items:
+                return False
+        return True
+
+    def _active_deviation_rules(
+        self,
+        configuration: dict[str, Any],
+        revision: Revision,
+        compiled_rules: list[tuple[RuleDefinition, Any]],
+        evaluation_time: datetime,
+    ) -> dict[str, str]:
+        rules_by_revision = {
+            rule.rule_revision_uid: (rule, ast) for rule, ast in compiled_rules
+        }
+        revisions = {
+            str(value["revision_uid"]): value
+            for value in self.documents
+            if value.get("resource_type") == "revision"
+        }
+        approval_records = {
+            str(value["record_uid"])
+            for value in self.documents
+            if value.get("resource_type") == "immutable_record"
+            and value.get("record_type") in {"approval", "deviation_approval"}
+        }
+        active: dict[str, str] = {}
+        for deviation_uid in configuration.get("active_deviation_revision_uids", ()):
+            value = revisions.get(str(deviation_uid))
+            if value is None or value.get("kind") != "deviation":
+                raise ValueError(f"active deviation is unavailable: {deviation_uid}")
+            fields = {
+                str(item["path"]): item.get("value")
+                for item in value.get("fields", ())
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+            if str(fields.get("/approval_record_uid", "")) not in approval_records:
+                raise ValueError(f"active deviation lacks an approval record: {deviation_uid}")
+            valid_until = fields.get("/valid_until")
+            if not isinstance(valid_until, str):
+                raise TypeError(f"active deviation lacks expiration: {deviation_uid}")
+            parsed_expiry = datetime.fromisoformat(valid_until)
+            if parsed_expiry <= evaluation_time:
+                raise ValueError(f"active deviation is expired: {deviation_uid}")
+            if not fields.get("/compensating_control"):
+                raise ValueError(
+                    f"active deviation lacks a compensating control: {deviation_uid}"
+                )
+            if str(fields.get("/subject_uid", "")) not in {
+                revision.object_uid,
+                revision.revision_uid,
+            }:
+                continue
+            rule_revision_uid = str(fields.get("/rule_revision_uid", ""))
+            selected = rules_by_revision.get(rule_revision_uid)
+            if selected is None or not selected[1].deviation_allowed:
+                raise ValueError(
+                    f"deviation does not reference an effective relaxable Rule: {deviation_uid}"
+                )
+            active[selected[0].rule_uid] = str(deviation_uid)
+        return active
+
+    def _relation_values(
+        self,
+        evaluator: SemanticEvaluator,
+        object_uid: str,
+        predicate: str,
+        constraints: tuple[ConstraintExpression, ...],
+    ) -> tuple[int | Quantity, ...]:
+        field_path = next(
+            (
+                item.field_path
+                for item in constraints
+                if item.predicate == predicate and item.field_path is not None
+            ),
+            None,
+        )
+        adjacent = evaluator._adjacent(
+            object_uid, predicate=predicate, direction=Direction.OUTGOING
+        )
+        if field_path is None:
+            return tuple(1 for _ in adjacent)
+        values: list[int | Quantity] = []
+        for target_uid, _ in adjacent:
+            node = evaluator.nodes.get(target_uid)
+            if node is None:
+                continue
+            field = next(
+                (
+                    item.value
+                    for item in node.revision.fields
+                    if self._rule_path(item.path) == field_path
+                ),
+                None,
+            )
+            quantity = self._quantity(field)
+            if quantity is not None:
+                values.append(quantity)
+            elif isinstance(field, int) and not isinstance(field, bool):
+                values.append(field)
+        return tuple(values)
+
+    def _aggregate_values(
+        self,
+        evaluator: SemanticEvaluator,
+        object_uid: str,
+        expression: ConstraintExpression,
+    ) -> tuple[str | bool | None, ...]:
+        aggregate_operators = {
+            RuleOperator.AGGREGATE_COUNT,
+            RuleOperator.AGGREGATE_SUM,
+            RuleOperator.AGGREGATE_MIN,
+            RuleOperator.AGGREGATE_MAX,
+            RuleOperator.AGGREGATE_RATIO,
+            RuleOperator.AGGREGATE_ALL,
+            RuleOperator.AGGREGATE_ANY,
+            RuleOperator.AGGREGATE_NONE,
+        }
+        if expression.operator not in aggregate_operators:
+            return ()
+        if expression.relation_path is not None:
+            targets = tuple(
+                match.object_uids[-1]
+                for match in evaluate_path(evaluator, object_uid, expression.relation_path).matches
+            )
+        elif expression.predicate is not None:
+            targets = tuple(
+                uid
+                for uid, _ in evaluator._adjacent(
+                    object_uid,
+                    predicate=expression.predicate,
+                    direction=expression.direction,
+                )
+            )
+        else:
+            targets = ()
+        if expression.operator is RuleOperator.AGGREGATE_COUNT:
+            return tuple("1" for _ in targets)
+        values: list[str | bool | None] = []
+        for target_uid in targets:
+            node = evaluator.nodes.get(target_uid)
+            if node is None or expression.field_path is None:
+                values.append(None)
+                continue
+            value = next(
+                (
+                    item.value
+                    for item in node.revision.fields
+                    if self._rule_path(item.path) == expression.field_path
+                ),
+                None,
+            )
+            if isinstance(value, bool):
+                values.append(value)
+            elif isinstance(value, (int, str)):
+                values.append(str(value))
+            elif (quantity := self._quantity(value)) is not None:
+                values.append(str(quantity.value))
+            else:
+                values.append(None)
+        return tuple(values)
+
+    @staticmethod
+    def _rule_path(path: str) -> str:
+        return path.removeprefix("/").replace("/", ".")
+
+    @staticmethod
     def _quantity(value: Any) -> Quantity | None:
-        if not isinstance(value, dict) or set(value) != {"value", "unit"}:
+        if not isinstance(value, dict) or "unit" not in value:
             return None
         try:
-            return Quantity(Decimal(str(value["value"])), str(value["unit"]))
-        except (ArithmeticError, ValueError):
+            raw = value.get("value", value.get("decimal"))
+            if raw is None:
+                return None
+            return Quantity(Decimal(str(raw)), str(value["unit"]))
+        except (ArithmeticError, ValueError, TypeError):
             return None
 
     def _reload(self) -> None:

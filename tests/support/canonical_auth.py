@@ -13,7 +13,11 @@ from lesr.adapters.git import (
     SemanticTransaction,
 )
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload, TrustedActor
-from lesr.domain.governance import ValidationRun
+from lesr.domain.governance import (
+    OperationDecision,
+    OperationDisposition,
+    ValidationRun,
+)
 from lesr.domain.profiles import ProfileCompiler, ProfileRevision
 from lesr.domain.semantic import document_hash, semantic_hash, uuid7_candidate
 
@@ -58,6 +62,11 @@ class CanonicalAuth:
             candidate_hash=candidate_hash,
             observations=(),
             finding_uids=(),
+            operation_decision=OperationDecision(
+                operation="apply_transaction",
+                disposition=OperationDisposition.ALLOW,
+                allowed_after_governance=True,
+            ),
             outcome="pass",
         )
         validation_summary_hash = semantic_hash(
@@ -70,6 +79,13 @@ class CanonicalAuth:
             "workspace_uid": self.workspace_uid,
             "base_commit": actual_base,
             "configuration_uid": self.configuration_uid,
+            "result_configuration_uid": self.configuration_uid,
+            "result_configuration_hash": semantic_hash(
+                {
+                    "configuration_uid": self.configuration_uid,
+                    "candidate_hash": candidate_hash,
+                }
+            ),
             "candidate_hash": candidate_hash,
             "base_revision_uids": [],
             "candidate_revision_uids": [

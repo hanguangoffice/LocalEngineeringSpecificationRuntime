@@ -40,7 +40,13 @@ from lesr.domain.rules import (
     ValueCell,
     evaluate_rule,
 )
-from lesr.domain.semantic import canonical_json, document_hash, semantic_hash, uuid7_candidate
+from lesr.domain.semantic import (
+    ConfigurationSnapshot,
+    canonical_json,
+    document_hash,
+    semantic_hash,
+    uuid7_candidate,
+)
 
 
 class OperationType(StrEnum):
@@ -167,6 +173,7 @@ class ApplyResult:
     transaction_hash: str
     idempotent_replay: bool
     projection_stale: bool
+    configuration_uid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +332,7 @@ class GitCanonicalRepository:
         base_commit: str,
         candidate: Any,
         review_package: Any,
+        result_configuration: Any,
         approvals: tuple[SignedApproval, ...],
         trust: tuple[TrustedActor, ...],
         evaluation_time: datetime,
@@ -354,10 +362,17 @@ class GitCanonicalRepository:
 
         selected_candidate = CandidateRevisionSet.model_validate(candidate)
         package = ReviewPackage.model_validate(review_package)
+        configuration = ConfigurationSnapshot.model_validate(result_configuration)
         if selected_candidate.candidate_hash != package.candidate_hash:
             raise IntegrityError("review package does not bind candidate")
         if selected_candidate.effective_model_hash != package.effective_model_hash:
             raise IntegrityError("review package does not bind effective model")
+        if (
+            configuration.configuration_uid != package.result_configuration_uid
+            or configuration.configuration_hash != package.result_configuration_hash
+            or configuration.parent_configuration_uid != package.configuration_uid
+        ):
+            raise IntegrityError("review package does not bind result Configuration")
         if not approvals:
             raise ApprovalError("candidate apply requires human approval")
         decision = GovernanceEvaluator.evaluate(
@@ -421,7 +436,10 @@ class GitCanonicalRepository:
             ).splitlines()
             if not commits:
                 raise IntegrityError("idempotency record has no introducing commit")
-            return ApplyResult(commits[0], transaction_hash, True, False)
+            return ApplyResult(
+                commits[0], transaction_hash, True, False,
+                str(previous.get("configuration_uid")),
+            )
         transaction_uid = uuid7_candidate()
         applied_at = self._utc_now()
         index = self.path / ".git" / f"lesr-index-{uuid7_candidate()}"
@@ -460,6 +478,14 @@ class GitCanonicalRepository:
                 path = f"canonical/immutable_records/{record.record_uid}.json"
                 self._stage_json(path, value, env)
                 operation_hashes.append(semantic_hash({"path": path, "value": value}))
+            configuration_value = configuration.model_dump(mode="json")
+            configuration_path = (
+                f"canonical/configurations/{configuration.configuration_uid}.json"
+            )
+            self._stage_json(configuration_path, configuration_value, env)
+            operation_hashes.append(
+                semantic_hash({"path": configuration_path, "value": configuration_value})
+            )
             evidence_paths = {
                 "semantic_diff": ("semantic_diffs", "diff_uid"),
                 "graph_snapshot": ("graph_snapshots", "snapshot_uid"),
@@ -487,6 +513,16 @@ class GitCanonicalRepository:
                 path = f"canonical/validation/runs/{run['validation_run_uid']}.json"
                 self._stage_json(path, run, env)
                 operation_hashes.append(semantic_hash({"path": path, "value": run}))
+                for finding in validation.get("findings", ()):
+                    if not isinstance(finding, dict):
+                        continue
+                    finding_path = (
+                        f"canonical/validation/findings/{finding['finding_uid']}.json"
+                    )
+                    self._stage_json(finding_path, finding, env)
+                    operation_hashes.append(
+                        semantic_hash({"path": finding_path, "value": finding})
+                    )
             package_path = f"canonical/review_packages/{package.package_uid}.json"
             self._stage_json(package_path, package.model_dump(mode="json", exclude_none=True), env)
             operation_hashes.append(
@@ -528,6 +564,7 @@ class GitCanonicalRepository:
                 "transaction_hash": transaction_hash,
                 "base_commit": base_commit,
                 "candidate_hash": selected_candidate.candidate_hash,
+                "result_configuration_uid": configuration.configuration_uid,
                 "effective_model_hash": package.effective_model_hash,
                 "review_package_hash": package.package_hash,
                 "operation_hashes": operation_hashes,
@@ -561,6 +598,7 @@ class GitCanonicalRepository:
             idempotency = {
                 "transaction_uid": transaction_uid,
                 "transaction_hash": transaction_hash,
+                "configuration_uid": configuration.configuration_uid,
             }
             self._stage_json(idempotency_path, idempotency, env)
             self._inject(fault_injector, "write_tree")
@@ -578,7 +616,10 @@ class GitCanonicalRepository:
                     projection_updater(commit)
                 except Exception:  # noqa: BLE001 - projection is explicitly non-authoritative
                     projection_stale = True
-            return ApplyResult(commit, transaction_hash, False, projection_stale)
+            return ApplyResult(
+                commit, transaction_hash, False, projection_stale,
+                configuration.configuration_uid,
+            )
         finally:
             index.unlink(missing_ok=True)
 
@@ -789,11 +830,27 @@ class GitCanonicalRepository:
             value = evidence.get(name)
             if not isinstance(value, dict) or value.get(field) != expected:
                 raise IntegrityError(f"review evidence does not bind {name}")
+        result_configuration = evidence.get("result_configuration")
+        if (
+            not isinstance(result_configuration, dict)
+            or result_configuration.get("configuration_uid")
+            != package.result_configuration_uid
+            or result_configuration.get("configuration_hash")
+            != package.result_configuration_hash
+        ):
+            raise IntegrityError("review evidence does not bind result Configuration")
         validation = evidence["validation"]
         if tuple(validation.get("finding_hashes", ())) != tuple(package.finding_hashes):
             raise IntegrityError("review evidence finding hashes changed before apply")
         if validation.get("outcome") != "pass":
             raise ApprovalError("candidate validation is not complete and passing")
+        operation_decision = validation.get("operation_decision", {})
+        if (
+            not isinstance(operation_decision, dict)
+            or operation_decision.get("allowed_after_governance") is not True
+            or operation_decision.get("blocking_finding_uids")
+        ):
+            raise ApprovalError("candidate has unresolved enforcement blockers")
 
     @staticmethod
     def _approval_provenance(approval: SignedApproval) -> dict[str, Any]:
@@ -1622,6 +1679,7 @@ class GitCanonicalRepository:
         hash_field = {
             "baseline_manifest": "manifest_hash",
             "review_package": "package_hash",
+            "configuration_snapshot": "configuration_hash",
         }.get(resource_type, "content_hash")
         if hash_field in operation.payload:
             expected_hash = document_hash(operation.payload, hash_field)
@@ -1809,6 +1867,7 @@ class GitCanonicalRepository:
                 "baseline_manifest": "manifest_hash",
                 "audit_anchor": "anchor_hash",
                 "review_package": "package_hash",
+                "configuration_snapshot": "configuration_hash",
             }.get(str(resource_type), "content_hash")
             if hash_field in value and value[hash_field] != document_hash(value, hash_field):
                 raise IntegrityError(f"canonical candidate contains invalid hash: {path}")
@@ -2130,7 +2189,7 @@ class GitCanonicalRepository:
             "performed_by_actor_uid": transaction.actor,
             "on_behalf_of_actor_uid": None,
             "tool_uids": [],
-            "tool_identity": "lesr-runtime/1.0.0rc2",
+            "tool_identity": "lesr-runtime/1.0.0rc3",
             "delegation_uid": transaction.delegation_uid,
             "used_uids": sorted(
                 {

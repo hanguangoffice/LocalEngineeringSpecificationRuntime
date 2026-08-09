@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -22,6 +23,24 @@ class ValidationObservation(FrozenModel):
     explanation: JsonValue
 
 
+class OperationDisposition(StrEnum):
+    ALLOW = "allow"
+    ALLOW_WITH_OBSERVATIONS = "allow_with_observations"
+    REQUIRES_GOVERNANCE = "requires_governance"
+    BLOCK = "block"
+    INDETERMINATE = "indeterminate"
+
+
+class OperationDecision(FrozenModel):
+    operation: str
+    disposition: OperationDisposition
+    allowed_after_governance: bool
+    blocking_finding_uids: tuple[str, ...] = ()
+    governance_finding_uids: tuple[str, ...] = ()
+    observation_finding_uids: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+
 class ValidationRun(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["validation_run"] = "validation_run"
@@ -33,6 +52,7 @@ class ValidationRun(FrozenModel):
     candidate_hash: str
     observations: tuple[ValidationObservation, ...]
     finding_uids: tuple[str, ...]
+    operation_decision: OperationDecision
     outcome: Literal["pass", "fail", "indeterminate"]
     completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     content_hash: str = ""

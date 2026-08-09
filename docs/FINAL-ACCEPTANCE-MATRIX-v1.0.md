@@ -1,6 +1,6 @@
 # Design Baseline v1.0 acceptance evidence
 
-Runtime integration candidate `1.0.0rc2` implements the local, single-repository, single-user
+Runtime integration candidate `1.0.0rc3` implements the local, single-repository, single-user
 scope. This matrix records internal evidence for external review; it is not a claim of
 independent certification or final `runtime-v1.0.0` release qualification.
 
