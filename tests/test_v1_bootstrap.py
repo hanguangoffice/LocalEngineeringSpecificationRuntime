@@ -6,14 +6,19 @@ from lesr.application.contracts import RiskClass, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.model import (
+    CompositionMode,
     EffectiveModelCompiler,
+    FacetDefinitionRevision,
+    FieldDefinition,
+    KindDefinitionRevision,
     NormativeProfileRevision,
     ProfileContextPolicy,
+    ProfileContribution,
     ProfileLayer,
     ProfileReviewPolicy,
     ProfileReviewStage,
 )
-from lesr.domain.semantic import SemanticField, document_hash
+from lesr.domain.semantic import CoreResourceClass, SemanticField, document_hash
 from lesr.domain.workspace import WorkingCopy
 from tests.test_v1_rules import source
 
@@ -29,10 +34,56 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
     store = ApprovalKeyStore(tmp_path / "keys")
     trust = store.generate(actor_uid, "Root owner", ("technical",))
     rule = source()
+    design_facet = FacetDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000105",
+        facet_uid="018f0000-0000-7000-8000-000000000106",
+        name="design_content",
+        authority=100,
+        fields=(FieldDefinition(path="/statement", value_type="string", required=True),),
+    )
+    design_kind = KindDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000107",
+        kind_uid="018f0000-0000-7000-8000-000000000108",
+        name="software_design",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+        required_facet_revision_uids=(design_facet.revision_uid,),
+        authority=100,
+    )
+    requirement_facet = FacetDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000109",
+        facet_uid="018f0000-0000-7000-8000-000000000110",
+        name="requirement_content",
+        authority=100,
+        fields=(
+            FieldDefinition(path="/statement", value_type="string", required=True),
+            FieldDefinition(path="/safety_level", value_type="string"),
+        ),
+    )
+    requirement_kind = KindDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000111",
+        kind_uid="018f0000-0000-7000-8000-000000000112",
+        name="software_requirement",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+        required_facet_revision_uids=(requirement_facet.revision_uid,),
+        authority=100,
+    )
+    semantic_definitions = (
+        design_facet,
+        design_kind,
+        requirement_facet,
+        requirement_kind,
+    )
     selected_profile = NormativeProfileRevision(
         profile_revision_uid="018f0000-0000-7000-8000-000000000104",
         layer=ProfileLayer.PROJECT,
         authority=100,
+        contributions=tuple(
+            ProfileContribution(
+                mode=CompositionMode.EXTEND,
+                definition_revision_uid=item.revision_uid,
+            )
+            for item in semantic_definitions
+        ),
         rule_revision_uids=(rule.rule_revision_uid,),
         review_policies=(
             ProfileReviewPolicy(
@@ -59,7 +110,9 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             ProfileContextPolicy(task_type="baseline"),
         ),
     )
-    model = EffectiveModelCompiler().compile((selected_profile,), ())
+    model = EffectiveModelCompiler().compile(
+        (selected_profile,), semantic_definitions
+    )
     raw_delegation: dict[str, object] = {
         "schema_version": "1.0",
         "resource_type": "delegation_grant",
@@ -85,13 +138,20 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
         "content_hash": document_hash(raw_delegation, "content_hash")
     }
     governance = (
+        *tuple(
+            {
+                "operation_type": "create_record",
+                "resource": item.model_dump(mode="json"),
+            }
+            for item in semantic_definitions
+        ),
         {
             "operation_type": "create_rule",
             "resource": rule.model_dump(mode="json", exclude_none=True),
         },
         {
             "operation_type": "update_profile_binding",
-            "resource": selected_profile.model_dump(mode="json", exclude_none=True),
+            "resource": selected_profile.model_dump(mode="json"),
         },
     )
     trust_value = trust.model_dump(mode="json")

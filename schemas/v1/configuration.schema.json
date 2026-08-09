@@ -9,6 +9,7 @@
     "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
     "resource_type": {"const": "configuration_snapshot"},
     "configuration_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "parent_configuration_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
     "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
     "revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
     "relation_revision_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
@@ -19,6 +20,7 @@
     "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "closure_status": {"enum": ["complete", "partial", "indeterminate"]},
     "closure_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "configuration_hash": {"$ref": "common.schema.json#/$defs/sha256"}
   }
 }

@@ -109,7 +109,7 @@ def test_public_rebase_merge_and_reconciliation_persist_to_workspace_refs(
     assert reconciliation.value["workspace_uid"] in restarted.reconciliation
 
 
-def test_public_review_records_rehash_package_and_survive_restart(tmp_path: Path) -> None:
+def test_public_review_records_keep_package_immutable_and_survive_restart(tmp_path: Path) -> None:
     domain = LocalRuntimeService(tmp_path / "project")
     work = workspace(domain, "workspace-review", "review me")
     domain.workspaces[work.workspace_uid] = work
@@ -117,6 +117,8 @@ def test_public_review_records_rehash_package_and_survive_restart(tmp_path: Path
         workspace_uid=work.workspace_uid,
         base_commit=domain.base,
         configuration_uid="configuration-1",
+        result_configuration_uid="configuration-1",
+        result_configuration_hash="sha256:configuration-next",
         candidate_hash="sha256:candidate",
         candidate_scope=("object-1",),
         semantic_diff_hash="sha256:diff",
@@ -152,7 +154,8 @@ def test_public_review_records_rehash_package_and_survive_restart(tmp_path: Path
     )
     assert commented.ok, commented.payload()
     replacement = commented.value["review_package"]
-    assert replacement["package_hash"] != package.package_hash
+    assert replacement["package_hash"] == package.package_hash
+    assert commented.value["approvals_invalidated"] is False
     comment = commented.value["comment"]
     resolution = CommentResolution(
         comment_hash=comment["comment_hash"],

@@ -10,7 +10,15 @@ from typing import Any, Literal, Protocol, cast
 
 from pydantic import Field, model_validator
 
-from lesr.domain.semantic import FrozenModel, JsonValue, canonical_json, semantic_hash
+from lesr.domain.evaluation import (
+    ConstraintExpression,
+    Direction,
+    RelationPath,
+    RelationPathStep,
+    RuleOperator,
+    ValidationTarget,
+)
+from lesr.domain.semantic import BindingMode, FrozenModel, JsonValue, canonical_json, semantic_hash
 
 
 class ApplicabilityResult(StrEnum):
@@ -86,8 +94,13 @@ class ValueCell:
 class EvaluationEnvironment:
     target_kind: str
     fields: dict[str, ValueCell]
+    target_type: ValidationTarget = ValidationTarget.REVISION
     relation_counts: dict[str, int] = field(default_factory=dict)
     relation_values: dict[str, tuple[int | Quantity, ...]] = field(default_factory=dict)
+    evidence_kinds: frozenset[str] = frozenset()
+    lifecycle_transition: tuple[str, str] | None = None
+    fixed_external_observations: dict[str, JsonValue] = field(default_factory=dict)
+    human_attestations: frozenset[str] = frozenset()
     operation: str = "validate"
     active_exception_rule_uids: frozenset[str] = frozenset()
     active_deviation_rule_uids: frozenset[str] = frozenset()
@@ -603,6 +616,7 @@ class RuleDefinition(FrozenModel):
     rule_uid: str
     rule_revision_uid: str
     source: RuleSourceText
+    target_type: ValidationTarget = ValidationTarget.REVISION
     target_selector: dict[str, JsonValue]
     applicability: dict[str, JsonValue]
     modality: NormativeModality
@@ -633,11 +647,12 @@ class RuleAST:
     rule_revision_uid: str
     schema_version: str
     ast_hash: str
+    target_type: ValidationTarget
     target_kind: str
     applicability: ApplicabilityExpression
     modality: NormativeModality
     evaluation: EvaluationSpecification
-    constraints: tuple[Constraint, ...]
+    constraints: tuple[ConstraintExpression, ...]
     enforcement: dict[str, EnforcementEffect]
     authority: AuthorityDeclaration
     deviation_allowed: bool
@@ -697,36 +712,41 @@ class RuleCompiler:
                 CompilationDiagnostic("error", "RULE_AST_INVALID", str(error))
             )
             return CompilationResult(None, tuple(diagnostics), ())
-        for path in frozenset().union(
-            *(constraint.referenced_paths() for constraint in constraints)
-        ):
+        for path in {
+            constraint.field_path for constraint in constraints if constraint.field_path
+        }:
             if path not in self.symbols:
                 diagnostics.append(
                     CompilationDiagnostic("error", "RULE_PATH_UNKNOWN", f"unknown path: {path}")
                 )
         for constraint in constraints:
-            if isinstance(constraint, QuantityMaximum):
-                symbol = self.symbols.get(constraint.path)
+            if constraint.operator in {
+                RuleOperator.FIELD_RANGE,
+                RuleOperator.FIELD_TOLERANCE,
+            } and isinstance(constraint.expected, dict) and constraint.expected.get("unit"):
+                symbol = self.symbols.get(constraint.field_path or "")
                 value_type = symbol.value_type if isinstance(symbol, FieldSymbol) else None
                 if value_type != "quantity":
                     diagnostics.append(
                         CompilationDiagnostic(
                             "error",
                             "RULE_TYPE_MISMATCH",
-                            f"{constraint.path} must be declared as quantity",
+                            f"{constraint.field_path} must be declared as quantity",
                         )
                     )
                 try:
-                    self.units.require(constraint.maximum.unit)
+                    self.units.require(str(constraint.expected["unit"]))
                 except ValueError as error:
                     diagnostics.append(
                         CompilationDiagnostic("error", "RULE_UNIT_UNKNOWN", str(error))
                     )
-            if isinstance(constraint, AggregateConstraint) and isinstance(
-                constraint.expected, Quantity
-            ):
+            if constraint.operator in {
+                RuleOperator.AGGREGATE_SUM,
+                RuleOperator.AGGREGATE_MIN,
+                RuleOperator.AGGREGATE_MAX,
+            } and isinstance(constraint.expected, dict) and constraint.expected.get("unit"):
                 try:
-                    self.units.require(constraint.expected.unit)
+                    self.units.require(str(constraint.expected["unit"]))
                 except ValueError as error:
                     diagnostics.append(
                         CompilationDiagnostic("error", "RULE_UNIT_UNKNOWN", str(error))
@@ -760,7 +780,8 @@ class RuleCompiler:
             "applicability": applicability.to_data(),
             "modality": source.modality,
             "evaluation": source.evaluation.model_dump(mode="json", exclude_none=True),
-            "constraints": [item.to_data() for item in constraints],
+            "target_type": source.target_type,
+            "constraints": [item.model_dump(mode="json", exclude_none=True) for item in constraints],
             "enforcement": enforcement,
             "authority": source.authority.model_dump(mode="json", exclude_none=True),
             "deviation_allowed": source.deviation_policy.allowed,
@@ -771,6 +792,7 @@ class RuleCompiler:
             rule_revision_uid=source.rule_revision_uid,
             schema_version=source.schema_version,
             ast_hash=semantic_hash(ast_data),
+            target_type=source.target_type,
             target_kind=target.kind,
             applicability=applicability,
             modality=source.modality,
@@ -846,59 +868,131 @@ def _parse_expression(value: dict[str, JsonValue]) -> ApplicabilityExpression:
     raise ValueError(f"unsupported applicability operation: {operation}")
 
 
-def _parse_constraint(value: dict[str, JsonValue]) -> Constraint:
+def _parse_constraint(value: dict[str, JsonValue]) -> ConstraintExpression:
     operation = value.get("op")
     if operation == "field_required":
-        return FieldRequired(str(value["path"]))
+        return ConstraintExpression(
+            operator=RuleOperator.FIELD_REQUIRED, field_path=_normalized_path(value["path"])
+        )
     if operation == "quantity_maximum":
         maximum = _require_dict(value.get("maximum"))
-        return QuantityMaximum(
-            str(value["path"]),
-            Quantity(Decimal(str(maximum["decimal"])), str(maximum["unit"])),
+        return ConstraintExpression(
+            operator=RuleOperator.FIELD_RANGE,
+            field_path=_normalized_path(value["path"]),
+            maximum=str(maximum["decimal"]),
+            expected={"unit": str(maximum["unit"])},
         )
     if operation == "relation_minimum":
         path = _require_dict(value.get("path"))
         roles = path.get("roles")
-        if not isinstance(roles, list) or len(roles) != 1:
-            raise ValueError("v1 relation_minimum requires exactly one bounded role")
-        return RelationMinimum(
-            str(roles[0]),
-            int(str(value["minimum"])),
-            int(str(path["max_depth"])),
-            cast(Literal["outgoing", "incoming"], str(path.get("direction", "outgoing"))),
-            str(path["binding"]) if path.get("binding") is not None else None,
-            str(path["lifecycle_state"])
-            if path.get("lifecycle_state") is not None
-            else None,
+        if not isinstance(roles, list) or not roles:
+            raise ValueError("relation_minimum requires a bounded path")
+        direction = Direction(str(path.get("direction", "outgoing")))
+        binding = (
+            BindingMode(str(path["binding"])) if path.get("binding") is not None else None
+        )
+        trace_category = (
             str(path["formal_trace_category"])
             if path.get("formal_trace_category") is not None
-            else None,
+            else None
+        )
+        if len(roles) == 1 and int(str(path["max_depth"])) == 1:
+            return ConstraintExpression(
+                operator=(
+                    RuleOperator.FORMAL_TRACE
+                    if trace_category is not None
+                    else RuleOperator.RELATION_CARDINALITY
+                ),
+                predicate=str(roles[0]),
+                direction=direction,
+                binding=binding,
+                lifecycle_state=(
+                    str(path["lifecycle_state"])
+                    if path.get("lifecycle_state") is not None
+                    else None
+                ),
+                formal_trace_category=trace_category,
+                minimum=str(value["minimum"]),
+            )
+        steps = tuple(
+            RelationPathStep(
+                predicates=(str(role),),
+                direction=direction,
+                bindings=(binding,) if binding is not None else (),
+                formal_trace_category=trace_category,
+            )
+            for role in roles
+        )
+        return ConstraintExpression(
+            operator=RuleOperator.GRAPH_PATH,
+            relation_path=RelationPath(
+                steps=steps, maximum_depth=int(str(path["max_depth"]))
+            ),
+            minimum=str(value["minimum"]),
         )
     if operation == "aggregate":
         path = _require_dict(value.get("path"))
         roles = path.get("roles")
-        if not isinstance(roles, list) or len(roles) != 1:
-            raise ValueError("v1 aggregate requires exactly one bounded role")
+        if not isinstance(roles, list) or not roles:
+            raise ValueError("aggregate requires a bounded path")
         expected_value = value.get("expected")
-        expected: int | Quantity
-        if isinstance(expected_value, int):
-            expected = expected_value
+        if isinstance(expected_value, dict):
+            expected: JsonValue = {
+                "decimal": str(expected_value["decimal"]),
+                "unit": str(expected_value["unit"]),
+            }
         else:
-            quantity = _require_dict(expected_value)
-            expected = Quantity(
-                Decimal(str(quantity["decimal"])), str(quantity["unit"])
-            )
-        return AggregateConstraint(
-            cast(Literal["count", "sum", "minimum", "maximum"], str(value["function"])),
-            str(roles[0]),
-            cast(
+            expected = cast(JsonValue, expected_value)
+        operator = {
+            "count": RuleOperator.AGGREGATE_COUNT,
+            "sum": RuleOperator.AGGREGATE_SUM,
+            "minimum": RuleOperator.AGGREGATE_MIN,
+            "maximum": RuleOperator.AGGREGATE_MAX,
+            "ratio": RuleOperator.AGGREGATE_RATIO,
+            "all": RuleOperator.AGGREGATE_ALL,
+            "any": RuleOperator.AGGREGATE_ANY,
+            "none": RuleOperator.AGGREGATE_NONE,
+        }[str(value["function"])]
+        return ConstraintExpression(
+            operator=operator,
+            predicate=str(roles[-1]),
+            field_path=(
+                _normalized_path(value["field_path"]) if value.get("field_path") else None
+            ),
+            relation_path=RelationPath(
+                steps=tuple(
+                    RelationPathStep(
+                        predicates=(str(role),),
+                        direction=Direction(str(path.get("direction", "outgoing"))),
+                    )
+                    for role in roles
+                ),
+                maximum_depth=int(str(path["max_depth"])),
+            ),
+            comparison=cast(
                 Literal["eq", "ne", "lt", "lte", "gt", "gte"],
                 str(value["comparison"]),
             ),
-            expected,
-            int(str(path["max_depth"])),
+            expected=expected,
         )
-    raise ValueError(f"unsupported constraint operation: {operation}")
+    try:
+        operator = RuleOperator(str(operation))
+    except ValueError as error:
+        raise ValueError(f"unsupported constraint operation: {operation}") from error
+    payload = dict(value)
+    payload.pop("op", None)
+    payload["operator"] = operator
+    if payload.get("field_path") is not None:
+        payload["field_path"] = _normalized_path(payload["field_path"])
+    if "direction" in payload:
+        payload["direction"] = Direction(str(payload["direction"]))
+    if "binding" in payload and payload["binding"] is not None:
+        payload["binding"] = BindingMode(str(payload["binding"]))
+    return ConstraintExpression.model_validate(payload)
+
+
+def _normalized_path(value: object) -> str:
+    return str(value).removeprefix("/").replace("/", ".")
 
 
 def _parse_environment(value: dict[str, JsonValue]) -> EvaluationEnvironment:
@@ -938,8 +1032,22 @@ def _parse_environment(value: dict[str, JsonValue]) -> EvaluationEnvironment:
     return EvaluationEnvironment(
         target_kind=str(value["target_kind"]),
         fields=fields,
+        target_type=ValidationTarget(str(value.get("target_type", "revision"))),
         relation_counts={key: int(str(item)) for key, item in raw_counts.items()},
         relation_values=relation_values,
+        evidence_kinds=frozenset(
+            str(item) for item in _require_list(value.get("evidence_kinds", []))
+        ),
+        lifecycle_transition=_transition_pair(value.get("lifecycle_transition")),
+        fixed_external_observations={
+            str(key): item
+            for key, item in _require_dict(
+                value.get("fixed_external_observations", {})
+            ).items()
+        },
+        human_attestations=frozenset(
+            str(item) for item in _require_list(value.get("human_attestations", []))
+        ),
         operation=str(value.get("operation", "validate")),
         active_exception_rule_uids=frozenset(
             str(item) for item in _require_list(value.get("active_exception_rule_uids", []))
@@ -961,6 +1069,15 @@ def _require_dict(value: JsonValue | None) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
         raise TypeError("expected an object")
     return value
+
+
+def _transition_pair(value: JsonValue | None) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    items = tuple(str(item) for item in _require_list(value))
+    if len(items) != 2:
+        raise ValueError("fixture lifecycle_transition must contain from/to states")
+    return items[0], items[1]
 
 
 def _require_list(value: JsonValue | None) -> list[JsonValue]:
@@ -988,7 +1105,10 @@ def evaluate_rule(
             ast.rule_revision_uid, RuleOutcome.NOT_EVALUATED
         )
         return RuleEvaluation(outcome, applicability, None, enforcement)
-    evaluated = tuple(item.evaluate(environment, units) for item in ast.constraints)
+    evaluated = tuple(
+        _evaluate_compiled_constraint(item, environment, units)
+        for item in ast.constraints
+    )
     results = {ConstraintResult(item.result) for item in evaluated}
     if ConstraintResult.EVALUATOR_ERROR in results:
         constraint_result = ConstraintResult.EVALUATOR_ERROR
@@ -1021,13 +1141,222 @@ def evaluate_rule(
     return RuleEvaluation(outcome, applicability, constraint, enforcement)
 
 
+def _evaluate_compiled_constraint(
+    expression: ConstraintExpression,
+    environment: EvaluationEnvironment,
+    units: UnitRegistry,
+) -> ExplanationNode:
+    """Pure fixture/runtime primitive for the same Canonical ConstraintExpression."""
+
+    operator = expression.operator
+    cell = environment.read(expression.field_path or "")
+    if operator is RuleOperator.FIELD_REQUIRED:
+        if cell.state is ValueState.VALUE:
+            result = ConstraintResult.SATISFIED
+        elif cell.state in {ValueState.ABSENT, ValueState.NULL}:
+            result = ConstraintResult.VIOLATED
+        else:
+            result = ConstraintResult.INDETERMINATE
+        return ExplanationNode(operator, result, f"{expression.field_path} is {cell.state}")
+    if operator is RuleOperator.FIELD_FORBIDDEN:
+        return ExplanationNode(
+            operator,
+            ConstraintResult.SATISFIED
+            if cell.state is ValueState.ABSENT
+            else ConstraintResult.VIOLATED,
+            "forbidden field check",
+        )
+    if operator in {
+        RuleOperator.FIELD_TYPE,
+        RuleOperator.FIELD_ENUM,
+        RuleOperator.FIELD_PATTERN,
+        RuleOperator.FIELD_RANGE,
+        RuleOperator.FIELD_TOLERANCE,
+        RuleOperator.SET,
+        RuleOperator.UNIQUE,
+        RuleOperator.TEMPORAL_FRESHNESS,
+    } and cell.state is not ValueState.VALUE:
+        return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "field unavailable")
+    try:
+        if operator is RuleOperator.FIELD_TYPE:
+            actual = (
+                "boolean" if isinstance(cell.value, bool) else
+                "integer" if isinstance(cell.value, int) else
+                "string" if isinstance(cell.value, str) else
+                "array" if isinstance(cell.value, list) else
+                "object" if isinstance(cell.value, dict) else "null"
+            )
+            passed = actual == str(expression.expected)
+        elif operator is RuleOperator.FIELD_ENUM:
+            passed = cell.value in (
+                expression.expected if isinstance(expression.expected, list) else []
+            )
+        elif operator is RuleOperator.FIELD_PATTERN:
+            import re
+
+            passed = isinstance(cell.value, str) and isinstance(
+                expression.expected, str
+            ) and re.fullmatch(expression.expected, cell.value) is not None
+        elif operator in {RuleOperator.FIELD_RANGE, RuleOperator.FIELD_TOLERANCE}:
+            if isinstance(cell.value, Quantity):
+                expected_unit = (
+                    str(expression.expected.get("unit"))
+                    if isinstance(expression.expected, dict)
+                    else cell.value.unit
+                )
+                lower = (
+                    Quantity(Decimal(expression.minimum), expected_unit)
+                    if expression.minimum is not None
+                    else None
+                )
+                upper = (
+                    Quantity(Decimal(expression.maximum), expected_unit)
+                    if expression.maximum is not None
+                    else None
+                )
+                passed = bool(
+                    (lower is None or units.compare(cell.value, lower) >= 0)
+                    and (upper is None or units.compare(cell.value, upper) <= 0)
+                )
+            else:
+                observed = Decimal(str(cell.value))
+                if operator is RuleOperator.FIELD_TOLERANCE:
+                    passed = abs(observed - Decimal(str(expression.expected))) <= Decimal(
+                        expression.tolerance or "0"
+                    )
+                else:
+                    passed = bool(
+                        (expression.minimum is None or observed >= Decimal(expression.minimum))
+                        and (expression.maximum is None or observed <= Decimal(expression.maximum))
+                    )
+        elif operator is RuleOperator.SET:
+            passed = isinstance(cell.value, list) and isinstance(
+                expression.expected, list
+            ) and {str(item) for item in cell.value} == {
+                str(item) for item in expression.expected
+            }
+        elif operator is RuleOperator.UNIQUE:
+            passed = isinstance(cell.value, list) and len(cell.value) == len(
+                {str(item) for item in cell.value}
+            )
+        elif operator in {
+            RuleOperator.RELATION_CARDINALITY,
+            RuleOperator.RELATION_DIRECTION,
+            RuleOperator.RELATION_ENDPOINT,
+            RuleOperator.RELATION_BINDING,
+            RuleOperator.RELATION_STATE,
+            RuleOperator.FORMAL_TRACE,
+        }:
+            count = environment.relation_counts.get(expression.predicate or "", 0)
+            passed = count >= int(expression.minimum or "1") and (
+                expression.maximum is None or count <= int(expression.maximum)
+            )
+        elif operator is RuleOperator.GRAPH_PATH:
+            roles = (
+                tuple(step.predicates[0] for step in expression.relation_path.steps)
+                if expression.relation_path is not None
+                else ()
+            )
+            if not roles:
+                raise ValueError("graph path is absent")
+            passed = all(environment.relation_counts.get(role, 0) > 0 for role in roles)
+        elif operator in {
+            RuleOperator.AGGREGATE_COUNT,
+            RuleOperator.AGGREGATE_SUM,
+            RuleOperator.AGGREGATE_MIN,
+            RuleOperator.AGGREGATE_MAX,
+            RuleOperator.AGGREGATE_RATIO,
+            RuleOperator.AGGREGATE_ALL,
+            RuleOperator.AGGREGATE_ANY,
+            RuleOperator.AGGREGATE_NONE,
+        }:
+            values = environment.relation_values.get(expression.predicate or "", ())
+            if operator is RuleOperator.AGGREGATE_COUNT:
+                observed_value: Any = environment.relation_counts.get(
+                    expression.predicate or "", len(values)
+                )
+            elif not values:
+                return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "aggregate unavailable")
+            elif operator is RuleOperator.AGGREGATE_SUM:
+                observed_value = sum(value for value in values if isinstance(value, int))
+            elif operator is RuleOperator.AGGREGATE_MIN:
+                observed_value = min(values, key=lambda item: str(item))
+            elif operator is RuleOperator.AGGREGATE_MAX:
+                observed_value = max(values, key=lambda item: str(item))
+            elif operator is RuleOperator.AGGREGATE_RATIO:
+                observed_value = Decimal(sum(bool(item) for item in values)) / Decimal(len(values))
+            elif operator is RuleOperator.AGGREGATE_ALL:
+                observed_value = all(bool(item) for item in values)
+            elif operator is RuleOperator.AGGREGATE_ANY:
+                observed_value = any(bool(item) for item in values)
+            else:
+                observed_value = not any(bool(item) for item in values)
+            expected = expression.expected
+            if isinstance(expected, dict) and isinstance(observed_value, Quantity):
+                ordering = units.compare(
+                    observed_value,
+                    Quantity(Decimal(str(expected["decimal"])), str(expected["unit"])),
+                )
+            elif isinstance(observed_value, bool):
+                ordering = 0 if observed_value == expected else 1
+            else:
+                ordering = (Decimal(str(observed_value)) > Decimal(str(expected))) - (
+                    Decimal(str(observed_value)) < Decimal(str(expected))
+                )
+            passed = _comparison_passed(ordering, expression.comparison or "eq")
+        elif operator is RuleOperator.LIFECYCLE_TRANSITION:
+            passed = list(environment.lifecycle_transition or ()) == expression.expected
+        elif operator is RuleOperator.PROCESS_EVIDENCE:
+            passed = expression.evidence_kind in environment.evidence_kinds
+        elif operator is RuleOperator.EXTERNAL_OBSERVATION:
+            passed = environment.fixed_external_observations.get(
+                expression.observation_key or ""
+            ) == expression.expected
+        elif operator is RuleOperator.HUMAN_ATTESTATION:
+            passed = expression.observation_key in environment.human_attestations
+        elif operator is RuleOperator.ADVISORY_AI_OBSERVATION:
+            return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "AI is advisory")
+        elif operator is RuleOperator.TEMPORAL_FRESHNESS:
+            observed_at = datetime.fromisoformat(str(cell.value))
+            # Fixtures have no implicit clock; an explicit external observation owns it.
+            reference = environment.fixed_external_observations.get("evaluation_time")
+            if not isinstance(reference, str):
+                return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "evaluation time absent")
+            age = (datetime.fromisoformat(reference) - observed_at).total_seconds()
+            passed = 0 <= age <= int(expression.maximum_age_seconds or 0)
+        else:
+            return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "unsupported")
+    except (ArithmeticError, KeyError, TypeError, ValueError) as error:
+        return ExplanationNode(operator, ConstraintResult.EVALUATOR_ERROR, str(error))
+    return ExplanationNode(
+        operator,
+        ConstraintResult.SATISFIED if passed else ConstraintResult.VIOLATED,
+        "canonical constraint evaluated",
+    )
+
+
+def _comparison_passed(ordering: int, comparison: str) -> bool:
+    return {
+        "eq": ordering == 0,
+        "ne": ordering != 0,
+        "lt": ordering < 0,
+        "lte": ordering <= 0,
+        "gt": ordering > 0,
+        "gte": ordering >= 0,
+    }[comparison]
+
+
 def detect_direct_conflict(left: RuleAST, right: RuleAST) -> bool:
     return (
         left.target_kind == right.target_kind
         and {left.modality, right.modality}
         == {NormativeModality.OBLIGATION, NormativeModality.PROHIBITION}
-        and canonical_json([item.to_data() for item in left.constraints])
-        == canonical_json([item.to_data() for item in right.constraints])
+        and canonical_json(
+            [item.model_dump(mode="json", exclude_none=True) for item in left.constraints]
+        )
+        == canonical_json(
+            [item.model_dump(mode="json", exclude_none=True) for item in right.constraints]
+        )
     )
 
 
@@ -1038,7 +1367,9 @@ def project_to_shacl(ast: RuleAST) -> dict[str, Any]:
         "@type": "sh:NodeShape",
         "lesr:rule": ast.rule_uid,
         "lesr:targetKind": ast.target_kind,
-        "lesr:constraints": [item.to_data() for item in ast.constraints],
+        "lesr:constraints": [
+            item.model_dump(mode="json", exclude_none=True) for item in ast.constraints
+        ],
     }
 
 

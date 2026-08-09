@@ -3,7 +3,7 @@
   "$id":"https://lesr.dev/schemas/v1/validation-run.schema.json",
   "title":"LESR Candidate Validation Run",
   "type":"object","additionalProperties":false,
-  "required":["schema_version","resource_type","validation_run_uid","workspace_uid","base_commit","configuration_uid","effective_model_hash","candidate_hash","observations","finding_uids","outcome","completed_at","content_hash"],
+  "required":["schema_version","resource_type","validation_run_uid","workspace_uid","base_commit","configuration_uid","effective_model_hash","candidate_hash","observations","finding_uids","operation_decision","outcome","completed_at","content_hash"],
   "properties":{
     "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
     "resource_type":{"const":"validation_run"},
@@ -15,6 +15,7 @@
     "candidate_hash":{"$ref":"common.schema.json#/$defs/sha256"},
     "observations":{"type":"array","items":{"$ref":"#/$defs/observation"}},
     "finding_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},
+    "operation_decision":{"type":"object","additionalProperties":false,"required":["operation","disposition","allowed_after_governance","blocking_finding_uids","governance_finding_uids","observation_finding_uids","reasons"],"properties":{"operation":{"type":"string","minLength":1},"disposition":{"enum":["allow","allow_with_observations","requires_governance","block","indeterminate"]},"allowed_after_governance":{"type":"boolean"},"blocking_finding_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},"governance_finding_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},"observation_finding_uids":{"type":"array","items":{"$ref":"common.schema.json#/$defs/uuid7"},"uniqueItems":true},"reasons":{"type":"array","items":{"type":"string"}}}},
     "outcome":{"enum":["pass","fail","indeterminate"]},
     "completed_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
     "content_hash":{"$ref":"common.schema.json#/$defs/sha256"}

@@ -1,4 +1,4 @@
-# Large performance measurement — Windows — 2026-08-10
+# Large Layer-1 semantic-kernel measurement — Windows — 2026-08-10
 
 - Dataset: 100,000 Objects / 500,000 Revisions / 1,000,000 Relations.
 - Semantics: exact Relation Type binding, Formal Trace, immutable Graph Snapshot,
@@ -12,3 +12,5 @@
 
 This is the explicit large stress/trend result. It does not replace the frozen
 Windows 11/32 GiB reference-machine record and carries no 3-second interactive gate.
+It is not evidence for Projection, Rule compilation, Review, Apply, signing, HTTP or
+Baseline latency.

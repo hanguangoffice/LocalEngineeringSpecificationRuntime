@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from decimal import Decimal
 from enum import IntEnum, StrEnum
 from typing import Annotated, Literal
 
@@ -14,6 +15,7 @@ from lesr.domain.semantic import (
     CoreResourceClass,
     FrozenModel,
     ImmutableRecord,
+    JsonValue,
     ProvenanceKind,
     document_hash,
     semantic_hash,
@@ -51,12 +53,80 @@ class DefinitionRevision(FrozenModel):
         return self
 
 
+class FieldDefinition(FrozenModel):
+    """Profile-owned structural contract for one semantic field."""
+
+    path: str = Field(min_length=1, pattern=r"^/")
+    value_type: Literal[
+        "string", "integer", "boolean", "object", "array", "quantity", "timestamp"
+    ]
+    required: bool = False
+    unit: str | None = None
+    minimum: str | None = None
+    maximum: str | None = None
+    enum_values: tuple[JsonValue, ...] = ()
+    minimum_items: int | None = Field(default=None, ge=0)
+    maximum_items: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> FieldDefinition:
+        if self.value_type == "quantity" and not self.unit:
+            raise ValueError("quantity fields require a Profile-owned unit")
+        if self.value_type != "quantity" and self.unit is not None:
+            raise ValueError("only quantity fields may declare a unit")
+        if (
+            self.minimum_items is not None
+            and self.maximum_items is not None
+            and self.minimum_items > self.maximum_items
+        ):
+            raise ValueError("field cardinality minimum exceeds maximum")
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and Decimal(self.minimum) > Decimal(self.maximum)
+        ):
+            raise ValueError("field numeric minimum exceeds maximum")
+        return self
+
+
+class FragmentDefinition(FrozenModel):
+    name: str = Field(min_length=1)
+    minimum_count: int = Field(default=0, ge=0)
+    maximum_count: int | None = Field(default=None, ge=0)
+    fields: tuple[FieldDefinition, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_fragment(self) -> FragmentDefinition:
+        if self.maximum_count is not None and self.minimum_count > self.maximum_count:
+            raise ValueError("fragment minimum exceeds maximum")
+        paths = [item.path for item in self.fields]
+        if len(paths) != len(set(paths)):
+            raise ValueError("fragment field paths must be unique")
+        return self
+
+
+class ProfileUnitDefinition(FrozenModel):
+    unit: str = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+    scale_to_base: str = Field(pattern=r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+
+
 class FacetDefinitionRevision(DefinitionRevision):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["facet_definition_revision"] = "facet_definition_revision"
     facet_uid: str = Field(default_factory=uuid7_candidate)
     name: str = Field(min_length=1)
     capabilities: tuple[str, ...] = ()
+    fields: tuple[FieldDefinition, ...] = ()
+    fragments: tuple[FragmentDefinition, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_schema_members(self) -> FacetDefinitionRevision:
+        paths = [item.path for item in self.fields]
+        names = [item.name for item in self.fragments]
+        if len(paths) != len(set(paths)) or len(names) != len(set(names)):
+            raise ValueError("Facet field paths and Fragment names must be unique")
+        return self
 
 
 class KindDefinitionRevision(DefinitionRevision):
@@ -158,6 +228,7 @@ class ProfileContextPolicy(FrozenModel):
     conditional_predicates: tuple[str, ...] = ()
     invariant_object_uids: tuple[str, ...] = ()
     forbidden_sensitivities: tuple[str, ...] = ()
+    mandatory_formal_trace: tuple[tuple[str, str], ...] = ()
 
 
 class NormativeProfileRevision(FrozenModel):
@@ -171,6 +242,7 @@ class NormativeProfileRevision(FrozenModel):
     rule_revision_uids: tuple[str, ...] = ()
     review_policies: tuple[ProfileReviewPolicy, ...] = ()
     context_policies: tuple[ProfileContextPolicy, ...] = ()
+    unit_definitions: tuple[ProfileUnitDefinition, ...] = ()
     content_hash: str = ""
 
     @model_validator(mode="after")
@@ -256,7 +328,7 @@ class EffectiveModel(FrozenModel):
     workflow_revision_uids: tuple[str, ...]
     conflict_resolutions: tuple[str, ...]
     function_registry: tuple[str, ...]
-    unit_registry: tuple[str, ...]
+    unit_registry: tuple[ProfileUnitDefinition, ...]
     review_policies: tuple[ProfileReviewPolicy, ...] = ()
     context_policies: tuple[ProfileContextPolicy, ...] = ()
     compiler_version: Literal["1.0.0"] = "1.0.0"
@@ -278,7 +350,7 @@ class EffectiveModelCompiler:
         exception_revision_uids: tuple[str, ...] = (),
         deviation_revision_uids: tuple[str, ...] = (),
         function_registry: tuple[str, ...] = (),
-        unit_registry: tuple[str, ...] = (),
+        unit_registry: tuple[ProfileUnitDefinition, ...] = (),
     ) -> EffectiveModel:
         ordered_profiles = tuple(
             sorted(profiles, key=lambda item: (item.layer, item.profile_revision_uid))
@@ -346,7 +418,9 @@ class EffectiveModelCompiler:
                     and target is not None
                     and (
                         operation.mode is CompositionMode.TAILOR
-                        and operation.allowed_boundary is not None
+                        and self._tailoring_within_boundary(
+                            target, replacement, operation.allowed_boundary
+                        )
                         or operation.mode is CompositionMode.REPLACE
                         and self._replace_allowed(
                             overlay.authority,
@@ -403,7 +477,25 @@ class EffectiveModelCompiler:
         exception_uids = tuple(sorted(exception_revision_uids))
         deviation_uids = tuple(sorted(deviation_revision_uids))
         function_names = tuple(sorted(function_registry))
-        unit_names = tuple(sorted(unit_registry))
+        profile_units = tuple(
+            unit
+            for profile in ordered_profiles
+            for unit in profile.unit_definitions
+        )
+        selected_units = profile_units or unit_registry
+        units_by_name: dict[str, ProfileUnitDefinition] = {}
+        for unit in sorted(selected_units, key=lambda item: (item.unit, semantic_hash(item))):
+            previous = units_by_name.setdefault(unit.unit, unit)
+            if previous != unit:
+                conflicts.append(
+                    ModelConflict(
+                        code="LESR-UNIT-CONFLICT",
+                        profile_revision_uid="unit_registry",
+                        definition_revision_uid=unit.unit,
+                        explanation=f"unit {unit.unit} has conflicting definitions",
+                    )
+                )
+        unit_names = tuple(units_by_name[key] for key in sorted(units_by_name))
         payload = {
             "profiles": profile_uids,
             "definitions": selected_uids,
@@ -415,7 +507,7 @@ class EffectiveModelCompiler:
             "deviations": deviation_uids,
             "workflows": workflow_uids,
             "functions": function_names,
-            "units": unit_names,
+            "units": tuple(item.model_dump(mode="json") for item in unit_names),
             "review_policies": tuple(
                 item.model_dump(mode="json") for item in review_policies
             ),
@@ -460,7 +552,100 @@ class EffectiveModelCompiler:
     def _is_refinement(base: SemanticDefinition, candidate: SemanticDefinition) -> bool:
         if type(base) is not type(candidate):
             return False
-        return candidate.authority >= base.authority
+        if candidate.authority < base.authority:
+            return False
+        if isinstance(base, FacetDefinitionRevision) and isinstance(
+            candidate, FacetDefinitionRevision
+        ):
+            if base.facet_uid != candidate.facet_uid:
+                return False
+            base_fields = {item.path: item for item in base.fields}
+            candidate_fields = {item.path: item for item in candidate.fields}
+            return set(base.capabilities) <= set(candidate.capabilities) and all(
+                path in candidate_fields
+                and EffectiveModelCompiler._field_is_narrower(field, candidate_fields[path])
+                for path, field in base_fields.items()
+            )
+        if isinstance(base, KindDefinitionRevision) and isinstance(
+            candidate, KindDefinitionRevision
+        ):
+            return bool(
+                base.kind_uid == candidate.kind_uid
+                and base.core_class == candidate.core_class
+                and set(base.required_facet_revision_uids)
+                <= set(candidate.required_facet_revision_uids)
+                and set(candidate.optional_facet_revision_uids)
+                <= set(base.optional_facet_revision_uids)
+                and (
+                    base.workflow_revision_uid == candidate.workflow_revision_uid
+                    or base.workflow_revision_uid is None
+                )
+            )
+        if isinstance(base, RelationTypeRevision) and isinstance(
+            candidate, RelationTypeRevision
+        ):
+            return bool(
+                base.relation_type_uid == candidate.relation_type_uid
+                and base.predicate == candidate.predicate
+                and base.core_role == candidate.core_role
+                and set(candidate.source_kind_or_facet) <= set(base.source_kind_or_facet)
+                and set(candidate.target_kind_or_facet) <= set(base.target_kind_or_facet)
+                and set(candidate.allowed_bindings) <= set(base.allowed_bindings)
+                and set(candidate.formal_trace_categories)
+                <= set(base.formal_trace_categories)
+            )
+        if isinstance(base, WorkflowRevision) and isinstance(candidate, WorkflowRevision):
+            base_transitions = {
+                (item.from_state, item.to_state): item for item in base.transitions
+            }
+            candidate_transitions = {
+                (item.from_state, item.to_state): item for item in candidate.transitions
+            }
+            return bool(
+                base.workflow_uid == candidate.workflow_uid
+                and base.initial_state == candidate.initial_state
+                and set(candidate.states) <= set(base.states)
+                and all(
+                    key in candidate_transitions
+                    and set(candidate_transitions[key].roles) <= set(item.roles)
+                    and set(candidate_transitions[key].guards) >= set(item.guards)
+                    and set(candidate_transitions[key].evidence_kinds)
+                    >= set(item.evidence_kinds)
+                    for key, item in base_transitions.items()
+                )
+            )
+        return False
+
+    @staticmethod
+    def _field_is_narrower(base: FieldDefinition, candidate: FieldDefinition) -> bool:
+        if base.value_type != candidate.value_type or base.unit != candidate.unit:
+            return False
+        if base.required and not candidate.required:
+            return False
+        if base.enum_values and not set(map(str, candidate.enum_values)) <= set(
+            map(str, base.enum_values)
+        ):
+            return False
+        if base.minimum is not None and (
+            candidate.minimum is None or Decimal(candidate.minimum) < Decimal(base.minimum)
+        ):
+            return False
+        if base.maximum is not None and (
+            candidate.maximum is None or Decimal(candidate.maximum) > Decimal(base.maximum)
+        ):
+            return False
+        if base.minimum_items is not None and (
+            candidate.minimum_items is None
+            or candidate.minimum_items < base.minimum_items
+        ):
+            return False
+        return not (
+            base.maximum_items is not None
+            and (
+                candidate.maximum_items is None
+                or candidate.maximum_items > base.maximum_items
+            )
+        )
 
     @staticmethod
     def _replace_allowed(
@@ -476,6 +661,31 @@ class EffectiveModelCompiler:
             and compatibility_hash
             and impact_hash
         )
+
+    @staticmethod
+    def _tailoring_within_boundary(
+        target: SemanticDefinition,
+        replacement: SemanticDefinition,
+        boundary: str | None,
+    ) -> bool:
+        if type(target) is not type(replacement) or not boundary:
+            return False
+        allowed = {item.strip() for item in boundary.split(",") if item.strip()}
+        if not allowed:
+            return False
+        before = target.model_dump(mode="json", exclude={"revision_uid", "content_hash"})
+        after = replacement.model_dump(mode="json", exclude={"revision_uid", "content_hash"})
+        changed = {key for key in set(before) | set(after) if before.get(key) != after.get(key)}
+        immutable_identity = {
+            "resource_type",
+            "facet_uid",
+            "kind_uid",
+            "relation_type_uid",
+            "workflow_uid",
+        }
+        if changed & immutable_identity:
+            return False
+        return "*" in allowed or changed <= allowed
 
     @staticmethod
     def _conflict(

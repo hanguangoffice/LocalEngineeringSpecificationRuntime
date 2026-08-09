@@ -21,9 +21,18 @@ P95 below 3 s; Working Copy Edit/Checkpoint below 1 s; incremental review of at 
 5 min. Deep Trace and full large validation are persistent Tasks, not 3-second
 interactions.
 
-`tests/test_performance_small_ci.py` is the mandatory small gate.
-`scripts/run_performance_gate.py medium` and `large` execute the corresponding explicit
-dataset. A release report records hardware, OS, cache state, Defender state, samples,
+Performance evidence is reported in four non-interchangeable layers:
+
+1. **Semantic kernel:** immutable Graph Snapshot traversal, Formal Trace and Context planning.
+2. **Projection/application:** Git-backed state, SQLite/FTS query, Effective Model and Context service.
+3. **Governed transaction:** Working Copy, compile/validate, Review evidence and atomic Apply.
+4. **Product:** HTTP or CLI flow including serialization, signer boundary and Baseline round trip.
+
+`tests/test_performance_small_ci.py` is the mandatory Layer-1 small gate. The complete
+Playwright flow is a Layer-4 functional gate; until a timed Layer-2/3/4 medium run exists,
+no kernel number may be presented as product latency. `scripts/run_performance_gate.py
+medium` and `large` execute the explicit **Layer-1 semantic-kernel** dataset only. A release
+report records its layer, hardware, OS, cache state, Defender state, samples,
 profiles, rules, graph degree/depth, overlay/body size, and whether first Projection
 Build is included. A non-reference machine result is supporting evidence, not a silent
 substitution for the reference condition.

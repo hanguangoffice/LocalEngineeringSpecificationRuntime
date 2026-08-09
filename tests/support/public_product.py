@@ -6,14 +6,19 @@ from pathlib import Path
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload, TrustedActor
 from lesr.domain.model import (
+    CompositionMode,
     EffectiveModelCompiler,
+    FacetDefinitionRevision,
+    FieldDefinition,
+    KindDefinitionRevision,
     NormativeProfileRevision,
     ProfileContextPolicy,
+    ProfileContribution,
     ProfileLayer,
     ProfileReviewPolicy,
     ProfileReviewStage,
 )
-from lesr.domain.semantic import document_hash
+from lesr.domain.semantic import CoreResourceClass, document_hash
 from tests.test_v1_rules import source
 
 
@@ -40,10 +45,56 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
     store = ApprovalKeyStore(root / "keys", password=signer_password)
     trust = store.generate(actor_uid, "Root owner", ("technical",))
     rule = source()
+    requirement_facet = FacetDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000110",
+        facet_uid="018f0000-0000-7000-8000-000000000111",
+        name="requirement_content",
+        authority=100,
+        fields=(
+            FieldDefinition(path="/statement", value_type="string", required=True),
+            FieldDefinition(path="/safety_level", value_type="string"),
+        ),
+    )
+    design_facet = FacetDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000112",
+        facet_uid="018f0000-0000-7000-8000-000000000113",
+        name="design_content",
+        authority=100,
+        fields=(FieldDefinition(path="/statement", value_type="string", required=True),),
+    )
+    requirement_kind = KindDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000114",
+        kind_uid="018f0000-0000-7000-8000-000000000115",
+        name="software_requirement",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+        required_facet_revision_uids=(requirement_facet.revision_uid,),
+        authority=100,
+    )
+    design_kind = KindDefinitionRevision(
+        revision_uid="018f0000-0000-7000-8000-000000000116",
+        kind_uid="018f0000-0000-7000-8000-000000000117",
+        name="software_design",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+        required_facet_revision_uids=(design_facet.revision_uid,),
+        authority=100,
+    )
+    semantic_definitions = (
+        requirement_facet,
+        design_facet,
+        requirement_kind,
+        design_kind,
+    )
     profile = NormativeProfileRevision(
         profile_revision_uid="018f0000-0000-7000-8000-000000000104",
         layer=ProfileLayer.PROJECT,
         authority=100,
+        contributions=tuple(
+            ProfileContribution(
+                mode=CompositionMode.EXTEND,
+                definition_revision_uid=item.revision_uid,
+            )
+            for item in semantic_definitions
+        ),
         rule_revision_uids=(rule.rule_revision_uid,),
         review_policies=(
             ProfileReviewPolicy(
@@ -70,7 +121,7 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
             ProfileContextPolicy(task_type="baseline"),
         ),
     )
-    model = EffectiveModelCompiler().compile((profile,), ())
+    model = EffectiveModelCompiler().compile((profile,), semantic_definitions)
     raw_delegation: dict[str, object] = {
         "schema_version": "1.0",
         "resource_type": "delegation_grant",
@@ -96,13 +147,20 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
         "content_hash": document_hash(raw_delegation, "content_hash")
     }
     governance = (
+        *tuple(
+            {
+                "operation_type": "create_record",
+                "resource": item.model_dump(mode="json"),
+            }
+            for item in semantic_definitions
+        ),
         {
             "operation_type": "create_rule",
             "resource": rule.model_dump(mode="json", exclude_none=True),
         },
         {
             "operation_type": "update_profile_binding",
-            "resource": profile.model_dump(mode="json", exclude_none=True),
+            "resource": profile.model_dump(mode="json"),
         },
     )
     trust_value = trust.model_dump(mode="json")

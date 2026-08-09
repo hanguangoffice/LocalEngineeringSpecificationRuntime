@@ -5,73 +5,117 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>LESR / Engineering Authority Console</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23d9ff43'/%3E%3Ctext x='10' y='23' font-family='serif' font-weight='700' font-size='20'%3EL%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/lesr.css">
 </head>
 <body>
-  <div class="grain" aria-hidden="true"></div>
+  <div class="noise" aria-hidden="true"></div>
   <header class="masthead">
-    <div class="wordmark"><span class="mark">L</span><div><b>LESR</b><small>LOCAL ENGINEERING AUTHORITY</small></div></div>
-    <div class="authority"><span class="pulse"></span><span id="authority-state">AUTHORITY CHECKING</span><code>{{ short_commit }}</code></div>
-    <button class="lock" id="lock-button" type="button">LOCK SESSION</button>
+    <a class="wordmark" href="#overview" data-panel-link="overview" aria-label="LESR overview">
+      <span class="mark">L</span><span><b>LESR</b><small>ENGINEERING AUTHORITY / LOCAL</small></span>
+    </a>
+    <div class="authority-line">
+      <span class="authority-lamp" aria-hidden="true"></span>
+      <span id="authority-state">AUTHORITY CHECKING</span>
+      <code>{{ short_commit }}</code>
+    </div>
+    <button class="lock" id="lock-button" type="button" aria-label="LOCK SESSION">LOCK / 15:00</button>
   </header>
-  <div class="shell">
+
+  <div class="app-shell">
     <nav class="rail" aria-label="Runtime sections">
-      <button class="nav-item active" data-panel="overview"><span>01</span>Overview</button>
-      <button class="nav-item" data-panel="explore"><span>02</span>Explore</button>
-      <button class="nav-item" data-panel="context"><span>03</span>Context</button>
-      <button class="nav-item" data-panel="workspace"><span>04</span>Working Copy</button>
-      <button class="nav-item" data-panel="review"><span>05</span>Review &amp; Sign</button>
-      <button class="nav-item" data-panel="baseline"><span>06</span>Baseline</button>
-      <button class="nav-item" data-panel="tasks"><span>07</span>Tasks</button>
-      <button class="nav-item" data-panel="maintenance"><span>08</span>Maintenance</button>
-      <div class="rail-note">NO CLOUD<br>NO CDN<br>NO HIDDEN CURRENT</div>
+      <div class="rail-index">RUNTIME <b>1.0</b></div>
+      <button class="nav-item active" data-panel="overview"><span>01</span><b>Authority</b></button>
+      <button class="nav-item" data-panel="explore"><span>02</span><b>Explore</b></button>
+      <button class="nav-item" data-panel="context"><span>03</span><b>Context</b></button>
+      <button class="nav-item" data-panel="workspace"><span>04</span><b>Working Copy</b></button>
+      <button class="nav-item" data-panel="review"><span>05</span><b>Governance</b></button>
+      <button class="nav-item" data-panel="baseline"><span>06</span><b>Baseline</b></button>
+      <button class="nav-item" data-panel="tasks"><span>07</span><b>Tasks</b></button>
+      <button class="nav-item" data-panel="maintenance"><span>08</span><b>Maintenance</b></button>
+      <div class="rail-note"><i></i> LOOPBACK ONLY<br>NO HIDDEN CURRENT<br>NO NETWORK RESOLUTION</div>
     </nav>
+
     <main>
-      <section class="panel active" id="overview">
-        <div class="section-number">01 / AUTHORITY</div>
-        <h1>Engineering state,<br><em>made accountable.</em></h1>
-        <p class="lede">Every answer is tied to one configuration, one model, one graph snapshot and one Git authority point.</p>
-        <div class="status-grid" id="health-grid">
-          <article class="metric"><small>CANONICAL</small><strong id="health-canonical">-</strong><p>Git ref integrity</p></article>
-          <article class="metric"><small>PROJECTION</small><strong id="health-projection">-</strong><p>Disposable query state</p></article>
-          <article class="metric"><small>MANIFEST</small><strong id="health-manifest">-</strong><p>Format contract 1.0</p></article>
-          <article class="metric accent"><small>OPEN WORK</small><strong id="health-workspaces">0</strong><p>Isolated workspaces</p></article>
+      <section class="panel active" id="overview" data-panel-index="01">
+        <div class="eyebrow"><span>01</span> CANONICAL AUTHORITY</div>
+        <div class="hero-grid">
+          <div>
+            <p class="kicker">LOCAL ENGINEERING SPECIFICATION RUNTIME</p>
+            <h1 aria-label="Engineering state, made accountable.">Make every engineering<br><em>decision inspectable.</em></h1>
+            <p class="lede">One configuration. One effective model. One immutable graph snapshot. One atomic Git authority point.</p>
+          </div>
+          <aside class="state-plate" aria-label="Authority state">
+            <span class="plate-label">CURRENT AUTHORITY</span>
+            <strong id="plate-authority">CHECKING</strong>
+            <code>{{ canonical_commit }}</code>
+            <div class="plate-axis"><i></i><span>DETERMINISTIC / OFFLINE</span></div>
+          </aside>
         </div>
-        <div class="flowline"><span>RESOLVE</span><i></i><span>CONTEXT</span><i></i><span>EDIT</span><i></i><span>VALIDATE</span><i></i><span>REVIEW</span><i></i><span>APPLY</span></div>
+        <div class="status-grid" id="health-grid">
+          <article class="metric" data-signal="canonical"><small>CANONICAL REF</small><strong id="health-canonical">—</strong><p>Authoritative Git state</p></article>
+          <article class="metric" data-signal="projection"><small>PROJECTION</small><strong id="health-projection">—</strong><p>Disposable, reconstructable</p></article>
+          <article class="metric" data-signal="manifest"><small>CONTRACT</small><strong id="health-manifest">—</strong><p>Repository Manifest</p></article>
+          <article class="metric metric-accent" data-signal="work"><small>OPEN WORK</small><strong id="health-workspaces">0</strong><p>Isolated Workspaces</p></article>
+        </div>
+        <div class="semantic-flow" aria-label="Governed semantic transaction">
+          <div class="flow-track" id="flow-track"></div>
+          <div class="flow-step active" data-flow="0"><i>01</i><b>RESOLVE</b><span>Exact state</span></div>
+          <div class="flow-step" data-flow="1"><i>02</i><b>CONTEXT</b><span>Mandatory set</span></div>
+          <div class="flow-step" data-flow="2"><i>03</i><b>EDIT</b><span>Working copy</span></div>
+          <div class="flow-step" data-flow="3"><i>04</i><b>VALIDATE</b><span>Operation decision</span></div>
+          <div class="flow-step" data-flow="4"><i>05</i><b>REVIEW</b><span>Human quorum</span></div>
+          <div class="flow-step" data-flow="5"><i>06</i><b>APPLY</b><span>Atomic ref</span></div>
+        </div>
       </section>
-      <section class="panel" id="explore">
-        <div class="section-number">02 / GRAPH EXPLORER</div><h2>Resolve without guessing.</h2>
-        <form class="command-form" id="query-form"><label>Structured query<input name="text" placeholder="Human Key, UID, title" autocomplete="off"></label><button>QUERY</button></form>
-        <div class="split"><div class="result-list" id="query-results"></div><div class="graph-stage"><div class="orbit">CONFIGURATION<br>BOUND<br>GRAPH</div><p>Select a result to inspect its exact Revision and relations.</p></div></div>
+
+      <section class="panel" id="explore" data-panel-index="02">
+        <div class="eyebrow"><span>02</span> RESOLUTION / GRAPH</div><h2>Resolve without guessing.</h2>
+        <p class="section-copy">Every result identifies an exact resource. Graph focus never changes the Canonical State.</p>
+        <form class="command-form" id="query-form"><label>Structured query<input name="text" placeholder="Human Key, UID, title" autocomplete="off"></label><button aria-label="QUERY">RUN QUERY <i>↗</i></button></form>
+        <div class="explore-grid"><div class="result-list" id="query-results"><div class="empty-line">No query executed.</div></div><div class="graph-stage" id="graph-stage"><div class="graph-ring ring-a"></div><div class="graph-ring ring-b"></div><div class="graph-node node-a"></div><div class="graph-node node-b"></div><div class="graph-core" id="graph-core"><small>CONFIGURATION</small><b>BOUND</b><small>GRAPH</small></div><p>SELECT A RESULT / INSPECT EXACT REVISION</p></div></div>
       </section>
-      <section class="panel" id="context">
-        <div class="section-number">03 / CONTEXT CONTRACT</div><h2>Mandatory first. Similarity second.</h2>
-        <form class="stack-form" id="context-form"><label>Configuration UID<input name="configuration_uid" required></label><label>Target UID<input name="target_uid" required></label><label>Evaluation time (UTC RFC 3339)<input name="evaluation_time" placeholder="2026-08-09T00:00:00Z" required></label><label>Task type<select name="task_type"><option>requirement_change</option><option>test_design</option><option>deviation_review</option><option>can_analysis</option><option>mqtt_change</option></select></label><button>BUILD MANIFEST</button></form>
+
+      <section class="panel" id="context" data-panel-index="03">
+        <div class="eyebrow"><span>03</span> CONTEXT CONTRACT</div><h2>Mandatory first.<br>Similarity second.</h2>
+        <div class="two-column"><form class="stack-form framed" id="context-form"><label>Configuration UID<input name="configuration_uid" required></label><label>Target UID<input name="target_uid" required></label><label>Evaluation time / UTC<input name="evaluation_time" placeholder="2026-08-10T00:00:00Z" required></label><label>Task type<select name="task_type"><option>requirement_change</option><option>test_design</option><option>deviation_review</option><option>can_analysis</option><option>mqtt_change</option></select></label><button>BUILD MANIFEST <i>↗</i></button></form><div class="contract-legend"><p><i class="legend-mandatory"></i><b>MANDATORY</b><span>Relation, rule, operation and policy derived.</span></p><p><i class="legend-support"></i><b>SUPPORTING</b><span>FTS may assist, never promote.</span></p><p><i class="legend-unknown"></i><b>UNKNOWN</b><span>Incompleteness remains explicit.</span></p></div></div>
         <pre class="output" id="context-output">No Context Manifest built.</pre>
       </section>
-      <section class="panel" id="workspace">
-        <div class="section-number">04 / WORKING COPY</div><h2>Edit freely. Submit immutably.</h2>
+
+      <section class="panel" id="workspace" data-panel-index="04">
+        <div class="eyebrow"><span>04</span> CANDIDATE STATE</div><h2>Edit freely.<br>Submit immutably.</h2>
         <div class="workbench">
-          <form class="stack-form framed" id="workspace-open-form"><h3>01 — OPEN</h3><label>Canonical base<input name="expected_base" value="{{ canonical_commit }}" required></label><label>Configuration UID<input name="configuration_uid" required></label><label>Actor UID<input name="actor" required></label><label>Delegation UID<input name="delegation_uid" required></label><button>OPEN ISOLATED WORKSPACE</button></form>
-          <form class="stack-form framed" id="workspace-edit-form"><h3>02 — EDIT</h3><label>Human Key<input name="human_key" required></label><label>Kind<input name="kind" required></label><label>Statement / body<textarea name="statement" required></textarea></label><label>Object UID (optional)<input name="object_uid"></label><button>CREATE WORKING COPY</button></form>
-          <form class="stack-form framed" id="workspace-submit-form"><h3>03 — VALIDATE &amp; SUBMIT</h3><label>Evaluation time<input name="evaluation_time" placeholder="2026-08-10T00:00:00Z" required></label><label>Impact depth<input name="maximum_depth" type="number" min="1" max="16" value="3"></label><button>FREEZE CANDIDATE</button></form>
+          <form class="stack-form framed" id="workspace-open-form" data-stage="1"><h3><span>01</span> OPEN</h3><label>Canonical base<input name="expected_base" value="{{ canonical_commit }}" required></label><label>Configuration UID<input name="configuration_uid" required></label><label>Actor UID<input name="actor" required></label><label>Delegation UID<input name="delegation_uid" required></label><button>OPEN ISOLATED WORKSPACE</button></form>
+          <form class="stack-form framed" id="workspace-edit-form" data-stage="2"><h3><span>02</span> EDIT</h3><label>Human Key<input name="human_key" required></label><label>Kind<input name="kind" required></label><label>Statement / body<textarea name="statement" required></textarea></label><label>Object UID / optional<input name="object_uid"></label><button>CREATE WORKING COPY</button></form>
+          <form class="stack-form framed" id="workspace-submit-form" data-stage="3"><h3><span>03</span> FREEZE</h3><label>Evaluation time<input name="evaluation_time" placeholder="2026-08-10T00:00:00Z" required></label><label>Impact depth<input name="maximum_depth" type="number" min="1" max="16" value="3"></label><button>FREEZE CANDIDATE</button></form>
         </div>
-        <div class="checkpoint-strip"><span>WORKSPACE</span><code id="workspace-uid">not open</code><span>STATE</span><b id="workspace-state">IDLE</b></div>
+        <div class="checkpoint-strip"><span>WORKSPACE</span><code id="workspace-uid">not open</code><span>STATE</span><b id="workspace-state">IDLE</b><i id="workspace-progress"></i></div>
+        <div class="decision-strip" id="decision-strip"><span>OPERATION DECISION</span><strong>NOT EVALUATED</strong><small>No unresolved enforcement blockers may cross Apply.</small></div>
         <pre class="output" id="workspace-output">Open a Workspace from an exact base. Every edit is checkpointed to its Workspace ref.</pre>
       </section>
-      <section class="panel" id="review">
-        <div class="section-number">05 / HUMAN GOVERNANCE</div><h2>The machine prepares.<br>The human authorizes.</h2>
-        <div class="review-grid"><article><small>PACKAGE</small><code id="sign-package">Not selected</code></article><article><small>MODEL</small><code id="sign-model">Not selected</code></article><article><small>SCOPE</small><code id="sign-scope">Not selected</code></article><article><small>ROLE / EXPIRY</small><code id="sign-role">Not selected</code></article></div>
-        <form id="sign-form" class="sign-zone"><input name="package_uid" placeholder="Workspace Review Package UID" required><input name="actor_uid" placeholder="Reviewer Actor UID" required><input name="key_uid" placeholder="Trusted Key UID" required><input name="role" placeholder="Profile-required role" required><label class="human-check"><input type="checkbox" name="human_confirm" required> I inspected Package, Model, Scope, role, conditions and expiry.</label><button>SIGN THROUGH ONE-SHOT BROKER</button></form>
-        <button class="primary-action" id="apply-candidate" type="button">ATOMIC APPLY CANDIDATE</button>
+
+      <section class="panel" id="review" data-panel-index="05">
+        <div class="eyebrow"><span>05</span> HUMAN GOVERNANCE</div><h2>The machine prepares.<br><em>The human authorizes.</em></h2>
+        <div class="review-grid"><article><small>PACKAGE HASH</small><code id="sign-package">Not selected</code></article><article><small>EFFECTIVE MODEL</small><code id="sign-model">Not selected</code></article><article><small>CANDIDATE SCOPE</small><code id="sign-scope">Not selected</code></article><article><small>ROLE / EXPIRY</small><code id="sign-role">Not selected</code></article></div>
+        <form id="sign-form" class="sign-zone"><div class="sign-seal" aria-hidden="true"><span>HUMAN</span><b>Ed25519</b><small>ONE-SHOT BROKER</small></div><div class="sign-fields"><input name="package_uid" placeholder="Workspace Review Package UID" required><input name="actor_uid" placeholder="Reviewer Actor UID" required><input name="key_uid" placeholder="Trusted Key UID" required><input name="role" placeholder="Profile-required role" required><label class="human-check"><input type="checkbox" name="human_confirm" required> I inspected Package, Model, Scope, role, conditions and expiry.</label><button>SIGN THROUGH ONE-SHOT BROKER</button></div></form>
+        <button class="primary-action" id="apply-candidate" type="button">ATOMIC APPLY CANDIDATE <i>→</i></button>
         <pre class="output" id="sign-output">Signer is locked.</pre>
       </section>
-      <section class="panel" id="baseline"><div class="section-number">06 / BASELINE</div><h2>Freeze the state, then name it.</h2><div class="workbench"><form class="stack-form framed" id="baseline-prepare-form"><h3>01 — PREPARE</h3><label>Configuration UID<input name="configuration_uid" required></label><label>Evaluation time<input name="evaluation_time" required></label><button>VALIDATE FROZEN STATE</button></form><form class="stack-form framed" id="baseline-apply-form"><h3>02 — APPROVE &amp; APPLY</h3><label>Review Package UID<input name="review_package_uid" required></label><label>Tag name (optional)<input name="tag_name" placeholder="baseline/project-a/1.0"></label><label>Evaluation time<input name="evaluation_time" required></label><button>ATOMIC BASELINE APPLY</button></form></div><pre class="output" id="baseline-output">Tag is publication metadata, never authority.</pre></section>
-      <section class="panel" id="tasks"><div class="section-number">07 / PERSISTENT TASKS</div><h2>Long work survives interruption.</h2><button id="refresh-tasks">REFRESH QUEUE</button><div class="result-list" id="task-results"></div></section>
-      <section class="panel" id="maintenance"><div class="section-number">08 / LOCAL OPERATIONS</div><h2>Recoverability is a feature.</h2><div class="maintenance-grid"><article><b>BACKUP</b><p>Git Bundle + Manifest + SHA-256.</p></article><article><b>RESTORE</b><p>Empty destination, full verification.</p></article><article><b>MIGRATE</b><p>Forward-only, backup Ref first.</p></article><article><b>GC</b><p>Dry-run, references retained, no prune.</p><button id="gc-plan">PLAN GC</button></article></div><pre class="output" id="maintenance-output">No operation planned.</pre></section>
+
+      <section class="panel" id="baseline" data-panel-index="06">
+        <div class="eyebrow"><span>06</span> FROZEN CONFIGURATION</div><h2>Freeze the state.<br>Then name it.</h2>
+        <div class="workbench baseline-workbench"><form class="stack-form framed" id="baseline-prepare-form"><h3><span>01</span> PREPARE</h3><label>Configuration UID<input name="configuration_uid" required></label><label>Evaluation time<input name="evaluation_time" required></label><button>VALIDATE FROZEN STATE</button></form><form class="stack-form framed" id="baseline-apply-form"><h3><span>02</span> APPROVE / APPLY</h3><label>Review Package UID<input name="review_package_uid" required></label><label>Tag name / optional<input name="tag_name" placeholder="baseline/project-a/1.0"></label><label>Evaluation time<input name="evaluation_time" required></label><button>ATOMIC BASELINE APPLY</button></form><aside class="baseline-rule"><b>MANIFEST ≠ TAG</b><p>The Manifest is authoritative. The Git tag is reconstructable publication metadata.</p><span>STATE COMMIT → MANIFEST COMMIT → TAG</span></aside></div>
+        <pre class="output" id="baseline-output">No Baseline prepared.</pre>
+      </section>
+
+      <section class="panel" id="tasks" data-panel-index="07"><div class="eyebrow"><span>07</span> PERSISTENT TASKS</div><h2>Long work survives interruption.</h2><p class="section-copy">Deep Trace, full validation, backup and migration live outside Canonical Git until a completed result is anchored.</p><button class="secondary-action" id="refresh-tasks">REFRESH QUEUE</button><div class="task-list" id="task-results"><div class="empty-line">Queue not loaded.</div></div></section>
+
+      <section class="panel" id="maintenance" data-panel-index="08"><div class="eyebrow"><span>08</span> LOCAL OPERATIONS</div><h2>Recoverability is<br>a product feature.</h2><div class="maintenance-grid"><article><span>01</span><b>BACKUP</b><p>Git Bundle + Manifest + SHA-256.</p></article><article><span>02</span><b>RESTORE</b><p>Empty destination, complete verification.</p></article><article><span>03</span><b>MIGRATE</b><p>Forward-only, backup ref before mutation.</p></article><article><span>04</span><b>WORKSPACE GC</b><p>Dry-run; referenced state retained; no implicit prune.</p><button id="gc-plan">PLAN GC</button></article></div><pre class="output" id="maintenance-output">No operation planned.</pre></section>
     </main>
   </div>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"><i></i><span></span></div>
+  <script src="/static/vendor/gsap.min.js" defer></script>
   <script src="/static/lesr.js" defer></script>
 </body>
 </html>

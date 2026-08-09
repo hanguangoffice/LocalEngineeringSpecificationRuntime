@@ -58,6 +58,8 @@ class EditOperation(FrozenModel):
     path: str | None = None
     value: JsonValue = None
     relation: RelationAssertion | None = None
+    evidence_uids: tuple[str, ...] = ()
+    human_attestations: tuple[str, ...] = ()
     operation_hash: str = ""
 
     @model_validator(mode="after")
@@ -81,6 +83,8 @@ class EditOperation(FrozenModel):
             self.value, str
         ):
             raise ValueError("lifecycle transition requires target state")
+        if self.evidence_uids and self.operation_type is not EditOperationType.REQUEST_LIFECYCLE_TRANSITION:
+            raise ValueError("evidence may only bind a lifecycle transition request")
         expected = document_hash(self.model_dump(mode="json"), "operation_hash")
         if self.operation_hash and self.operation_hash != expected:
             raise ValueError("operation_hash is invalid")

@@ -4,12 +4,13 @@
   "title": "LESR Rule Definition Revision",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "rule_uid", "rule_revision_uid", "source", "target_selector", "applicability", "modality", "constraints", "evaluation", "enforcement", "authority", "exception_policy", "deviation_policy", "fixtures", "explanation_map", "content_hash"],
+  "required": ["schema_version", "resource_type", "rule_uid", "rule_revision_uid", "source", "target_type", "target_selector", "applicability", "modality", "constraints", "evaluation", "enforcement", "authority", "exception_policy", "deviation_policy", "fixtures", "explanation_map", "content_hash"],
   "properties": {
     "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
     "resource_type": {"const": "rule_definition_revision"},
     "rule_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "rule_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "target_type": {"enum": ["revision", "relation", "workspace", "configuration", "activity", "operation", "state_transition"]},
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -125,8 +126,29 @@
         {"type":"object","additionalProperties":false,"required":["op","path"],"properties":{"op":{"const":"field_required"},"path":{"type":"string","minLength":1}}},
         {"type":"object","additionalProperties":false,"required":["op","path","maximum"],"properties":{"op":{"const":"quantity_maximum"},"path":{"type":"string","minLength":1},"maximum":{"$ref":"common.schema.json#/$defs/quantity"}}},
         {"type":"object","additionalProperties":false,"required":["op","path","minimum"],"properties":{"op":{"const":"relation_minimum"},"path":{"$ref":"#/$defs/relation_path"},"minimum":{"type":"integer","minimum":0}}},
-        {"type":"object","additionalProperties":false,"required":["op","function","path","comparison","expected"],"properties":{"op":{"const":"aggregate"},"function":{"enum":["count","sum","minimum","maximum"]},"path":{"$ref":"#/$defs/relation_path"},"comparison":{"enum":["eq","ne","lt","lte","gt","gte"]},"expected":{"oneOf":[{"type":"integer"},{"$ref":"common.schema.json#/$defs/quantity"}]}}}
+        {"type":"object","additionalProperties":false,"required":["op","function","path","comparison","expected"],"properties":{"op":{"const":"aggregate"},"function":{"enum":["count","sum","minimum","maximum","ratio","all","any","none"]},"path":{"$ref":"#/$defs/relation_path"},"field_path":{"type":"string","minLength":1},"comparison":{"enum":["eq","ne","lt","lte","gt","gte"]},"expected":{"$ref":"common.schema.json#/$defs/canonical_value"}}},
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {
+            "op": {"enum": ["field_required","field_type","field_forbidden","field_enum","field_pattern","field_range","field_tolerance","set","unique","relation_cardinality","relation_direction","relation_endpoint","relation_binding","relation_state","formal_trace","graph_path","lifecycle_transition","process_evidence","temporal_freshness","aggregate_count","aggregate_sum","aggregate_min","aggregate_max","aggregate_ratio","aggregate_all","aggregate_any","aggregate_none","external_observation","human_attestation","advisory_ai_observation"]},
+            "field_path": {"type": ["string", "null"]}, "expected": {"$ref":"common.schema.json#/$defs/canonical_value"},
+            "minimum": {"type": ["string", "null"]}, "maximum": {"type": ["string", "null"]}, "tolerance": {"type": ["string", "null"]},
+            "predicate": {"type": ["string", "null"]}, "direction": {"enum": ["outgoing", "incoming"]},
+            "binding": {"enum": ["logical", "pinned", "fragment", "external", null]}, "lifecycle_state": {"type": ["string", "null"]},
+            "formal_trace_category": {"type": ["string", "null"]}, "relation_path": {"oneOf": [{"$ref": "#/$defs/canonical_path"}, {"type": "null"}]},
+            "evidence_kind": {"type": ["string", "null"]}, "observation_key": {"type": ["string", "null"]},
+            "maximum_age_seconds": {"type": ["integer", "null"], "minimum": 0}, "comparison": {"enum": ["eq","ne","lt","lte","gt","gte", null]}
+          }
+        }
       ]
+    },
+    "canonical_path": {
+      "type": "object", "additionalProperties": false, "required": ["steps", "maximum_depth", "cycle_policy"],
+      "properties": {
+        "maximum_depth": {"type": "integer", "minimum": 1, "maximum": 16},
+        "cycle_policy": {"enum": ["forbid", "simple_path", "allow_bounded"]},
+        "steps": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["predicates", "direction", "minimum_repeat", "maximum_repeat", "endpoint_kind_or_facet", "bindings", "formal_trace_category"], "properties": {"predicates": {"type":"array","minItems":1,"items":{"type":"string"}},"direction":{"enum":["outgoing","incoming"]},"minimum_repeat":{"type":"integer","minimum":0,"maximum":16},"maximum_repeat":{"type":"integer","minimum":1,"maximum":16},"endpoint_kind_or_facet":{"type":"array","items":{"type":"string"}},"bindings":{"type":"array","items":{"enum":["logical","pinned","fragment","external"]}},"formal_trace_category":{"type":["string","null"]}}}}
+      }
     }
   }
 }

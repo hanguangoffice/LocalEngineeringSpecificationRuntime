@@ -542,7 +542,14 @@ def evaluate_constraint(
         result = evaluate_path(evaluator, environment.target_uid, expression.relation_path)
         if result.truncated and not result.matches:
             return _unknown("graph path reached its depth or cycle bound")
-        return _truth(bool(result.matches), len(result.matches), "graph path constraint")
+        count = len(result.matches)
+        minimum = int(expression.minimum or "1")
+        maximum = int(expression.maximum) if expression.maximum is not None else None
+        return _truth(
+            count >= minimum and (maximum is None or count <= maximum),
+            count,
+            "graph path constraint",
+        )
     if operator is RuleOperator.LIFECYCLE_TRANSITION:
         if environment.lifecycle_transition is None:
             return _unknown("lifecycle transition is absent")
@@ -595,7 +602,12 @@ def evaluate_constraint(
             return _unknown("aggregate comparison has no expected value")
         try:
             observed = Decimal(str(aggregated.observed))
-            expected = Decimal(str(expression.expected))
+            expected_value = (
+                expression.expected.get("decimal")
+                if isinstance(expression.expected, dict)
+                else expression.expected
+            )
+            expected = Decimal(str(expected_value))
         except (InvalidOperation, ValueError):
             if expression.comparison not in {"eq", "ne"}:
                 return _unknown("non-numeric aggregate supports only equality")
@@ -724,6 +736,9 @@ def plan_context(
     *,
     token_limit: int,
     supporting_from_fts: tuple[str, ...] = (),
+    conditional_predicates: tuple[str, ...] = (),
+    mandatory_formal_trace: tuple[tuple[str, str], ...] = (),
+    forbidden_sensitivities: tuple[str, ...] = (),
 ) -> ContextBundle:
     mandatory = set(targets)
     trace: list[str] = [f"explicit:{uid}" for uid in targets]
@@ -739,13 +754,58 @@ def plan_context(
             for uid, _ in adjacent:
                 mandatory.add(uid)
                 trace.append(f"mandatory-relation:{target}:{predicate}:{uid}")
+        for predicate in conditional_predicates:
+            adjacent = evaluator._adjacent(
+                target, predicate=predicate, direction=Direction.OUTGOING
+            )
+            trace.append(
+                f"conditional-{'selected' if adjacent else 'absent'}:{target}:{predicate}"
+            )
+            for uid, _ in adjacent:
+                mandatory.add(uid)
+        for predicate, category in mandatory_formal_trace:
+            adjacent = evaluator._adjacent(
+                target,
+                predicate=predicate,
+                direction=Direction.OUTGOING,
+                formal_trace_category=category,
+            )
+            if not adjacent:
+                missing = True
+                trace.append(f"missing-formal-trace:{target}:{predicate}:{category}")
+            for uid, _ in adjacent:
+                mandatory.add(uid)
+                trace.append(
+                    f"mandatory-formal-trace:{target}:{predicate}:{category}:{uid}"
+                )
+    confidential = {
+        uid
+        for uid in mandatory
+        if uid in evaluator.nodes
+        and str(
+            next(
+                (
+                    item.value
+                    for item in evaluator.nodes[uid].revision.fields
+                    if item.path in {"/sensitivity", "sensitivity"}
+                ),
+                "",
+            )
+        )
+        in forbidden_sensitivities
+    }
+    if confidential:
+        mandatory -= confidential
+        trace.extend(f"omitted-confidential:{uid}" for uid in sorted(confidential))
     ordered = tuple(sorted(mandatory))
-    omitted: tuple[str, ...] = ()
+    omitted: tuple[str, ...] = tuple(sorted(confidential))
     completeness = (
         ContextCompleteness.INCOMPLETE_MISSING_RELATION if missing else ContextCompleteness.COMPLETE
     )
+    if confidential:
+        completeness = ContextCompleteness.INCOMPLETE_CONFIDENTIALITY
     if len(ordered) > token_limit:
-        omitted = ordered[token_limit:]
+        omitted = tuple(sorted((*omitted, *ordered[token_limit:])))
         ordered = ordered[:token_limit]
         completeness = ContextCompleteness.INCOMPLETE_BUDGET
     return ContextBundle(

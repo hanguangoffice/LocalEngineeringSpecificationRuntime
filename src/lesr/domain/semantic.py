@@ -463,6 +463,7 @@ class ConfigurationSnapshot(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["configuration_snapshot"] = "configuration_snapshot"
     configuration_uid: str = Field(default_factory=uuid7_candidate)
+    parent_configuration_uid: str | None = None
     git_commit: str
     revision_uids: tuple[str, ...]
     relation_revision_uids: tuple[str, ...]
@@ -474,6 +475,15 @@ class ConfigurationSnapshot(FrozenModel):
     closure_status: str = "complete"
     closure_reasons: tuple[str, ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    configuration_hash: str = ""
+
+    @model_validator(mode="after")
+    def calculate_hash(self) -> ConfigurationSnapshot:
+        expected = document_hash(self.model_dump(mode="json"), "configuration_hash")
+        if self.configuration_hash and self.configuration_hash != expected:
+            raise ValueError("configuration_hash is invalid")
+        object.__setattr__(self, "configuration_hash", expected)
+        return self
 
 
 class KindDefinition(FrozenModel):

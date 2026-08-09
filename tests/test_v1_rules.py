@@ -159,6 +159,10 @@ def source() -> RuleDefinition:
                 operation="approve_revision",
                 effect=EnforcementEffect.BLOCK_OPERATION,
             ),
+            EnforcementMapping(
+                operation="apply_transaction",
+                effect=EnforcementEffect.BLOCK_OPERATION,
+            ),
         ),
         authority=AuthorityDeclaration(
             source_uid="018f0000-0000-7000-8000-000000000103",
@@ -244,7 +248,11 @@ def test_schema_aggregate_constraint_is_executable_not_schema_only() -> None:
     )
     assert result.passed
     assert result.ast is not None
-    assert result.ast.constraints[0].to_data() == aggregate
+    compiled = result.ast.constraints[0]
+    assert compiled.operator.value == "aggregate_count"
+    assert compiled.relation_path is not None
+    assert compiled.relation_path.steps[0].predicates == ("verified_by",)
+    assert compiled.comparison == "gte"
 
 
 def test_external_evaluation_kind_is_preserved_and_requires_evidence() -> None:

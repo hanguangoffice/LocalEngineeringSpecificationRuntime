@@ -19,6 +19,7 @@ from lesr.domain.evaluation import (
     RelationPathStep,
     RuleOperator,
     SemanticEvaluator,
+    TruthValue,
     analyze_impact,
     evaluate_aggregate,
     evaluate_constraint,
@@ -33,6 +34,7 @@ from lesr.domain.semantic import (
     RelationAssertion,
     RelationEndpoint,
     Revision,
+    SemanticField,
     semantic_hash,
 )
 
@@ -234,6 +236,29 @@ def test_real_aggregate_uses_values_and_preserves_unknown() -> None:
     assert unknown.truth.value == "INDETERMINATE"
 
 
+@pytest.mark.parametrize(
+    ("operator", "values", "observed"),
+    (
+        (RuleOperator.AGGREGATE_COUNT, (Decimal(1), Decimal(2)), 2),
+        (RuleOperator.AGGREGATE_SUM, (Decimal(1), Decimal(2)), "3"),
+        (RuleOperator.AGGREGATE_MIN, (Decimal(1), Decimal(2)), "1"),
+        (RuleOperator.AGGREGATE_MAX, (Decimal(1), Decimal(2)), "2"),
+        (RuleOperator.AGGREGATE_RATIO, (True, False), "0.5"),
+        (RuleOperator.AGGREGATE_ALL, (True, True), True),
+        (RuleOperator.AGGREGATE_ANY, (False, True), True),
+        (RuleOperator.AGGREGATE_NONE, (False, False), True),
+    ),
+)
+def test_all_aggregate_operators_execute(
+    operator: RuleOperator,
+    values: tuple[Decimal | bool | None, ...],
+    observed: object,
+) -> None:
+    result = evaluate_aggregate(operator, values)
+    assert result.truth is TruthValue.TRUE
+    assert result.observed == observed
+
+
 def test_rule_vocabulary_executes_field_relation_and_advisory_observation() -> None:
     _, evaluator = graph()
     environment = ConstraintEnvironment(
@@ -286,6 +311,49 @@ def test_context_missing_mandatory_relation_is_explicitly_incomplete() -> None:
     assert context.completeness is ContextCompleteness.INCOMPLETE_MISSING_RELATION
     assert DESIGN.object_uid in context.supporting
     assert DESIGN.object_uid not in context.mandatory
+
+
+def test_context_executes_conditional_formal_trace_and_sensitivity_policy() -> None:
+    snapshot, _ = graph(assertion(provenance=ProvenanceKind.INFERRED))
+    evaluator = SemanticEvaluator(snapshot, (relation_type(),))
+    formal = plan_context(
+        evaluator,
+        (REQ.object_uid,),
+        (),
+        token_limit=10,
+        conditional_predicates=("optional_support",),
+        mandatory_formal_trace=(("verified_by", "verification"),),
+    )
+    assert formal.completeness is ContextCompleteness.INCOMPLETE_MISSING_RELATION
+    assert any(item.startswith("conditional-absent:") for item in formal.selection_trace)
+    assert any(item.startswith("missing-formal-trace:") for item in formal.selection_trace)
+
+    restricted_req = REQ.model_copy(
+        update={
+            "fields": (SemanticField(path="/sensitivity", value="restricted"),),
+            "content_hash": "",
+        }
+    )
+    restricted_snapshot = snapshot.model_copy(
+        update={
+            "nodes": tuple(
+                GraphNode(revision=restricted_req, lifecycle_state="approved")
+                if item.revision.object_uid == REQ.object_uid
+                else item
+                for item in snapshot.nodes
+            ),
+            "snapshot_hash": "",
+        }
+    )
+    restricted = plan_context(
+        SemanticEvaluator(restricted_snapshot, (relation_type(),)),
+        (REQ.object_uid,),
+        (),
+        token_limit=10,
+        forbidden_sensitivities=("restricted",),
+    )
+    assert restricted.completeness is ContextCompleteness.INCOMPLETE_CONFIDENTIALITY
+    assert REQ.object_uid in restricted.omitted_candidates
 
 
 def test_impact_never_claims_complete_when_external_or_depth_is_unknown() -> None:

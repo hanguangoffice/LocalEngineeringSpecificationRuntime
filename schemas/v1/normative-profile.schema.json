@@ -4,7 +4,7 @@
   "title": "LESR Normative Profile Revision",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "profile_uid", "profile_revision_uid", "layer", "authority", "contributions", "rule_revision_uids", "review_policies", "context_policies", "content_hash"],
+  "required": ["schema_version", "resource_type", "profile_uid", "profile_revision_uid", "layer", "authority", "contributions", "rule_revision_uids", "review_policies", "context_policies", "unit_definitions", "content_hash"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "resource_type": {"const": "normative_profile_revision"},
@@ -16,6 +16,7 @@
     "rule_revision_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
     "review_policies": {"type": "array", "items": {"$ref": "#/$defs/review_policy"}},
     "context_policies": {"type": "array", "items": {"$ref": "#/$defs/context_policy"}},
+    "unit_definitions": {"type": "array", "items": {"$ref": "#/$defs/unit"}},
     "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
   },
   "$defs": {
@@ -47,14 +48,20 @@
     },
     "context_policy": {
       "type": "object", "additionalProperties": false,
-      "required": ["task_type", "mandatory_predicates", "conditional_predicates", "invariant_object_uids", "forbidden_sensitivities"],
+      "required": ["task_type", "mandatory_predicates", "conditional_predicates", "invariant_object_uids", "forbidden_sensitivities", "mandatory_formal_trace"],
       "properties": {
         "task_type": {"type": "string", "minLength": 1},
         "mandatory_predicates": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "conditional_predicates": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "invariant_object_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
-        "forbidden_sensitivities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+        "forbidden_sensitivities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "mandatory_formal_trace": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string", "minLength": 1}, {"type": "string", "minLength": 1}], "items": false}}
       }
+    },
+    "unit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit", "dimension", "scale_to_base"],
+      "properties": {"unit": {"type": "string", "minLength": 1}, "dimension": {"type": "string", "minLength": 1}, "scale_to_base": {"type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"}}
     }
   }
 }
