@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.0a3
+# LESR Runtime 1.0.0rc2
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -78,10 +78,10 @@ advertises only tools it actually exposes; admin maintenance remains CLI/local U
 The local Web adapter binds to `127.0.0.1`, has no CDN or Node build, and uses a one-time launch
 token, idle locking, Host/Origin/CSRF checks, and a short-lived signer broker. Windows
 keys use DPAPI; Linux prefers Secret Service; the fallback is an scrypt/AES-GCM
-encrypted PKCS#8 file and never plaintext. Its HTTP capability layer supports Context,
-Workspace Open/Edit/Submit, human signing, Apply, and Baseline Prepare/Apply. The current
-HTML console does not yet expose every one of those mutations as a polished form, so this
-build remains alpha rather than RC.
+encrypted PKCS#8 file and never plaintext. Its HTTP capability layer and engineering
+console complete Context, Workspace Open/Edit/Submit/Rebase/Merge, conflict governance,
+human signing, atomic Apply, and Baseline Prepare/Apply. The real Playwright product test
+executes the full Edit -> Review -> Sign -> Apply -> Baseline path against Git and SQLite.
 
 ## Compatibility and deferred scope
 

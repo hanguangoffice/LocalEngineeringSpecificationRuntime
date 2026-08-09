@@ -219,6 +219,127 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             )
         ).payload()
 
+    def invoke_write_capability(
+        method_name: str,
+        capability_name: str,
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        risk_class: RiskClass,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        method = getattr(domain, method_name, None)
+        if not callable(method):
+            return _capability_unavailable(capability_name)
+        return cast(
+            dict[str, Any],
+            method(
+                _write(
+                    workspace_uid,
+                    expected_base,
+                    idempotency_key,
+                    actor,
+                    delegation_uid,
+                    dry_run,
+                    risk_class,
+                    operation,
+                )
+            ).payload(),
+        )
+
+    @server.tool(name="workspace_rebase", annotations=write, structured_output=True)
+    def rebase_workspace(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Rebase Working Copies through the deterministic three-way semantic engine."""
+        return invoke_write_capability(
+            "rebase_workspace", "workspace.rebase", workspace_uid, expected_base,
+            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+        )
+
+    @server.tool(name="workspace_merge", annotations=write, structured_output=True)
+    def merge_workspace(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge another Workspace without treating a Git merge as authority."""
+        return invoke_write_capability(
+            "merge_workspace", "workspace.merge", workspace_uid, expected_base,
+            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+        )
+
+    @server.tool(name="workspace_resolve", annotations=write, structured_output=True)
+    def resolve_workspace_conflict(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve one structured semantic merge conflict."""
+        return invoke_write_capability(
+            "resolve_merge_conflict", "workspace.resolve", workspace_uid, expected_base,
+            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+        )
+
+    @server.tool(name="review_record", annotations=write, structured_output=True)
+    def write_review_record(
+        record_type: str,
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a comment, resolution, condition satisfaction, or revocation record."""
+        methods = {
+            "comment": ("add_review_comment", "review.comment"),
+            "resolution": ("resolve_review_comment", "review.resolve"),
+            "condition": ("satisfy_review_condition", "review.condition"),
+            "revocation": ("revoke_approval", "review.revoke"),
+        }
+        selected = methods.get(record_type)
+        if selected is None:
+            return _capability_unavailable(f"review.{record_type}")
+        return invoke_write_capability(
+            selected[0], selected[1], workspace_uid, expected_base, idempotency_key,
+            actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+        )
+
+    @server.tool(name="reconciliation_open", annotations=write, structured_output=True)
+    def open_reconciliation(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Open a non-authoritative Workspace for a detected foreign Canonical diff."""
+        return invoke_write_capability(
+            "begin_reconciliation", "reconciliation.open", workspace_uid, expected_base,
+            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+        )
+
     @server.tool(name="apply", annotations=atomic_apply, structured_output=True)
     def apply_transaction(
         workspace_uid: str,
@@ -305,6 +426,8 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
     @server.tool(name="task_start", annotations=write, structured_output=True)
     def start_task(task_type: str, request: dict[str, Any]) -> dict[str, Any]:
         """Start a protocol-independent long-running domain task."""
+        if task_type not in {"full_validation", "deep_trace", "large_impact"}:
+            return _capability_unavailable(f"task.{task_type}")
         return domain.start_task(task_type, request).payload()
 
     @server.resource("lesr://objects/{uid}")

@@ -2130,7 +2130,7 @@ class GitCanonicalRepository:
             "performed_by_actor_uid": transaction.actor,
             "on_behalf_of_actor_uid": None,
             "tool_uids": [],
-            "tool_identity": "lesr-runtime/1.0.0a3",
+            "tool_identity": "lesr-runtime/1.0.0rc2",
             "delegation_uid": transaction.delegation_uid,
             "used_uids": sorted(
                 {

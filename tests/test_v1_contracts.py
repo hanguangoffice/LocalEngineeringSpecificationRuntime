@@ -125,8 +125,13 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
         "context_read",
         "task_start",
         "baseline_prepare",
-        "baseline_apply",
-    } == set(tools)
+            "baseline_apply",
+            "workspace_rebase",
+            "workspace_merge",
+            "workspace_resolve",
+            "review_record",
+            "reconciliation_open",
+        } == set(tools)
     for name in (
         "workspace_open",
         "workspace_edit",

@@ -457,6 +457,47 @@ class RepositoryMaintenance:
             raise ValueError("LESR-MIGRATION-STEP-NOT-REGISTERED")
         return report
 
+    def workspace_gc(self, *, dry_run: bool = True, now: datetime | None = None) -> dict[str, object]:
+        """Remove only stale Workspace/checkpoint refs; never invoke Git prune."""
+        actual_now = now or datetime.now(UTC)
+        raw = self.repository._try_git(
+            "for-each-ref",
+            "--format=%(refname)|%(creatordate:iso-strict)",
+            "refs/lesr/workspaces/",
+            "refs/lesr/checkpoints/",
+        )
+        refs: list[tuple[str, datetime]] = []
+        for line in raw.splitlines() if raw else ():
+            name, created = line.split("|", 1)
+            refs.append((name, datetime.fromisoformat(created)))
+        documents = [value for _, value in self.repository.documents()]
+        referenced_workspaces = {
+            str(value["workspace_uid"])
+            for value in documents
+            if value.get("resource_type") in {"review_package", "baseline_preparation"}
+            and value.get("workspace_uid")
+        }
+        referenced_refs = tuple(
+            name
+            for name, _ in refs
+            if any(f"/{uid}" in name for uid in referenced_workspaces)
+        )
+        plan = plan_workspace_gc(
+            tuple(refs),
+            referenced_refs,
+            now=actual_now,
+            dry_run=dry_run,
+        )
+        removed: list[str] = []
+        if not dry_run:
+            for reference in plan.removable_checkpoint_uids:
+                self.repository._git("update-ref", "-d", reference)
+                removed.append(reference)
+        return plan.model_dump(mode="json") | {
+            "removed_refs": removed,
+            "git_prune_executed": False,
+        }
+
 
 class GCPlan(FrozenModel):
     generated_at: datetime

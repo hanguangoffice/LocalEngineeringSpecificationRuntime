@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import RequestResponseEndpoint
 
 from lesr.adapters.git import GitCanonicalRepository, IntegrityError
-from lesr.adapters.operations import TaskStore, plan_workspace_gc
+from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.signer import sign_once
 from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
@@ -173,6 +173,7 @@ class LocalWebRuntime:
                 context={
                     "csrf_token": session.csrf_token,
                     "short_commit": commit[:12],
+                    "canonical_commit": commit,
                 },
             )
 
@@ -265,6 +266,60 @@ class LocalWebRuntime:
             self._mutation_session(request)
             return self._value_or_error(self.domain.prepare_review(value.envelope()).payload())
 
+        @app.post("/api/workspace/rebase")
+        async def workspace_rebase(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._runtime_write("rebase_workspace", value, "workspace.rebase")
+
+        @app.post("/api/workspace/merge")
+        async def workspace_merge(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._runtime_write("merge_workspace", value, "workspace.merge")
+
+        @app.post("/api/workspace/resolve")
+        async def workspace_resolve(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._runtime_write(
+                "resolve_merge_conflict", value, "workspace.resolve"
+            )
+
+        @app.post("/api/review/comment")
+        async def review_comment(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._runtime_write("add_review_comment", value, "review.comment")
+
+        @app.post("/api/review/record/{record_type}")
+        async def review_record(
+            request: Request, record_type: str, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            methods = {
+                "resolution": ("resolve_review_comment", "review.resolve"),
+                "condition": ("satisfy_review_condition", "review.condition"),
+                "revocation": ("revoke_approval", "review.revoke"),
+            }
+            selected = methods.get(record_type)
+            if selected is None:
+                raise HTTPException(status_code=404, detail="review record type unavailable")
+            return self._runtime_write(selected[0], value, selected[1])
+
+        @app.post("/api/reconciliation/open")
+        async def reconciliation_open(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._runtime_write(
+                "begin_reconciliation", value, "reconciliation.open"
+            )
+
         @app.post("/api/apply")
         async def apply(request: Request, value: WebWriteRequest) -> dict[str, Any]:
             self._mutation_session(request)
@@ -300,9 +355,7 @@ class LocalWebRuntime:
         @app.post("/api/maintenance/gc")
         async def gc_plan(request: Request) -> dict[str, Any]:
             self._mutation_session(request)
-            return plan_workspace_gc((), (), now=datetime.now(UTC), dry_run=True).model_dump(
-                mode="json"
-            )
+            return RepositoryMaintenance(self.project).workspace_gc(dry_run=True)
 
         @app.post("/api/sign")
         async def sign(request: Request, value: SignRequest) -> dict[str, Any]:
@@ -362,6 +415,14 @@ class LocalWebRuntime:
             raise HTTPException(status_code=401, detail="session is locked")
         session.last_seen = now
         return session
+
+    def _runtime_write(
+        self, method_name: str, value: WebWriteRequest, capability: str
+    ) -> dict[str, Any]:
+        method = getattr(self.domain, method_name, None)
+        if not callable(method):
+            raise HTTPException(status_code=404, detail=f"{capability} unavailable")
+        return self._value_or_error(method(value.envelope()).payload())
 
     def _mutation_session(self, request: Request) -> WebSession:
         session = self._session(request)

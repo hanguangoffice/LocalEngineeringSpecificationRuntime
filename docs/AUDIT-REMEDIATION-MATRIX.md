@@ -1,11 +1,11 @@
-# LESR 1.0.0a3 unified-runtime re-audit matrix
+# LESR 1.0.0rc2 unified-runtime re-audit matrix
 
 This matrix responds to `LESR_Runtime_1.0.0rc1_Independent_Reaudit_2026-08-05.md`.
 The external report and restricted local evaluation corpus are not committed. Design
 authority remains `LESR_Solution_Design_Baseline_v1.0/`; the historical
 `runtime-v1.0.0` tag is immutable and is not treated as this build's version.
 
-| Re-audit finding | Remediation in 1.0.0a3 | Executable evidence |
+| Re-audit finding | Remediation in 1.0.0rc2 | Executable evidence |
 |---|---|---|
 | Two competing production services | `RepositoryDomainService` and its legacy E2E were removed. CLI, MCP and Web use `LocalRuntimeService`; an architecture test enforces the single facade. | `test_runtime_architecture.py` |
 | Empty repository could not bootstrap | Public plan/sign/apply commands install the first human trust root, exact governance resources and initial Configuration with proof of possession. | `test_v1_bootstrap.py` |
@@ -21,17 +21,16 @@ authority remains `LESR_Solution_Design_Baseline_v1.0/`; the historical
 | Context ignored policy and had no Focused Read/Deep Trace | Effective Model Context Policy supplies invariants and mandatory predicates; manifests and snapshots are persisted, Focused Read enforces 100-resource/2 MiB limits, and Deep Trace is a persistent task. | Gate 3/6 and MCP contract tests |
 | Task Store had no worker | `TaskWorker` claims, checkpoints, checks cooperative cancellation, persists results/failures, and resumes Deep Trace and large Impact work. | `test_gate6_operations.py` |
 | Baseline command only calculated a hash | Prepare verifies complete Configuration, graph, validation, impact, context and Profile-derived governance; Apply revalidates at the Git boundary, atomically writes Manifest/evidence, and treats the optional tag as rebuildable. | cross-process Baseline flow in `test_v1_bootstrap.py` |
-| Capability Descriptor overclaimed | CLI/MCP flags default to false and the catalog contains only callable public capabilities. Rebase/Merge/Reconciliation are not advertised while still domain-only. | capability/MCP tests |
+| Capability Descriptor overclaimed | CLI/MCP flags default to false and the catalog contains only callable public capabilities. Rebase/Merge/Resolution/Reconciliation and Review records now traverse the same production facade and are advertised only where callable. | capability/MCP and public merge tests |
 | Resolve treated references as identities | Identity lookup now indexes only the primary identity fields for each resource type plus Human Key/Alias, never arbitrary referenced `*_uid` fields. | runtime identity implementation and Gate 1 identity tests |
-| Playwright used an in-memory fake | Web security and Playwright now instantiate the production runtime and a real Git/SQLite repository. | `test_gate7_playwright.py`, `test_gate7_web_security.py` |
+| Playwright used an in-memory fake | Web security and Playwright instantiate the production runtime and a real Git/SQLite repository; the browser completes Edit, Review, one-shot Sign, atomic Apply and Baseline. | `test_gate7_playwright.py`, `test_gate7_web_security.py` |
 
-## Honest remaining release gates
+## RC2 handoff boundary
 
-This build is `1.0.0a3`, not RC2 and not final 1.0. The three-way Merge/Rebase engine
-is not yet integrated into a public Workspace API, and the HTML console does not yet
-provide polished mutation forms for every HTTP capability. Windows/Ubuntu CI and the
-wheel/sdist isolation checks must run on the pushed branch. Gate 7 remains
-`IN_PROGRESS`; the capability descriptor does not claim these unfinished features.
+This build is `1.0.0rc2`, not the final historical `runtime-v1.0.0` release tag.
+All internal Gate 0-7 contracts are implemented and executable. RC2 is handed to the
+two external reviewers for independent Baseline v1.0 reassessment; only confirmed
+review corrections, release metadata and notes may change before final publication.
 
 The local rights-cleared corpus remains ignored. No extracted standards text, PDF,
 private key, projection database or local test document is committed.

@@ -18,5 +18,11 @@ Foreign Canonical Ref movement is captured as a hashed Foreign Diff and opens a
 dedicated Workspace marked non-authoritative pending reconciliation. No file edit or
 merge commit advances semantic authority without the normal review/apply pipeline.
 
+The production Runtime, CLI, MCP and loopback HTTP adapter expose Rebase, Workspace
+Merge, explicit Conflict Resolution and Reconciliation Open through the uniform write
+envelope. Workspace refs persist merge state across process restart, and a rebase or
+merge removes the prior Submission, Review Package, evidence and review records.
+
 Tests exercise independent-field auto-merge, dual edits, governed identity conflict,
-human-only resolution, invalidation/rebuild flags and foreign merge reconciliation.
+human-only resolution, public API persistence, invalidation/rebuild flags and foreign
+merge reconciliation.

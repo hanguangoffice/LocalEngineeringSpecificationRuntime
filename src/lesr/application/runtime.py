@@ -23,7 +23,7 @@ from lesr.adapters.git import (
     SemanticOperation,
     SemanticTransaction,
 )
-from lesr.adapters.operations import TaskStore, TaskWorker
+from lesr.adapters.operations import RepositoryMaintenance, TaskStore, TaskWorker
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.application.contracts import (
     CapabilityDescriptor,
@@ -48,6 +48,14 @@ from lesr.domain.evaluation import (
     analyze_impact,
     evaluate_constraint,
     plan_context,
+)
+from lesr.domain.merge import (
+    ConflictResolution,
+    ForeignDiff,
+    RebaseResult,
+    SemanticMergeEngine,
+    SemanticState,
+    begin_reconciliation,
 )
 from lesr.domain.model import (
     EffectiveModel,
@@ -90,10 +98,12 @@ from lesr.domain.rules import (
 )
 from lesr.domain.semantic import (
     BindingMode,
+    Fragment,
     ImmutableRecord,
     ProvenanceKind,
     RelationAssertion,
     Revision,
+    SemanticField,
     document_hash,
     semantic_hash,
     uuid7_candidate,
@@ -103,7 +113,9 @@ from lesr.domain.workspace import (
     EditOperation,
     SemanticDiff,
     Submission,
+    ValidationState,
     WorkingCopy,
+    WorkingCopyState,
     Workspace,
     WorkspaceCheckpoint,
     WorkspaceEngine,
@@ -122,6 +134,9 @@ class LocalRuntimeService:
         self.submissions: dict[str, Any] = {}
         self.reviews: dict[str, ReviewPackage] = {}
         self.review_evidence: dict[str, dict[str, Any]] = {}
+        self.review_records: dict[str, list[dict[str, Any]]] = {}
+        self.rebase_results: dict[str, dict[str, RebaseResult]] = {}
+        self.reconciliation: dict[str, dict[str, Any]] = {}
         self.baseline_preparations: dict[str, BaselinePreparation] = {}
         self._reload()
         self._recover_workspaces()
@@ -556,6 +571,202 @@ class LocalRuntimeService:
                 (request.workspace_uid,),
             )
 
+    def rebase_workspace(self, request: WriteEnvelope) -> DomainResult:
+        """Three-way rebase every Working Copy onto an exact Canonical commit."""
+        error = self._validate_write(request, require_workspace=True, check_base=False)
+        if error:
+            return error
+        try:
+            workspace = self.workspaces[request.workspace_uid]
+            new_base = str(request.operation["new_base_commit"])
+            self.repository.require_v1_manifest(new_base)
+            if not self.repository.is_ancestor(workspace.base_commit, new_base):
+                raise ValueError("new base must descend from the Workspace base")
+            results: dict[str, RebaseResult] = {}
+            updated_copies: list[WorkingCopy] = []
+            for copy in workspace.working_copies:
+                ours = self._state_from_working_copy(copy)
+                base = self._state_at_revision(workspace.base_commit, copy.base_revision_uid) or ours
+                theirs_revision = self._latest_revision_for_object(new_base, copy.object_uid)
+                theirs = self._state_from_revision(theirs_revision) if theirs_revision else base
+                result = SemanticMergeEngine.merge(workspace.workspace_uid, base, ours, theirs)
+                results[copy.object_uid] = result
+                updated_copies.append(self._copy_from_state(copy, result.merged, theirs_revision))
+            updated = workspace.model_copy(
+                update={
+                    "base_commit": new_base,
+                    "working_copies": tuple(updated_copies),
+                    "state": WorkingCopyState.EDITABLE,
+                }
+            )
+            payload = {
+                "workspace": updated.model_dump(mode="json"),
+                "results": {
+                    uid: value.model_dump(mode="json") for uid, value in results.items()
+                },
+                "approvals_invalidated": True,
+                "review_package_invalidated": True,
+            }
+            if not request.dry_run:
+                self.workspaces[request.workspace_uid] = updated
+                self.rebase_results[request.workspace_uid] = results
+                self._invalidate_review(request.workspace_uid)
+                self._checkpoint_workspace(updated)
+            return DomainResult(payload)
+        except (KeyError, TypeError, ValueError, ValidationError, IntegrityError) as error:
+            return self._error(
+                "LESR-WORKSPACE-REBASE-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (request.workspace_uid,),
+                retryable=True,
+            )
+
+    def resolve_merge_conflict(self, request: WriteEnvelope) -> DomainResult:
+        error = self._validate_write(request, require_workspace=True, check_base=False)
+        if error:
+            return error
+        try:
+            resolution = ConflictResolution.model_validate(request.operation["resolution"])
+            by_object = dict(self.rebase_results[request.workspace_uid])
+            object_uid = next(
+                uid
+                for uid, result in by_object.items()
+                if any(item.conflict_uid == resolution.conflict_uid for item in result.conflicts)
+            )
+            resolved = SemanticMergeEngine.resolve(by_object[object_uid], (resolution,))
+            by_object[object_uid] = resolved
+            workspace = self.workspaces[request.workspace_uid]
+            copies = tuple(
+                self._copy_from_state(item, resolved.merged, None)
+                if item.object_uid == object_uid
+                else item
+                for item in workspace.working_copies
+            )
+            updated = workspace.model_copy(
+                update={"working_copies": copies, "state": WorkingCopyState.EDITABLE}
+            )
+            if not request.dry_run:
+                self.rebase_results[request.workspace_uid] = by_object
+                self.workspaces[request.workspace_uid] = updated
+                self._checkpoint_workspace(updated)
+            return DomainResult(
+                {
+                    "resolution": resolution.model_dump(mode="json"),
+                    "remaining_conflicts": sum(len(item.conflicts) for item in by_object.values()),
+                    "workspace": updated.model_dump(mode="json"),
+                }
+            )
+        except (KeyError, StopIteration, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MERGE-CONFLICT-RESOLUTION-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (request.workspace_uid,),
+            )
+
+    def merge_workspace(self, request: WriteEnvelope) -> DomainResult:
+        """Merge another Workspace through the same semantic three-way engine."""
+        error = self._validate_write(request, require_workspace=True, check_base=False)
+        if error:
+            return error
+        try:
+            source_uid = str(request.operation["source_workspace_uid"])
+            source = self.workspaces[source_uid]
+            target = self.workspaces[request.workspace_uid]
+            if (
+                source.configuration_uid != target.configuration_uid
+                or source.effective_model_hash != target.effective_model_hash
+            ):
+                raise ValueError("Workspace Merge requires the same Configuration and model")
+            source_by_uid = {item.object_uid: item for item in source.working_copies}
+            target_by_uid = {item.object_uid: item for item in target.working_copies}
+            merged = list(target.working_copies)
+            results: dict[str, RebaseResult] = {}
+            for object_uid, theirs_copy in source_by_uid.items():
+                ours_copy = target_by_uid.get(object_uid)
+                if ours_copy is None:
+                    merged.append(
+                        WorkingCopy.model_validate(
+                            theirs_copy.model_dump(mode="json")
+                            | {
+                                "workspace_uid": target.workspace_uid,
+                                "delegation_uid": target.delegation_uid,
+                                "working_state_hash": "",
+                            }
+                        )
+                    )
+                    continue
+                base = self._state_at_revision(target.base_commit, ours_copy.base_revision_uid)
+                base = base or self._state_from_working_copy(ours_copy)
+                result = SemanticMergeEngine.merge(
+                    target.workspace_uid,
+                    base,
+                    self._state_from_working_copy(ours_copy),
+                    self._state_from_working_copy(theirs_copy),
+                )
+                results[object_uid] = result
+                merged = [
+                    self._copy_from_state(item, result.merged, None)
+                    if item.object_uid == object_uid
+                    else item
+                    for item in merged
+                ]
+            updated = target.model_copy(
+                update={
+                    "working_copies": tuple(merged),
+                    "state": WorkingCopyState.EDITABLE,
+                }
+            )
+            if not request.dry_run:
+                self.workspaces[target.workspace_uid] = updated
+                self.rebase_results[target.workspace_uid] = results
+                self._invalidate_review(target.workspace_uid)
+                self._checkpoint_workspace(updated)
+            return DomainResult(
+                {
+                    "workspace": updated.model_dump(mode="json"),
+                    "source_workspace_uid": source_uid,
+                    "results": {uid: item.model_dump(mode="json") for uid, item in results.items()},
+                    "approvals_invalidated": True,
+                }
+            )
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-WORKSPACE-MERGE-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (request.workspace_uid,),
+            )
+
+    def begin_reconciliation(self, request: WriteEnvelope) -> DomainResult:
+        """Represent a foreign Canonical diff as a non-authoritative Workspace."""
+        error = self._validate_write(request, require_workspace=False, check_base=False)
+        if error:
+            return error
+        try:
+            diff = ForeignDiff.model_validate(request.operation["foreign_diff"])
+            if not self.repository.requires_reconciliation(diff.changed_paths):
+                raise ValueError("foreign diff does not touch Canonical State")
+            reconciliation = begin_reconciliation(diff)
+            value = reconciliation.model_dump(mode="json") | {
+                "foreign_diff": diff.model_dump(mode="json")
+            }
+            if not request.dry_run:
+                self.reconciliation[reconciliation.workspace_uid] = value
+                self.repository.create_checkpoint(
+                    reconciliation.workspace_uid,
+                    {"runtime_state_version": "1.0", "reconciliation": value},
+                    CheckpointStrategy.WORKSPACE_REF,
+                )
+            return DomainResult(value)
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-RECONCILIATION-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+            )
+
     def prepare_review(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=True)
         if error:
@@ -709,23 +920,28 @@ class LocalRuntimeService:
                 for item in self.documents
                 if item.get("resource_type") == "trusted_actor"
             )
+            workspace_records = self.review_records.get(request.workspace_uid, [])
             comments = tuple(
                 ReviewComment.model_validate(item)
-                for item in self.documents
+                for item in [*self.documents, *workspace_records]
                 if item.get("resource_type") == "review_comment"
             )
             resolutions = tuple(
                 CommentResolution.model_validate(item)
-                for item in self.documents
+                for item in [*self.documents, *workspace_records]
                 if item.get("resource_type") == "comment_resolution"
             )
             satisfactions = tuple(
                 ConditionSatisfaction.model_validate(item)
-                for item in self._records(request.operation, "condition_satisfactions")
+                for item in [
+                    *workspace_records,
+                    *self._records(request.operation, "condition_satisfactions"),
+                ]
+                if item.get("resource_type") == "condition_satisfaction"
             )
             revocations = tuple(
                 ApprovalRevocation.model_validate(item)
-                for item in self.documents
+                for item in [*self.documents, *workspace_records]
                 if item.get("resource_type") == "approval_revocation"
             )
             decision = GovernanceEvaluator.evaluate(
@@ -738,6 +954,7 @@ class LocalRuntimeService:
                 revocations,
                 now=self._evaluation_time(request.operation),
             )
+
             if not decision.allowed:
                 return self._error(
                     "LESR-GOVERNANCE-NOT-SATISFIED",
@@ -812,6 +1029,62 @@ class LocalRuntimeService:
                 (request.workspace_uid,),
                 retryable=isinstance(error, ConcurrencyConflict),
             )
+
+    def add_review_comment(self, request: WriteEnvelope) -> DomainResult:
+        error = self._validate_write(request, require_workspace=True, check_base=False)
+        if error:
+            return error
+        try:
+            package_uid = str(request.operation["package_uid"])
+            package = self.reviews[package_uid]
+            comment = ReviewComment.model_validate(
+                dict(request.operation["comment"]) | {"package_hash": package.subject_hash}
+            )
+            replacement = ReviewPackage.model_validate(
+                package.model_dump(mode="json")
+                | {
+                    "comment_hashes": sorted(
+                        (*package.comment_hashes, comment.comment_hash)
+                    ),
+                    "subject_hash": "",
+                    "package_hash": "",
+                }
+            )
+            if not request.dry_run:
+                self.reviews.pop(package_uid)
+                self.reviews[replacement.package_uid] = replacement
+                self.review_records.setdefault(request.workspace_uid, []).append(
+                    comment.model_dump(mode="json")
+                )
+                self._checkpoint_workspace(
+                    self.workspaces[request.workspace_uid],
+                    review_package=replacement,
+                )
+            return DomainResult(
+                {
+                    "comment": comment.model_dump(mode="json"),
+                    "review_package": replacement.model_dump(mode="json"),
+                    "approvals_invalidated": True,
+                }
+            )
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-REVIEW-COMMENT-FAILED",
+                ErrorCategory.VALIDATION,
+                str(error),
+                (request.workspace_uid,),
+            )
+
+    def resolve_review_comment(self, request: WriteEnvelope) -> DomainResult:
+        return self._append_review_record(request, CommentResolution, "comment_resolution")
+
+    def satisfy_review_condition(self, request: WriteEnvelope) -> DomainResult:
+        return self._append_review_record(
+            request, ConditionSatisfaction, "condition_satisfaction"
+        )
+
+    def revoke_approval(self, request: WriteEnvelope) -> DomainResult:
+        return self._append_review_record(request, ApprovalRevocation, "approval_revocation")
 
     def prepare_baseline(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=False)
@@ -1141,6 +1414,7 @@ class LocalRuntimeService:
             ),
             lifecycle_records=(),
         )
+
         workspace = Workspace(
             workspace_uid=package.workspace_uid,
             base_commit=package.base_commit,
@@ -1166,6 +1440,57 @@ class LocalRuntimeService:
             != tuple(recorded.get("finding_hashes", ()))
         ):
             raise ApprovalError("baseline Validation changed at transaction boundary")
+
+    def rebuild_baseline_tag(self, baseline_uid: str, tag_name: str) -> DomainResult:
+        """Rebuild publication metadata at the Baseline Manifest creation commit."""
+        try:
+            safe_uid = baseline_uid.replace("/", "").replace("\\", "")
+            if safe_uid != baseline_uid or not tag_name or tag_name.startswith("-"):
+                raise ValueError("baseline UID or tag name is invalid")
+            path = f"canonical/baselines/{baseline_uid}.json"
+            manifest = self.repository.read_json(self.base, path)
+            if manifest is None:
+                raise KeyError(baseline_uid)
+            commits = self.repository._git(
+                "log",
+                self.base,
+                "--diff-filter=A",
+                "--format=%H",
+                "--reverse",
+                "--",
+                path,
+            ).splitlines()
+            if len(commits) != 1:
+                raise IntegrityError("Baseline Manifest creation commit is ambiguous")
+            existing = self.repository._try_git(
+                "rev-parse", "--verify", f"refs/tags/{tag_name}"
+            )
+            if existing:
+                tagged_commit = self.repository._git("rev-list", "-n", "1", tag_name)
+                if tagged_commit != commits[0]:
+                    raise IntegrityError("existing tag points to another commit")
+                return DomainResult(
+                    {"tag_name": tag_name, "tag_status": "created", "idempotent": True}
+                )
+            self.repository._git(
+                "tag", "-a", tag_name, commits[0], "-m", f"LESR Baseline {tag_name}"
+            )
+            return DomainResult(
+                {
+                    "baseline_uid": baseline_uid,
+                    "manifest_commit": commits[0],
+                    "tag_name": tag_name,
+                    "tag_status": "created",
+                    "idempotent": False,
+                }
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError, IntegrityError) as error:
+            return self._error(
+                "LESR-BASELINE-TAG-REBUILD-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (baseline_uid,),
+            )
 
     def start_task(self, task_type: str, request: dict[str, Any]) -> DomainResult:
         try:
@@ -1210,12 +1535,87 @@ class LocalRuntimeService:
         worker = TaskWorker(
             self.task_store,
             {
+                "full_validation": self._run_full_validation,
                 "deep_trace": self._run_deep_trace,
                 "large_impact": self._run_large_impact,
+                "migration": self._run_migration,
+                "backup": self._run_backup,
             },
         )
         task = worker.run_next()
         return DomainResult(task.model_dump(mode="json") if task is not None else {"idle": True})
+
+    def _run_full_validation(
+        self,
+        request: dict[str, object],
+        progress: Any,
+        cancelled: Any,
+    ) -> dict[str, object]:
+        progress(10, {"phase": "graph_snapshot"})
+        if cancelled():
+            return {"cancelled": True}
+        configuration_uid = str(request["configuration_uid"])
+        evaluation_time = self._parse_evaluation_time(str(request["evaluation_time"]))
+        evaluator = self._evaluator(configuration_uid, evaluation_time)
+        configuration = self._configuration(configuration_uid)
+        candidate = CandidateRevisionSet(
+            workspace_uid=str(request.get("workspace_uid", uuid7_candidate())),
+            checkpoint_uid=uuid7_candidate(),
+            effective_model_hash=str(configuration["effective_model_hash"]),
+            revisions=tuple(item.revision for item in evaluator.snapshot.nodes),
+            relation_revisions=tuple(item.assertion for item in evaluator.snapshot.relations),
+            lifecycle_records=(),
+        )
+        workspace = Workspace(
+            workspace_uid=candidate.workspace_uid,
+            base_commit=self.base,
+            configuration_uid=configuration_uid,
+            effective_model_hash=candidate.effective_model_hash,
+            delegation_uid="persistent-full-validation",
+            actor_uid=str(request.get("actor_uid", "system")),
+            created_at=evaluation_time,
+        )
+        progress(60, {"phase": "rule_evaluation"})
+        if cancelled():
+            return {"cancelled": True}
+        result = self._validate_submission(
+            SimpleNamespace(workspace=workspace, candidate=candidate), evaluator
+        )
+        progress(100, {"phase": "complete"})
+        return result
+
+    def _run_migration(
+        self,
+        request: dict[str, object],
+        progress: Any,
+        cancelled: Any,
+    ) -> dict[str, object]:
+        progress(10, {"phase": "plan"})
+        if cancelled():
+            return {"cancelled": True}
+        report = RepositoryMaintenance(self.project).migration_plan(
+            str(request["target_version"]),
+            dry_run=bool(request.get("dry_run", True)),
+        )
+        progress(100, {"phase": "complete"})
+        return report
+
+    def _run_backup(
+        self,
+        request: dict[str, object],
+        progress: Any,
+        cancelled: Any,
+    ) -> dict[str, object]:
+        progress(10, {"phase": "bundle"})
+        if cancelled():
+            return {"cancelled": True}
+        result = RepositoryMaintenance(self.project).backup(Path(str(request["destination"])))
+        progress(100, {"phase": "complete"})
+        return {
+            "bundle": str(result.bundle),
+            "manifest": str(result.manifest),
+            "bundle_sha256": result.bundle_sha256,
+        }
 
     def _run_deep_trace(
         self,
@@ -2147,6 +2547,31 @@ class LocalRuntimeService:
             if not isinstance(state, dict):
                 continue
             package_value = state.get("review_package")
+            records_value = state.get("review_records", ())
+            if isinstance(records_value, list):
+                workspace_uid = str(
+                    state.get("working_state", {}).get("workspace_uid", "")
+                )
+                if workspace_uid:
+                    self.review_records[workspace_uid] = [
+                        item for item in records_value if isinstance(item, dict)
+                    ]
+            rebase_value = state.get("rebase_results", {})
+            if isinstance(rebase_value, dict):
+                workspace_uid = str(
+                    state.get("working_state", {}).get("workspace_uid", "")
+                )
+                if workspace_uid:
+                    self.rebase_results[workspace_uid] = {
+                        str(uid): RebaseResult.model_validate(item)
+                        for uid, item in rebase_value.items()
+                        if isinstance(item, dict)
+                    }
+            reconciliation_value = state.get("reconciliation")
+            if isinstance(reconciliation_value, dict):
+                uid = str(reconciliation_value.get("workspace_uid", ""))
+                if uid:
+                    self.reconciliation[uid] = reconciliation_value
             if isinstance(package_value, dict):
                 try:
                     package = ReviewPackage.model_validate(package_value)
@@ -2207,6 +2632,8 @@ class LocalRuntimeService:
         submission: Submission | None = None,
         review_package: ReviewPackage | None = None,
         evidence: dict[str, Any] | None = None,
+        review_records: list[dict[str, Any]] | None = None,
+        rebase_results: dict[str, RebaseResult] | None = None,
     ) -> dict[str, Any]:
         value: dict[str, Any] = {
             "runtime_state_version": "1.0",
@@ -2222,7 +2649,163 @@ class LocalRuntimeService:
             value["review_package"] = review_package.model_dump(mode="json")
         if evidence is not None:
             value["review_evidence"] = evidence
+        if review_records:
+            value["review_records"] = review_records
+        if rebase_results:
+            value["rebase_results"] = {
+                uid: item.model_dump(mode="json") for uid, item in rebase_results.items()
+            }
         return value
+
+    def _checkpoint_workspace(
+        self,
+        workspace: Workspace,
+        *,
+        review_package: ReviewPackage | None = None,
+    ) -> None:
+        submission = self.submissions.get(workspace.workspace_uid)
+        package = review_package or next(
+            (
+                item
+                for item in self.reviews.values()
+                if item.workspace_uid == workspace.workspace_uid
+            ),
+            None,
+        )
+        evidence = self.review_evidence.get(package.package_uid) if package else None
+        self.repository.create_checkpoint(
+            workspace.workspace_uid,
+            self._workspace_state(
+                workspace,
+                submission=submission,
+                review_package=package,
+                evidence=evidence,
+                review_records=self.review_records.get(workspace.workspace_uid),
+                rebase_results=self.rebase_results.get(workspace.workspace_uid),
+            ),
+            CheckpointStrategy.WORKSPACE_REF,
+        )
+
+    def _invalidate_review(self, workspace_uid: str) -> None:
+        self.submissions.pop(workspace_uid, None)
+        invalid_packages = [
+            uid for uid, item in self.reviews.items() if item.workspace_uid == workspace_uid
+        ]
+        for uid in invalid_packages:
+            self.reviews.pop(uid, None)
+            self.review_evidence.pop(uid, None)
+            self.baseline_preparations.pop(uid, None)
+        self.review_records.pop(workspace_uid, None)
+
+    def _append_review_record(
+        self,
+        request: WriteEnvelope,
+        model: Any,
+        record_type: str,
+    ) -> DomainResult:
+        error = self._validate_write(request, require_workspace=True, check_base=False)
+        if error:
+            return error
+        try:
+            raw = request.operation.get("record")
+            if not isinstance(raw, dict):
+                raise TypeError(f"{record_type} requires record")
+            record = model.model_validate(raw)
+            if not request.dry_run:
+                self.review_records.setdefault(request.workspace_uid, []).append(
+                    record.model_dump(mode="json")
+                )
+                self._checkpoint_workspace(self.workspaces[request.workspace_uid])
+            return DomainResult({record_type: record.model_dump(mode="json")})
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                f"LESR-{record_type.replace('_', '-').upper()}-FAILED",
+                ErrorCategory.VALIDATION,
+                str(error),
+                (request.workspace_uid,),
+            )
+
+    @staticmethod
+    def _state_from_revision(revision: Revision) -> SemanticState:
+        return SemanticState(
+            object_uid=revision.object_uid,
+            human_key=revision.human_key,
+            kind=revision.kind,
+            facets=revision.facets,
+            fields=tuple((item.path, item.value) for item in revision.fields),
+            fragments=tuple(
+                (item.local_key, item.model_dump(mode="json")) for item in revision.fragments
+            ),
+        )
+
+    @staticmethod
+    def _state_from_working_copy(copy: WorkingCopy) -> SemanticState:
+        return SemanticState(
+            object_uid=copy.object_uid,
+            human_key=copy.human_key,
+            kind=copy.kind,
+            facets=copy.facets,
+            fields=tuple((item.path, item.value) for item in copy.draft_fields),
+            fragments=tuple(
+                (item.local_key, item.model_dump(mode="json"))
+                for item in copy.draft_fragments
+            ),
+            relations=tuple(
+                (item.relation_revision_uid, item.model_dump(mode="json"))
+                for item in copy.relation_proposals
+            ),
+        )
+
+    def _state_at_revision(self, commit: str, revision_uid: str | None) -> SemanticState | None:
+        if revision_uid is None:
+            return None
+        value = self.repository.read_json(commit, f"canonical/revisions/{revision_uid}.json")
+        return self._state_from_revision(Revision.model_validate(value)) if value else None
+
+    def _latest_revision_for_object(self, commit: str, object_uid: str) -> Revision | None:
+        revisions = [
+            Revision.model_validate(value)
+            for _, value in self.repository.documents(commit)
+            if value.get("resource_type") == "revision" and value.get("object_uid") == object_uid
+        ]
+        return max(revisions, key=lambda item: item.revision_number, default=None)
+
+    @staticmethod
+    def _copy_from_state(
+        copy: WorkingCopy,
+        state: SemanticState,
+        base_revision: Revision | None,
+    ) -> WorkingCopy:
+        return WorkingCopy.model_validate(
+            copy.model_dump(mode="json")
+            | {
+                "base_revision_uid": (
+                    base_revision.revision_uid if base_revision is not None else copy.base_revision_uid
+                ),
+                "base_revision_number": (
+                    base_revision.revision_number
+                    if base_revision is not None
+                    else copy.base_revision_number
+                ),
+                "human_key": state.human_key,
+                "kind": state.kind,
+                "facets": state.facets,
+                "draft_fields": tuple(SemanticField(path=path, value=value) for path, value in state.fields),
+                "draft_fragments": tuple(
+                    Fragment.model_validate(value)
+                    for _, value in state.fragments
+                    if isinstance(value, dict)
+                ),
+                "relation_proposals": tuple(
+                    RelationAssertion.model_validate(value)
+                    for _, value in state.relations
+                    if isinstance(value, dict)
+                ),
+                "validation_state": ValidationState.NOT_RUN,
+                "state": WorkingCopyState.EDITABLE,
+                "working_state_hash": "",
+            }
+        )
 
     def _review_policy(self, configuration_uid: str, operation: str) -> ReviewPolicy:
         model = self._effective_model(configuration_uid)

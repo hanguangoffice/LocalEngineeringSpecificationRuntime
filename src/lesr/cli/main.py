@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +15,7 @@ from lesr.adapters.git import (
 )
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.mcp import create_server
-from lesr.adapters.operations import RepositoryMaintenance, TaskStore, plan_workspace_gc
+from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.pdf_import import preview_pdf
 from lesr.adapters.web import create_web_app
 from lesr.application.contracts import RiskClass, WriteEnvelope
@@ -34,6 +33,7 @@ context_app = typer.Typer(no_args_is_help=True)
 workspace_app = typer.Typer(no_args_is_help=True)
 approval_app = typer.Typer(no_args_is_help=True)
 baseline_app = typer.Typer(no_args_is_help=True)
+review_app = typer.Typer(no_args_is_help=True)
 projection_app = typer.Typer(no_args_is_help=True)
 reconcile_app = typer.Typer(no_args_is_help=True)
 mcp_app = typer.Typer(no_args_is_help=True)
@@ -42,6 +42,7 @@ app.add_typer(context_app, name="context")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(approval_app, name="approval")
 app.add_typer(baseline_app, name="baseline")
+app.add_typer(review_app, name="review")
 app.add_typer(projection_app, name="projection")
 app.add_typer(reconcile_app, name="reconcile")
 app.add_typer(mcp_app, name="mcp")
@@ -123,8 +124,7 @@ def migrate_repository(project: Path, target_version: str, dry_run: bool = True)
 
 @app.command("gc")
 def garbage_collect_workspaces(project: Path, dry_run: bool = True) -> None:
-    del project
-    emit(plan_workspace_gc((), (), now=datetime.now(UTC), dry_run=dry_run).model_dump(mode="json"))
+    emit(RepositoryMaintenance(project).workspace_gc(dry_run=dry_run))
 
 
 @app.command("init")
@@ -405,6 +405,102 @@ def propose_workspace_operation(
     )
 
 
+def invoke_runtime_write(
+    method_name: str,
+    project: Path,
+    workspace_uid: str,
+    expected_base: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    operation_file: Path,
+    dry_run: bool,
+) -> None:
+    domain = LocalRuntimeService(project)
+    method = getattr(domain, method_name)
+    emit(
+        method(
+            WriteEnvelope(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor_uid,
+                delegation_uid,
+                dry_run,
+                RiskClass.HIGH,
+                read_object(operation_file),
+            )
+        ).payload()
+    )
+
+
+@workspace_app.command("rebase")
+def rebase_workspace(
+    project: Path, workspace_uid: str, expected_base: str, actor_uid: str,
+    delegation_uid: str, idempotency_key: str, operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    invoke_runtime_write(
+        "rebase_workspace", project, workspace_uid, expected_base, actor_uid,
+        delegation_uid, idempotency_key, operation_file, dry_run
+    )
+
+
+@workspace_app.command("merge")
+def merge_workspace(
+    project: Path, workspace_uid: str, expected_base: str, actor_uid: str,
+    delegation_uid: str, idempotency_key: str, operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    invoke_runtime_write(
+        "merge_workspace", project, workspace_uid, expected_base, actor_uid,
+        delegation_uid, idempotency_key, operation_file, dry_run
+    )
+
+
+@workspace_app.command("resolve")
+def resolve_workspace_conflict(
+    project: Path, workspace_uid: str, expected_base: str, actor_uid: str,
+    delegation_uid: str, idempotency_key: str, operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    invoke_runtime_write(
+        "resolve_merge_conflict", project, workspace_uid, expected_base, actor_uid,
+        delegation_uid, idempotency_key, operation_file, dry_run
+    )
+
+
+@review_app.command("comment")
+def review_comment(
+    project: Path, workspace_uid: str, expected_base: str, actor_uid: str,
+    delegation_uid: str, idempotency_key: str, operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    invoke_runtime_write(
+        "add_review_comment", project, workspace_uid, expected_base, actor_uid,
+        delegation_uid, idempotency_key, operation_file, dry_run
+    )
+
+
+@review_app.command("record")
+def review_record(
+    record_type: str, project: Path, workspace_uid: str, expected_base: str,
+    actor_uid: str, delegation_uid: str, idempotency_key: str,
+    operation_file: Path, dry_run: bool = False,
+) -> None:
+    methods = {
+        "resolution": "resolve_review_comment",
+        "condition": "satisfy_review_condition",
+        "revocation": "revoke_approval",
+    }
+    if record_type not in methods:
+        raise typer.BadParameter("record_type must be resolution, condition, or revocation")
+    invoke_runtime_write(
+        methods[record_type], project, workspace_uid, expected_base, actor_uid,
+        delegation_uid, idempotency_key, operation_file, dry_run
+    )
+
+
 @app.command("review-package")
 def build_review_package(
     project: Path,
@@ -607,6 +703,11 @@ def apply_baseline(
     )
 
 
+@baseline_app.command("tag-rebuild")
+def rebuild_baseline_tag(project: Path, baseline_uid: str, tag_name: str) -> None:
+    emit(LocalRuntimeService(project).rebuild_baseline_tag(baseline_uid, tag_name).payload())
+
+
 @projection_app.command("rebuild")
 def rebuild_projection(project: Path) -> None:
     repository = GitCanonicalRepository(project)
@@ -618,6 +719,29 @@ def rebuild_projection(project: Path) -> None:
 @reconcile_app.command("check")
 def check_reconciliation(path: list[str]) -> None:
     emit({"required": GitCanonicalRepository.requires_reconciliation(tuple(path)), "paths": path})
+
+
+@reconcile_app.command("open")
+def open_reconciliation(
+    project: Path,
+    expected_base: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    operation_file: Path,
+    dry_run: bool = False,
+) -> None:
+    invoke_runtime_write(
+        "begin_reconciliation",
+        project,
+        uuid7_candidate(),
+        expected_base,
+        actor_uid,
+        delegation_uid,
+        idempotency_key,
+        operation_file,
+        dry_run,
+    )
 
 
 @mcp_app.command("serve")
