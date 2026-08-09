@@ -26,6 +26,7 @@ class PublicProduct:
     workspace_uid: str
     delegation_uid: str
     configuration_uid: str
+    signer_password: str
 
 
 def bootstrap_public_product(root: Path) -> PublicProduct:
@@ -35,7 +36,8 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
     workspace_uid = "018f0000-0000-7000-8000-000000000902"
     delegation_uid = "018f0000-0000-7000-8000-000000000903"
     configuration_uid = "018f0000-0000-7000-8000-000000000904"
-    store = ApprovalKeyStore(root / "keys")
+    signer_password = "public-product-ci-password"
+    store = ApprovalKeyStore(root / "keys", password=signer_password)
     trust = store.generate(actor_uid, "Root owner", ("technical",))
     rule = source()
     profile = NormativeProfileRevision(
@@ -165,5 +167,12 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
     if not configured.ok:
         raise RuntimeError(str(configured.payload()))
     return PublicProduct(
-        domain, store, trust, actor_uid, workspace_uid, delegation_uid, configuration_uid
+        domain,
+        store,
+        trust,
+        actor_uid,
+        workspace_uid,
+        delegation_uid,
+        configuration_uid,
+        signer_password,
     )

@@ -60,6 +60,7 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
         product.domain.project,
         launch_token="product-flow-token",
         signer_key_root=tmp_path / "keys",
+        signer_password=product.signer_password,
     )
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
