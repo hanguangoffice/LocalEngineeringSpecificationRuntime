@@ -103,7 +103,11 @@
       "required": ["roles", "max_depth"],
       "properties": {
         "roles": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-        "max_depth": {"type": "integer", "minimum": 1, "maximum": 16}
+        "max_depth": {"type": "integer", "minimum": 1, "maximum": 16},
+        "direction": {"enum": ["outgoing", "incoming"]},
+        "binding": {"enum": ["logical", "pinned", "fragment", "external"]},
+        "lifecycle_state": {"type": "string", "minLength": 1},
+        "formal_trace_category": {"type": "string", "minLength": 1}
       }
     },
     "expression": {

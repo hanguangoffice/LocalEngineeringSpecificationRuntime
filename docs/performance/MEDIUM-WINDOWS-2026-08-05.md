@@ -4,8 +4,8 @@
 - Semantics: exact pinned Relation Type Revision, complete Formal Trace credit checks,
   immutable Graph Snapshot, Configuration and Effective Model hashes enabled.
 - Samples: 10 warm-ups and 100 measured Context Manifest calls.
-- Dataset/Graph construction: 12.764 s.
-- Context Manifest P95: 0.019268 s.
+- Re-run 2026-08-10 dataset/Graph construction: 11.844956 s.
+- Re-run 2026-08-10 Context Manifest P95: 0.016315 s.
 - Python: 3.12.13.
 - Machine: Intel Core i7-12700H (14 cores/20 logical processors), 16 GiB RAM,
   NVMe SSD, Windows 10 Enterprise LTSC 10.0.19044.

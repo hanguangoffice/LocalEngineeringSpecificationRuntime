@@ -15,8 +15,9 @@ Restore refuses non-empty destinations, verifies bytes before cloning, restores 
 Canonical Ref and validates the 1.0 Manifest. Migration is post-1.0 forward-only,
 always plans first, and creates a backup Ref before a registered step; an absent
 step cannot advance Canonical State. Workspace GC is dry-run by default, retains 30
-days, 20 latest checkpoints and every governance reference, and never requests
-`git prune`.
+days, 20 latest refs and every governance reference; an explicit non-dry run deletes
+only the planned refs and never invokes `git prune`. Baseline tags are idempotently
+rebuildable at the commit that first contained their Manifest.
 
 CLI and MCP negotiate one frozen Capability Descriptor. MCP includes the approved
 read/write subset and excludes private signing, arbitrary file/SQL/shell and all

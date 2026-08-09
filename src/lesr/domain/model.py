@@ -67,6 +67,7 @@ class KindDefinitionRevision(DefinitionRevision):
     core_class: CoreResourceClass
     required_facet_revision_uids: tuple[str, ...] = ()
     optional_facet_revision_uids: tuple[str, ...] = ()
+    workflow_revision_uid: str | None = None
 
     @model_validator(mode="after")
     def facets_are_disjoint(self) -> KindDefinitionRevision:
@@ -138,6 +139,27 @@ class ProfileContribution(FrozenModel):
     impact_report_hash: str | None = None
 
 
+class ProfileReviewStage(FrozenModel):
+    stage: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    minimum_count: int = Field(default=1, ge=1)
+
+
+class ProfileReviewPolicy(FrozenModel):
+    operation: str = Field(min_length=1)
+    stages: tuple[ProfileReviewStage, ...]
+    require_preparer_independence: bool = True
+    require_comment_resolution: bool = True
+
+
+class ProfileContextPolicy(FrozenModel):
+    task_type: str = Field(min_length=1)
+    mandatory_predicates: tuple[str, ...] = ()
+    conditional_predicates: tuple[str, ...] = ()
+    invariant_object_uids: tuple[str, ...] = ()
+    forbidden_sensitivities: tuple[str, ...] = ()
+
+
 class NormativeProfileRevision(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["normative_profile_revision"] = "normative_profile_revision"
@@ -147,6 +169,8 @@ class NormativeProfileRevision(FrozenModel):
     authority: int = Field(ge=0)
     contributions: tuple[ProfileContribution, ...] = ()
     rule_revision_uids: tuple[str, ...] = ()
+    review_policies: tuple[ProfileReviewPolicy, ...] = ()
+    context_policies: tuple[ProfileContextPolicy, ...] = ()
     content_hash: str = ""
 
     @model_validator(mode="after")
@@ -222,6 +246,7 @@ class EffectiveModel(FrozenModel):
     model_uid: str
     profile_revision_uids: tuple[str, ...]
     definition_revision_uids: tuple[str, ...]
+    rule_revision_uids: tuple[str, ...]
     composition_sources: tuple[tuple[str, str], ...]
     authority: tuple[tuple[str, int], ...]
     tailoring_overlay_uids: tuple[str, ...]
@@ -232,6 +257,8 @@ class EffectiveModel(FrozenModel):
     conflict_resolutions: tuple[str, ...]
     function_registry: tuple[str, ...]
     unit_registry: tuple[str, ...]
+    review_policies: tuple[ProfileReviewPolicy, ...] = ()
+    context_policies: tuple[ProfileContextPolicy, ...] = ()
     compiler_version: Literal["1.0.0"] = "1.0.0"
     conflicts: tuple[ModelConflict, ...] = ()
     model_hash: str
@@ -355,6 +382,21 @@ class EffectiveModelCompiler:
             )
         )
         profile_uids = tuple(item.profile_revision_uid for item in ordered_profiles)
+        rule_uids = tuple(
+            sorted({uid for profile in ordered_profiles for uid in profile.rule_revision_uids})
+        )
+        review_policies = tuple(
+            sorted(
+                (policy for profile in ordered_profiles for policy in profile.review_policies),
+                key=lambda item: (item.operation, semantic_hash(item)),
+            )
+        )
+        context_policies = tuple(
+            sorted(
+                (policy for profile in ordered_profiles for policy in profile.context_policies),
+                key=lambda item: (item.task_type, semantic_hash(item)),
+            )
+        )
         source_items = tuple(sorted(sources.items()))
         authority_items = tuple(sorted(authority.items()))
         overlay_uids = tuple(sorted(item.overlay_uid for item in overlays))
@@ -365,6 +407,7 @@ class EffectiveModelCompiler:
         payload = {
             "profiles": profile_uids,
             "definitions": selected_uids,
+            "rules": rule_uids,
             "sources": source_items,
             "authority": authority_items,
             "overlays": overlay_uids,
@@ -373,6 +416,12 @@ class EffectiveModelCompiler:
             "workflows": workflow_uids,
             "functions": function_names,
             "units": unit_names,
+            "review_policies": tuple(
+                item.model_dump(mode="json") for item in review_policies
+            ),
+            "context_policies": tuple(
+                item.model_dump(mode="json") for item in context_policies
+            ),
             "compiler": self.VERSION,
             "conflicts": tuple(
                 item.model_dump(mode="json")
@@ -384,6 +433,7 @@ class EffectiveModelCompiler:
             model_uid=semantic_hash({"effective_model": model_hash}),
             profile_revision_uids=profile_uids,
             definition_revision_uids=selected_uids,
+            rule_revision_uids=rule_uids,
             composition_sources=source_items,
             authority=authority_items,
             tailoring_overlay_uids=overlay_uids,
@@ -400,6 +450,8 @@ class EffectiveModelCompiler:
             conflict_resolutions=(),
             function_registry=function_names,
             unit_registry=unit_names,
+            review_policies=review_policies,
+            context_policies=context_policies,
             conflicts=tuple(sorted(conflicts, key=lambda value: semantic_hash(value))),
             model_hash=model_hash,
         )

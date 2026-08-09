@@ -13,7 +13,7 @@
     "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "scope": {"$ref": "common.schema.json#/$defs/canonical_value"},
     "scope_hash": {"$ref": "common.schema.json#/$defs/sha256"},
-    "approval_type": {"enum": ["content", "technical", "process", "risk_deviation", "baseline", "release"]},
+    "approval_type": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$"},
     "actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "actor_role": {"type": "string", "minLength": 1},
     "actor_type": {"const": "human"},

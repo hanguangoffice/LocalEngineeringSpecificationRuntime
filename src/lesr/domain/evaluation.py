@@ -354,6 +354,7 @@ class ValidationTarget(StrEnum):
 
 
 class RuleOperator(StrEnum):
+    FIELD_REQUIRED = "field_required"
     FIELD_TYPE = "field_type"
     FIELD_FORBIDDEN = "field_forbidden"
     FIELD_ENUM = "field_enum"
@@ -407,6 +408,7 @@ class ConstraintExpression(FrozenModel):
     evidence_kind: str | None = None
     observation_key: str | None = None
     maximum_age_seconds: int | None = Field(default=None, ge=0)
+    comparison: Literal["eq", "ne", "lt", "lte", "gt", "gte"] | None = None
 
 
 class ConstraintEnvironment(FrozenModel):
@@ -431,6 +433,8 @@ def evaluate_constraint(
     value = fields.get(expression.field_path or "")
     field_known = expression.field_path in fields
     operator = expression.operator
+    if operator is RuleOperator.FIELD_REQUIRED:
+        return _truth(field_known, value, "required field check")
     if operator is RuleOperator.FIELD_FORBIDDEN:
         return _truth(not field_known, value, "forbidden field check")
     if (
@@ -584,7 +588,30 @@ def evaluate_constraint(
             Decimal(item) if isinstance(item, str) else item
             for item in environment.aggregate_values
         )
-        return evaluate_aggregate(operator, values)
+        aggregated = evaluate_aggregate(operator, values)
+        if aggregated.truth is TruthValue.INDETERMINATE or expression.comparison is None:
+            return aggregated
+        if expression.expected is None:
+            return _unknown("aggregate comparison has no expected value")
+        try:
+            observed = Decimal(str(aggregated.observed))
+            expected = Decimal(str(expression.expected))
+        except (InvalidOperation, ValueError):
+            if expression.comparison not in {"eq", "ne"}:
+                return _unknown("non-numeric aggregate supports only equality")
+            passed = aggregated.observed == expression.expected
+            if expression.comparison == "ne":
+                passed = not passed
+        else:
+            passed = {
+                "eq": observed == expected,
+                "ne": observed != expected,
+                "lt": observed < expected,
+                "lte": observed <= expected,
+                "gt": observed > expected,
+                "gte": observed >= expected,
+            }[expression.comparison]
+        return _truth(passed, aggregated.observed, "aggregate comparison")
     if operator is RuleOperator.EXTERNAL_OBSERVATION:
         observations = dict(environment.fixed_external_observations)
         if expression.observation_key not in observations:

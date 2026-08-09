@@ -120,10 +120,21 @@ class LESRDomainPort(Protocol):
     ) -> DomainResult: ...
 
     def traverse(
-        self, start_uid: str, predicate: str | None, max_depth: int
+        self,
+        start_uid: str,
+        predicate: str | None,
+        max_depth: int,
+        configuration_uid: str,
+        evaluation_time: str,
     ) -> DomainResult: ...
 
-    def impact(self, start_uid: str, max_depth: int) -> DomainResult: ...
+    def impact(
+        self,
+        start_uid: str,
+        max_depth: int,
+        configuration_uid: str,
+        evaluation_time: str,
+    ) -> DomainResult: ...
 
     def build_context(
         self,
@@ -132,6 +143,7 @@ class LESRDomainPort(Protocol):
         token_budget: int,
         configuration_uid: str,
         actor: str,
+        evaluation_time: str,
     ) -> DomainResult: ...
 
     def open_workspace(self, request: WriteEnvelope) -> DomainResult: ...
@@ -279,8 +291,14 @@ class InMemoryDomainService:
         return DomainResult({"items": page, "next_cursor": next_cursor, "total": len(items)})
 
     def traverse(
-        self, start_uid: str, predicate: str | None, max_depth: int
+        self,
+        start_uid: str,
+        predicate: str | None,
+        max_depth: int,
+        configuration_uid: str = "test-configuration",
+        evaluation_time: str = "2026-08-05T00:00:00Z",
     ) -> DomainResult:
+        del configuration_uid, evaluation_time
         del predicate, max_depth
         return self._error(
             "LESR-RELATION-NOT-FOUND",
@@ -289,8 +307,16 @@ class InMemoryDomainService:
             (start_uid,),
         )
 
-    def impact(self, start_uid: str, max_depth: int) -> DomainResult:
-        return self.traverse(start_uid, None, max_depth)
+    def impact(
+        self,
+        start_uid: str,
+        max_depth: int,
+        configuration_uid: str = "test-configuration",
+        evaluation_time: str = "2026-08-05T00:00:00Z",
+    ) -> DomainResult:
+        return self.traverse(
+            start_uid, None, max_depth, configuration_uid, evaluation_time
+        )
 
     def build_context(
         self,
@@ -299,8 +325,9 @@ class InMemoryDomainService:
         token_budget: int,
         configuration_uid: str = "",
         actor: str = "context-reader",
+        evaluation_time: str = "2026-08-05T00:00:00Z",
     ) -> DomainResult:
-        del configuration_uid, actor
+        del configuration_uid, actor, evaluation_time
         missing = tuple(uid for uid in target_uids if uid not in self.resources)
         if missing:
             return self._error(
@@ -468,7 +495,7 @@ class InMemoryDomainService:
                 "task is still running",
                 (task_uid,),
                 retryable=True,
-                suggested="repository.health",
+                suggested=None,
             )
         return DomainResult(asdict(task))
 

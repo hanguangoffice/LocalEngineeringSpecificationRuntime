@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -192,6 +193,31 @@ class TaskStore:
             raise KeyError(task_uid)
         return self._from_row(row)
 
+    def request(self, task_uid: str) -> dict[str, object]:
+        return self._json_record("task_requests", task_uid)
+
+    def result(self, task_uid: str) -> dict[str, object] | None:
+        try:
+            return self._json_record("task_results", task_uid)
+        except KeyError:
+            return None
+
+    def checkpoint(self, task_uid: str) -> dict[str, object] | None:
+        try:
+            return self._json_record("task_checkpoints", task_uid)
+        except KeyError:
+            return None
+
+    def put_artifact(self, artifact_hash: str, value: dict[str, object]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_artifacts VALUES (?, ?)",
+                (artifact_hash, canonical_json(value)),
+            )
+
+    def artifact(self, artifact_hash: str) -> dict[str, object]:
+        return self._json_record("runtime_artifacts", artifact_hash)
+
     def list(self, state: PersistentTaskState | None = None) -> tuple[PersistentTask, ...]:
         with self._connect() as connection:
             if state is None:
@@ -230,11 +256,34 @@ class TaskStore:
                 CREATE TABLE IF NOT EXISTS task_results (
                     task_uid TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS runtime_artifacts (
+                    task_uid TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
                 """
             )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _json_record(self, table: str, task_uid: str) -> dict[str, object]:
+        if table not in {
+            "task_requests",
+            "task_results",
+            "task_checkpoints",
+            "runtime_artifacts",
+        }:
+            raise ValueError("invalid task record table")
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT value FROM {table} WHERE task_uid = ?",
+                (task_uid,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_uid)
+        value = json.loads(str(row[0]))
+        if not isinstance(value, dict):
+            raise IntegrityError("task record is not an object")
+        return value
 
     @staticmethod
     def _row(task: PersistentTask) -> tuple[object, ...]:
@@ -267,6 +316,40 @@ class TaskStore:
                 "updated_at": datetime.fromisoformat(str(row[9])),
             }
         )
+
+
+TaskHandler = Callable[
+    [dict[str, object], Callable[[int, dict[str, object] | None], None], Callable[[], bool]],
+    dict[str, object],
+]
+
+
+class TaskWorker:
+    """Explicit local worker; callers decide when one queued task may consume resources."""
+
+    def __init__(self, store: TaskStore, handlers: dict[str, TaskHandler]) -> None:
+        self.store = store
+        self.handlers = handlers
+
+    def run_next(self) -> PersistentTask | None:
+        task = self.store.claim_next()
+        if task is None:
+            return None
+        handler = self.handlers.get(task.task_type)
+        if handler is None:
+            return self.store.finish(task.task_uid, None, error="LESR-TASK-HANDLER-UNAVAILABLE")
+
+        def progress(value: int, checkpoint: dict[str, object] | None = None) -> None:
+            self.store.update_progress(task.task_uid, value, checkpoint)
+
+        def cancelled() -> bool:
+            return self.store.cancellation_requested(task.task_uid)
+
+        try:
+            result = handler(self.store.request(task.task_uid), progress, cancelled)
+            return self.store.finish(task.task_uid, result)
+        except Exception as error:  # noqa: BLE001 - task failure is persisted, not hidden
+            return self.store.finish(task.task_uid, None, error=str(error))
 
 
 class BackupManifest(FrozenModel):
@@ -373,6 +456,47 @@ class RepositoryMaintenance:
             self.repository._git("update-ref", backup_ref, commit)
             raise ValueError("LESR-MIGRATION-STEP-NOT-REGISTERED")
         return report
+
+    def workspace_gc(self, *, dry_run: bool = True, now: datetime | None = None) -> dict[str, object]:
+        """Remove only stale Workspace/checkpoint refs; never invoke Git prune."""
+        actual_now = now or datetime.now(UTC)
+        raw = self.repository._try_git(
+            "for-each-ref",
+            "--format=%(refname)|%(creatordate:iso-strict)",
+            "refs/lesr/workspaces/",
+            "refs/lesr/checkpoints/",
+        )
+        refs: list[tuple[str, datetime]] = []
+        for line in raw.splitlines() if raw else ():
+            name, created = line.split("|", 1)
+            refs.append((name, datetime.fromisoformat(created)))
+        documents = [value for _, value in self.repository.documents()]
+        referenced_workspaces = {
+            str(value["workspace_uid"])
+            for value in documents
+            if value.get("resource_type") in {"review_package", "baseline_preparation"}
+            and value.get("workspace_uid")
+        }
+        referenced_refs = tuple(
+            name
+            for name, _ in refs
+            if any(f"/{uid}" in name for uid in referenced_workspaces)
+        )
+        plan = plan_workspace_gc(
+            tuple(refs),
+            referenced_refs,
+            now=actual_now,
+            dry_run=dry_run,
+        )
+        removed: list[str] = []
+        if not dry_run:
+            for reference in plan.removable_checkpoint_uids:
+                self.repository._git("update-ref", "-d", reference)
+                removed.append(reference)
+        return plan.model_dump(mode="json") | {
+            "removed_refs": removed,
+            "git_prune_executed": False,
+        }
 
 
 class GCPlan(FrozenModel):

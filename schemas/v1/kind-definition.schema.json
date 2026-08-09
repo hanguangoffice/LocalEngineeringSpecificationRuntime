@@ -11,6 +11,7 @@
     "name": {"type": "string", "minLength": 1}, "core_class": {"type": "string", "minLength": 1},
     "required_facet_revision_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
     "optional_facet_revision_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+    "workflow_revision_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
     "replaceable": {"type": "boolean"}, "authority": {"type":"integer","minimum":0}, "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
   }
 }

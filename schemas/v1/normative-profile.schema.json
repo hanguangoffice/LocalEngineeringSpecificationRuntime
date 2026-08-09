@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/normative-profile.schema.json",
+  "title": "LESR Normative Profile Revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "resource_type", "profile_uid", "profile_revision_uid", "layer", "authority", "contributions", "rule_revision_uids", "review_policies", "context_policies", "content_hash"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "normative_profile_revision"},
+    "profile_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "profile_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "layer": {"type": "integer", "minimum": 0, "maximum": 4},
+    "authority": {"type": "integer", "minimum": 0},
+    "contributions": {"type": "array", "items": {"$ref": "#/$defs/contribution"}},
+    "rule_revision_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+    "review_policies": {"type": "array", "items": {"$ref": "#/$defs/review_policy"}},
+    "context_policies": {"type": "array", "items": {"$ref": "#/$defs/context_policy"}},
+    "content_hash": {"$ref": "common.schema.json#/$defs/sha256"}
+  },
+  "$defs": {
+    "contribution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "definition_revision_uid"],
+      "properties": {
+        "mode": {"enum": ["extend", "refine", "tailor", "replace"]},
+        "definition_revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+        "target_revision_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+        "compatibility_report_hash": {"oneOf": [{"$ref": "common.schema.json#/$defs/sha256"}, {"type": "null"}]},
+        "impact_report_hash": {"oneOf": [{"$ref": "common.schema.json#/$defs/sha256"}, {"type": "null"}]}
+      }
+    },
+    "review_stage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stage", "role", "minimum_count"],
+      "properties": {"stage": {"type": "string", "minLength": 1}, "role": {"type": "string", "minLength": 1}, "minimum_count": {"type": "integer", "minimum": 1}}
+    },
+    "review_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "stages", "require_preparer_independence", "require_comment_resolution"],
+      "properties": {
+        "operation": {"type": "string", "minLength": 1},
+        "stages": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/review_stage"}},
+        "require_preparer_independence": {"type": "boolean"},
+        "require_comment_resolution": {"type": "boolean"}
+      }
+    },
+    "context_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task_type", "mandatory_predicates", "conditional_predicates", "invariant_object_uids", "forbidden_sensitivities"],
+      "properties": {
+        "task_type": {"type": "string", "minLength": 1},
+        "mandatory_predicates": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "conditional_predicates": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "invariant_object_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+        "forbidden_sensitivities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    }
+  }
+}

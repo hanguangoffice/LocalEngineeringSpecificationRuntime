@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-from lesr.application.service import RepositoryDomainService
+from datetime import UTC, datetime
+
+from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
-from lesr.domain.profiles import ProfileCompiler
-from lesr.domain.semantic import document_hash
-from tests.test_v1_profiles import profile
+from lesr.domain.model import (
+    EffectiveModelCompiler,
+    NormativeProfileRevision,
+    ProfileContextPolicy,
+    ProfileLayer,
+    ProfileReviewPolicy,
+    ProfileReviewStage,
+)
+from lesr.domain.semantic import SemanticField, document_hash
+from lesr.domain.workspace import WorkingCopy
 from tests.test_v1_rules import source
 
 
 def test_public_bootstrap_installs_root_governance_and_initial_configuration(
     tmp_path,
 ) -> None:
-    domain = RepositoryDomainService(tmp_path / "project")
+    domain = LocalRuntimeService(tmp_path / "project")
     actor_uid = "018f0000-0000-7000-8000-000000000901"
     workspace_uid = "018f0000-0000-7000-8000-000000000902"
     delegation_uid = "018f0000-0000-7000-8000-000000000903"
@@ -19,8 +29,37 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
     store = ApprovalKeyStore(tmp_path / "keys")
     trust = store.generate(actor_uid, "Root owner", ("technical",))
     rule = source()
-    selected_profile = profile(rule.rule_revision_uid)
-    model = ProfileCompiler().compile((selected_profile,), (rule,))
+    selected_profile = NormativeProfileRevision(
+        profile_revision_uid="018f0000-0000-7000-8000-000000000104",
+        layer=ProfileLayer.PROJECT,
+        authority=100,
+        rule_revision_uids=(rule.rule_revision_uid,),
+        review_policies=(
+            ProfileReviewPolicy(
+                operation="apply_transaction",
+                require_preparer_independence=False,
+                stages=(
+                    ProfileReviewStage(
+                        stage="apply_transaction", role="technical", minimum_count=1
+                    ),
+                ),
+            ),
+            ProfileReviewPolicy(
+                operation="baseline.apply",
+                require_preparer_independence=False,
+                stages=(
+                    ProfileReviewStage(
+                            stage="baseline", role="technical", minimum_count=1
+                    ),
+                ),
+            ),
+        ),
+        context_policies=(
+            ProfileContextPolicy(task_type="review"),
+            ProfileContextPolicy(task_type="baseline"),
+        ),
+    )
+    model = EffectiveModelCompiler().compile((selected_profile,), ())
     raw_delegation: dict[str, object] = {
         "schema_version": "1.0",
         "resource_type": "delegation_grant",
@@ -88,7 +127,7 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
         "active_deviation_revision_uids": [],
         "variant": "initial",
         "valid_at": None,
-        "effective_model_hash": model.effective_model_hash,
+        "effective_model_hash": model.model_hash,
         "closure_status": "complete",
         "closure_reasons": [],
         "created_at": "2026-08-05T00:00:00Z",
@@ -114,7 +153,7 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
         "initialize-first-configuration",
     )
     assert initialized.ok, initialized.payload()
-    assert RepositoryDomainService(domain.repository.path).base == initialized.value[
+    assert LocalRuntimeService(domain.repository.path).base == initialized.value[
         "result_commit"
     ]
     assert not domain.bootstrap_root_owner(
@@ -124,3 +163,148 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
         "second-bootstrap",
         governance,
     ).ok
+
+    opened = domain.open_workspace(
+        WriteEnvelope(
+            workspace_uid,
+            domain.base,
+            "open-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.MEDIUM,
+            {"configuration_uid": configuration_uid},
+        )
+    )
+    assert opened.ok, opened.payload()
+    domain = LocalRuntimeService(domain.repository.path)
+    assert workspace_uid in domain.workspaces
+
+    object_uid = "018f0000-0000-7000-8000-000000000905"
+    working_copy = WorkingCopy(
+        workspace_uid=workspace_uid,
+        object_uid=object_uid,
+        base_revision_uid=None,
+        human_key="DES-BOOT-1",
+        kind="software_design",
+        effective_model_hash=model.model_hash,
+        delegation_uid=delegation_uid,
+        draft_fields=(SemanticField(path="/statement", value="Bootstrap design"),),
+    )
+    proposed = domain.propose_operation(
+        WriteEnvelope(
+            workspace_uid,
+            domain.base,
+            "create-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.MEDIUM,
+            {
+                "operation_type": "create_object",
+                "working_copy": working_copy.model_dump(mode="json"),
+            },
+        )
+    )
+    assert proposed.ok, proposed.payload()
+    domain = LocalRuntimeService(domain.repository.path)
+    prepared = domain.prepare_review(
+        WriteEnvelope(
+            workspace_uid,
+            domain.base,
+            "review-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.HIGH,
+            {
+                "configuration_uid": configuration_uid,
+                "evaluation_time": datetime.now(UTC).isoformat(),
+            },
+        )
+    )
+    assert prepared.ok, prepared.payload()
+    package_value = prepared.value["review_package"]
+    domain = LocalRuntimeService(domain.repository.path)
+    assert package_value["package_uid"] in domain.reviews
+    package = domain.reviews[package_value["package_uid"]]
+    final_approval = store.sign(
+        trust,
+        "technical",
+        ApprovalPayload(
+            package_hash=package.package_hash,
+            effective_model_hash=package.effective_model_hash,
+            scope={"resource_uids": list(package.candidate_scope)},
+            approval_type="apply_transaction",
+        ),
+    )
+    applied = domain.apply_transaction(
+        WriteEnvelope(
+            workspace_uid,
+            domain.base,
+            "apply-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.HIGH,
+            {
+                "review_package_uid": package.package_uid,
+                "signed_approvals": [final_approval.model_dump(mode="json")],
+                "evaluation_time": datetime.now(UTC).isoformat(),
+            },
+        )
+    )
+    assert applied.ok, applied.payload()
+    documents = [value for _, value in domain.repository.documents()]
+    assert any(item.get("object_uid") == object_uid for item in documents)
+    assert any(item.get("resource_type") == "graph_snapshot" for item in documents)
+
+    baseline_workspace_uid = "018f0000-0000-7000-8000-000000000906"
+    baseline_prepared = domain.prepare_baseline(
+        WriteEnvelope(
+            baseline_workspace_uid,
+            domain.base,
+            "baseline-prepare-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.HIGH,
+            {
+                "configuration_uid": configuration_uid,
+                "evaluation_time": datetime.now(UTC).isoformat(),
+            },
+        )
+    )
+    assert baseline_prepared.ok, baseline_prepared.payload()
+    baseline_package_uid = baseline_prepared.value["review_package"]["package_uid"]
+    domain = LocalRuntimeService(domain.repository.path)
+    baseline_package = domain.reviews[baseline_package_uid]
+    baseline_approval = store.sign(
+        trust,
+        "technical",
+        ApprovalPayload(
+            package_hash=baseline_package.package_hash,
+            effective_model_hash=baseline_package.effective_model_hash,
+            scope={"resource_uids": list(baseline_package.candidate_scope)},
+            approval_type="baseline",
+        ),
+    )
+    baseline_applied = domain.apply_baseline(
+        WriteEnvelope(
+            baseline_workspace_uid,
+            domain.base,
+            "baseline-apply-across-process",
+            actor_uid,
+            delegation_uid,
+            False,
+            RiskClass.HIGH,
+            {
+                "review_package_uid": baseline_package_uid,
+                "signed_approvals": [baseline_approval.model_dump(mode="json")],
+                "evaluation_time": datetime.now(UTC).isoformat(),
+            },
+        )
+    )
+    assert baseline_applied.ok, baseline_applied.payload()
+    documents = [value for _, value in domain.repository.documents()]
+    assert any(item.get("resource_type") == "baseline_manifest" for item in documents)

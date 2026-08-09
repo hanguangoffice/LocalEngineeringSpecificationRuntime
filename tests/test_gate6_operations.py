@@ -10,8 +10,10 @@ from lesr.adapters.operations import (
     PersistentTaskState,
     RepositoryMaintenance,
     TaskStore,
+    TaskWorker,
     plan_workspace_gc,
 )
+from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.catalog import CAPABILITIES, CapabilityAccess
 
 
@@ -40,6 +42,46 @@ def test_runtime_task_database_is_outside_canonical_git(tmp_path: Path) -> None:
     TaskStore(tmp_path).enqueue("full_validation", {"scope": "all"})
     assert repository.current_commit() == commit
     assert all(not path.startswith(".lesr/") for path, _ in repository._tree_entries(commit))
+
+
+def test_task_worker_executes_registered_handler_and_persists_result(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path)
+    task = store.enqueue("deep_trace", {"target": "REQ-1"})
+    worker = TaskWorker(
+        store,
+        {
+            "deep_trace": lambda request, progress, cancelled: (
+                progress(50, {"phase": "trace"})
+                or {"target": request["target"], "cancelled": cancelled()}
+            )
+        },
+    )
+    completed = worker.run_next()
+    assert completed is not None and completed.state is PersistentTaskState.COMPLETED
+    assert store.result(task.task_uid) == {"cancelled": False, "target": "REQ-1"}
+
+
+def test_runtime_worker_executes_migration_plan_and_backup_task_families(
+    tmp_path: Path,
+) -> None:
+    domain = LocalRuntimeService(tmp_path / "project")
+    migration = domain.start_task(
+        "migration", {"target_version": "1.1.0", "dry_run": True}
+    )
+    assert migration.ok
+    completed = domain.run_next_task()
+    assert completed.value["state"] == "completed"
+    migration_result = domain.task_result(migration.value["task_uid"])
+    assert migration_result.value["status"] == "unsupported_until_step_registered"
+
+    backup = domain.start_task(
+        "backup", {"destination": str(tmp_path / "task-backup")}
+    )
+    assert backup.ok
+    completed = domain.run_next_task()
+    assert completed.value["state"] == "completed"
+    backup_result = domain.task_result(backup.value["task_uid"])
+    assert Path(backup_result.value["bundle"]).is_file()
 
 
 def test_backup_restore_verifies_bundle_and_requires_empty_destination(tmp_path: Path) -> None:
@@ -96,5 +138,6 @@ def test_shared_capabilities_never_offer_mcp_admin_or_private_signing() -> None:
         "backup",
         "gc",
         "migrate",
+        "projection.rebuild",
         "restore",
     }

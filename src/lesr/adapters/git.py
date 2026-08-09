@@ -20,6 +20,15 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
 from lesr.domain.catalog import RepositoryManifest, default_repository_manifest
+from lesr.domain.model import (
+    EffectiveModelCompiler,
+    FacetDefinitionRevision,
+    KindDefinitionRevision,
+    NormativeProfileRevision,
+    RelationTypeRevision,
+    TailoringOverlay,
+    WorkflowRevision,
+)
 from lesr.domain.profiles import ProfileCompiler, ProfileRevision
 from lesr.domain.rules import (
     EnforcementEffect,
@@ -58,6 +67,7 @@ class OperationType(StrEnum):
     RECORD_VALIDATION_FINDING = "record_validation_finding"
     RECORD_REVIEW_PACKAGE = "record_review_package"
     RECORD_PROVENANCE = "record_provenance"
+    RECORD_BASELINE_PREPARATION = "record_baseline_preparation"
 
 
 class CheckpointStrategy(StrEnum):
@@ -170,12 +180,33 @@ class CheckpointResult:
 FaultInjector = Callable[[str], None]
 ProjectionUpdater = Callable[[str], None]
 
+
+def _definition_revision(
+    value: dict[str, Any],
+) -> (
+    FacetDefinitionRevision
+    | KindDefinitionRevision
+    | RelationTypeRevision
+    | WorkflowRevision
+):
+    resource_type = value.get("resource_type")
+    if resource_type == "facet_definition_revision":
+        return FacetDefinitionRevision.model_validate(value)
+    if resource_type == "kind_definition_revision":
+        return KindDefinitionRevision.model_validate(value)
+    if resource_type == "relation_type_revision":
+        return RelationTypeRevision.model_validate(value)
+    if resource_type == "workflow_revision":
+        return WorkflowRevision.model_validate(value)
+    raise TypeError(f"unsupported definition revision: {resource_type}")
+
 _RESOURCE_SCHEMAS = {
     "logical_object": "logical-object.schema.json",
     "revision": "revision.schema.json",
     "relation_assertion_revision": "relation-assertion.schema.json",
     "immutable_record": "immutable-record.schema.json",
     "profile_revision": "profile.schema.json",
+    "normative_profile_revision": "normative-profile.schema.json",
     "configuration_snapshot": "configuration.schema.json",
     "baseline_manifest": "baseline-manifest.schema.json",
     "trusted_actor": "trusted-actor.schema.json",
@@ -188,6 +219,15 @@ _RESOURCE_SCHEMAS = {
     "validation_run": "validation-run.schema.json",
     "validation_finding": "validation-finding.schema.json",
     "review_package": "review-package.schema.json",
+    "facet_definition_revision": "facet-definition.schema.json",
+    "kind_definition_revision": "kind-definition.schema.json",
+    "relation_type_revision": "relation-type.schema.json",
+    "workflow_revision": "workflow.schema.json",
+    "baseline_preparation": "baseline-preparation.schema.json",
+    "semantic_diff": "semantic-diff.schema.json",
+    "graph_snapshot": "graph-snapshot.schema.json",
+    "context_bundle": "context-bundle.schema.json",
+    "impact_report": "impact-report.schema.json",
 }
 
 _OPERATION_RESOURCE_TYPES = {
@@ -196,11 +236,21 @@ _OPERATION_RESOURCE_TYPES = {
     OperationType.SET_DISPOSITION: frozenset({"immutable_record"}),
     OperationType.ASSERT_RELATION: frozenset({"relation_assertion_revision"}),
     OperationType.RETIRE_RELATION: frozenset({"immutable_record"}),
-    OperationType.CREATE_RECORD: frozenset({"immutable_record"}),
+    OperationType.CREATE_RECORD: frozenset(
+        {
+            "immutable_record",
+            "facet_definition_revision",
+            "kind_definition_revision",
+            "relation_type_revision",
+            "workflow_revision",
+        }
+    ),
     OperationType.RETRACT_RECORD: frozenset({"immutable_record"}),
     OperationType.CREATE_DEVIATION: frozenset({"revision", "immutable_record"}),
     OperationType.REVOKE_DEVIATION: frozenset({"immutable_record"}),
-    OperationType.UPDATE_PROFILE_BINDING: frozenset({"profile_revision"}),
+    OperationType.UPDATE_PROFILE_BINDING: frozenset(
+        {"profile_revision", "normative_profile_revision"}
+    ),
     OperationType.CREATE_CONFIGURATION: frozenset({"configuration_snapshot"}),
     OperationType.CREATE_BASELINE: frozenset({"baseline_manifest"}),
     OperationType.PROMOTE_FRAGMENT: frozenset({"logical_object", "revision", "immutable_record"}),
@@ -214,6 +264,7 @@ _OPERATION_RESOURCE_TYPES = {
     OperationType.RECORD_VALIDATION_FINDING: frozenset({"validation_finding"}),
     OperationType.RECORD_REVIEW_PACKAGE: frozenset({"review_package"}),
     OperationType.RECORD_PROVENANCE: frozenset({"provenance_record"}),
+    OperationType.RECORD_BASELINE_PREPARATION: frozenset({"baseline_preparation"}),
 }
 
 
@@ -284,6 +335,7 @@ class GitCanonicalRepository:
         resolutions: tuple[Any, ...] = (),
         satisfactions: tuple[Any, ...] = (),
         revocations: tuple[Any, ...] = (),
+        evidence: dict[str, Any] | None = None,
         validation_recalculator: Callable[[], str] | None = None,
         projection_updater: ProjectionUpdater | None = None,
         fault_injector: FaultInjector | None = None,
@@ -324,6 +376,18 @@ class GitCanonicalRepository:
             raise IntegrityError("Git transaction boundary requires validation recalculation")
         if validation_recalculator() != package.validation_hash:
             raise IntegrityError("review package validation result changed before apply")
+        frozen_evidence = evidence or {}
+        self._verify_review_evidence(package, frozen_evidence)
+        canonical_evidence = all(
+            isinstance(frozen_evidence.get(name), dict)
+            and frozen_evidence[name].get("resource_type") == name
+            for name in (
+                "semantic_diff",
+                "graph_snapshot",
+                "context_bundle",
+                "impact_report",
+            )
+        ) and isinstance(frozen_evidence.get("validation", {}).get("validation_run"), dict)
         current = self.current_commit()
         if current != base_commit:
             raise ConcurrencyConflict(
@@ -391,6 +455,38 @@ class GitCanonicalRepository:
                 path = f"canonical/relation_assertions/{relation.relation_revision_uid}.json"
                 self._stage_json(path, value, env)
                 operation_hashes.append(semantic_hash({"path": path, "value": value}))
+            for record in selected_candidate.lifecycle_records:
+                value = record.model_dump(mode="json", exclude_none=True)
+                path = f"canonical/immutable_records/{record.record_uid}.json"
+                self._stage_json(path, value, env)
+                operation_hashes.append(semantic_hash({"path": path, "value": value}))
+            evidence_paths = {
+                "semantic_diff": ("semantic_diffs", "diff_uid"),
+                "graph_snapshot": ("graph_snapshots", "snapshot_uid"),
+                "context_bundle": ("context_bundles", "bundle_uid"),
+                "impact_report": ("impact_reports", "report_uid"),
+            }
+            for evidence_name, (directory, uid_field) in evidence_paths.items():
+                evidence_value = frozen_evidence.get(evidence_name)
+                if (
+                    not isinstance(evidence_value, dict)
+                    or evidence_value.get("resource_type") != evidence_name
+                    or uid_field not in evidence_value
+                ):
+                    continue
+                path = f"canonical/{directory}/{evidence_value[uid_field]}.json"
+                self._stage_json(path, evidence_value, env)
+                operation_hashes.append(
+                    semantic_hash({"path": path, "value": evidence_value})
+                )
+            validation = frozen_evidence.get("validation")
+            if isinstance(validation, dict) and isinstance(
+                validation.get("validation_run"), dict
+            ):
+                run = validation["validation_run"]
+                path = f"canonical/validation/runs/{run['validation_run_uid']}.json"
+                self._stage_json(path, run, env)
+                operation_hashes.append(semantic_hash({"path": path, "value": run}))
             package_path = f"canonical/review_packages/{package.package_uid}.json"
             self._stage_json(package_path, package.model_dump(mode="json", exclude_none=True), env)
             operation_hashes.append(
@@ -402,6 +498,29 @@ class GitCanonicalRepository:
                     approval.model_dump(mode="json", exclude_none=True),
                     env,
                 )
+                provenance = self._approval_provenance(approval)
+                self._stage_json(
+                    f"canonical/provenance/{approval.provenance_uid}.json",
+                    provenance,
+                    env,
+                )
+            for directory, records in (
+                ("review_comments", comments),
+                ("comment_resolutions", resolutions),
+                ("condition_satisfactions", satisfactions),
+                ("approval_revocations", revocations),
+            ):
+                for record in records:
+                    value = record.model_dump(mode="json", exclude_none=True)
+                    record_uid = next(
+                        (
+                            str(item)
+                            for key, item in value.items()
+                            if key.endswith("_uid") and key not in {"package_uid", "actor_uid"}
+                        ),
+                        semantic_hash(value).removeprefix("sha256:"),
+                    )
+                    self._stage_json(f"canonical/{directory}/{record_uid}.json", value, env)
             applied_change = {
                 "schema_version": "1.0",
                 "resource_type": "applied_change",
@@ -449,6 +568,8 @@ class GitCanonicalRepository:
             commit = self._commit_tree(
                 tree, (current,), f"Apply LESR Candidate {selected_candidate.candidate_uid}"
             )
+            if canonical_evidence:
+                self._validate_candidate(commit, ())
             self._inject(fault_injector, "update_ref")
             self._git("update-ref", self.CANONICAL_REF, commit, current)
             self._inject(fault_injector, "projection")
@@ -506,6 +627,7 @@ class GitCanonicalRepository:
         *,
         projection_updater: ProjectionUpdater | None = None,
         fault_injector: FaultInjector | None = None,
+        governance_validator: Callable[[], None] | None = None,
     ) -> ApplyResult:
         self._validate_transaction(transaction)
         current = self.current_commit()
@@ -536,7 +658,10 @@ class GitCanonicalRepository:
                 f"canonical base changed: expected {transaction.base_commit}, got {current}"
             )
         self._authorize_transaction(current, transaction)
-        self._validate_governance(current, transaction)
+        if governance_validator is None:
+            self._validate_governance(current, transaction)
+        else:
+            governance_validator()
         for operation in transaction.operations:
             safe_path = self._safe_path(operation.relative_path)
             if self.read_bytes(current, safe_path) is not None:
@@ -552,6 +677,7 @@ class GitCanonicalRepository:
                 OperationType.RECORD_VALIDATION_RUN,
                 OperationType.RECORD_VALIDATION_FINDING,
                 OperationType.RECORD_REVIEW_PACKAGE,
+                OperationType.RECORD_BASELINE_PREPARATION,
             }
         )
         snapshot_operations = tuple(
@@ -650,6 +776,49 @@ class GitCanonicalRepository:
                 projection_stale = True
         return ApplyResult(commit, transaction_hash, False, projection_stale)
 
+    @staticmethod
+    def _verify_review_evidence(package: Any, evidence: dict[str, Any]) -> None:
+        required = {
+            "semantic_diff": ("diff_hash", package.semantic_diff_hash),
+            "graph_snapshot": ("snapshot_hash", package.graph_snapshot_hash),
+            "context_bundle": ("bundle_hash", package.context_bundle_hash),
+            "impact_report": ("report_hash", package.impact_report_hash),
+            "validation": ("validation_hash", package.validation_hash),
+        }
+        for name, (field, expected) in required.items():
+            value = evidence.get(name)
+            if not isinstance(value, dict) or value.get(field) != expected:
+                raise IntegrityError(f"review evidence does not bind {name}")
+        validation = evidence["validation"]
+        if tuple(validation.get("finding_hashes", ())) != tuple(package.finding_hashes):
+            raise IntegrityError("review evidence finding hashes changed before apply")
+        if validation.get("outcome") != "pass":
+            raise ApprovalError("candidate validation is not complete and passing")
+
+    @staticmethod
+    def _approval_provenance(approval: SignedApproval) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "schema_version": "1.0",
+            "resource_type": "provenance_record",
+            "provenance_uid": approval.provenance_uid,
+            "subject_uid": approval.approval_uid,
+            "kind": "asserted",
+            "responsible_actor_uid": approval.actor_uid,
+            "performed_by_actor_uid": approval.actor_uid,
+            "on_behalf_of_actor_uid": None,
+            "tool_uids": [],
+            "tool_identity": "human-ed25519",
+            "delegation_uid": None,
+            "used_uids": [],
+            "generated_uids": [approval.approval_uid],
+            "review_package_uid": None,
+            "validation_run_uids": [],
+            "context_bundle_hash": None,
+            "generated_at": approval.issued_at.isoformat().replace("+00:00", "Z"),
+        }
+        value["content_hash"] = semantic_hash(value)
+        return value
+
     def _validate_governance(self, current: str, transaction: SemanticTransaction) -> None:
         current_documents = [value for _, value in self.documents(current)]
         configurations = {
@@ -663,6 +832,7 @@ class GitCanonicalRepository:
             "validation_run",
             "validation_finding",
             "review_package",
+            "baseline_preparation",
         }
         state_operations = tuple(
             item
@@ -675,6 +845,11 @@ class GitCanonicalRepository:
                 "delegation_grant",
                 "rule_definition_revision",
                 "profile_revision",
+                "normative_profile_revision",
+                "facet_definition_revision",
+                "kind_definition_revision",
+                "relation_type_revision",
+                "workflow_revision",
                 "configuration_snapshot",
             }
             if any(item.payload.get("resource_type") not in allowed for item in state_operations):
@@ -1077,6 +1252,11 @@ class GitCanonicalRepository:
                 "approval_attestation",
                 "rule_definition_revision",
                 "profile_revision",
+                "normative_profile_revision",
+                "facet_definition_revision",
+                "kind_definition_revision",
+                "relation_type_revision",
+                "workflow_revision",
                 "provenance_record",
             }
             if any(
@@ -1267,6 +1447,55 @@ class GitCanonicalRepository:
             )
         return source_commit
 
+    def query_projection(
+        self,
+        database: Path,
+        *,
+        kind: str | None,
+        text: str | None,
+        offset: int,
+        page_size: int,
+    ) -> tuple[tuple[dict[str, Any], ...], int]:
+        """Query the disposable SQLite/FTS projection at the exact canonical commit."""
+
+        source_commit = self.current_commit()
+        rebuild = not database.exists()
+        if not rebuild:
+            try:
+                with sqlite3.connect(database) as connection:
+                    row = connection.execute(
+                        "SELECT source_commit, schema_version, completeness FROM projection_meta"
+                    ).fetchone()
+                rebuild = row != (source_commit, "1.0", "complete")
+            except sqlite3.Error:
+                rebuild = True
+        if rebuild:
+            self.rebuild_projection(database)
+        clauses: list[str] = []
+        parameters: list[object] = []
+        join = ""
+        if kind:
+            clauses.append("resources.kind = ?")
+            parameters.append(kind)
+        if text:
+            join = " JOIN documents_fts ON documents_fts.path = resources.path"
+            clauses.append("documents_fts MATCH ?")
+            parameters.append('"' + text.replace('"', '""') + '"')
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with sqlite3.connect(database) as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM resources{join}{where}",
+                    parameters,
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"SELECT resources.json FROM resources{join}{where} "
+                "ORDER BY resources.uid, resources.path LIMIT ? OFFSET ?",
+                (*parameters, page_size, offset),
+            ).fetchall()
+        return tuple(json.loads(str(row[0])) for row in rows), total
+
     def read_json(self, commit: str, path: str) -> dict[str, Any] | None:
         content = self.read_bytes(commit, path)
         if content is None:
@@ -1325,7 +1554,15 @@ class GitCanonicalRepository:
             ]
             if not candidates:
                 continue
-            latest = max(candidates)
+            changed = {
+                item
+                for item in self._git(
+                    "diff-tree", "--no-commit-id", "--name-only", "-r", commit
+                ).splitlines()
+                if item
+            }
+            newest = [item for item in candidates if item in changed]
+            latest = newest[0] if len(newest) == 1 else max(candidates)
             payload = self.read_json(commit, latest)
             if payload is not None:
                 recovered.append(payload | {"git_reference": reference})
@@ -1399,6 +1636,18 @@ class GitCanonicalRepository:
     def _validate_candidate(self, commit: str, operations: tuple[SemanticOperation, ...]) -> None:
         documents = {path: value for path, value in self.documents(commit)}
         documents.update((operation.relative_path, operation.payload) for operation in operations)
+        operation_approval_provenance = {
+            str(operation.payload["provenance_uid"])
+            for operation in operations
+            if operation.payload.get("resource_type") == "provenance_record"
+        }
+        for operation in operations:
+            if (
+                operation.payload.get("resource_type") == "approval_attestation"
+                and str(operation.payload["provenance_uid"])
+                not in operation_approval_provenance
+            ):
+                raise IntegrityError("transaction omits approval provenance record")
         object_documents = {
             str(value["entity_uid"]): value
             for value in documents.values()
@@ -1425,7 +1674,8 @@ class GitCanonicalRepository:
         profile_documents = {
             str(value["profile_revision_uid"]): value
             for value in documents.values()
-            if value.get("resource_type") == "profile_revision"
+            if value.get("resource_type")
+            in {"profile_revision", "normative_profile_revision"}
         }
         profiles = set(profile_documents)
         rule_documents = {
@@ -1535,7 +1785,11 @@ class GitCanonicalRepository:
                 value.get("resource_type") == "approval_attestation"
                 and str(value["provenance_uid"]) not in provenance_uids
             ):
-                raise IntegrityError("approval provenance is unavailable")
+                raise IntegrityError(
+                    "approval provenance is unavailable: "
+                    f"{value['provenance_uid']} not in {sorted(provenance_uids)}; "
+                    f"transaction provided {sorted(operation_approval_provenance)}"
+                )
         for path, value in documents.items():
             resource_type = value.get("resource_type")
             if resource_type is None:
@@ -1588,28 +1842,84 @@ class GitCanonicalRepository:
                 ) - set(revisions)
                 if missing_deviations:
                     raise IntegrityError("snapshot references unavailable deviations")
-            if resource_type == "profile_revision":
+            if resource_type in {"profile_revision", "normative_profile_revision"}:
                 missing_rules = set(value.get("rule_revision_uids", [])) - rules
                 if missing_rules:
                     raise IntegrityError("profile references unavailable rule revisions")
             if resource_type == "configuration_snapshot":
-                selected_profiles = tuple(
-                    ProfileRevision.model_validate(profile_documents[str(uid)])
-                    for uid in value["profile_revision_uids"]
-                )
-                referenced_rules = {
-                    uid for profile in selected_profiles for uid in profile.rule_revision_uids
-                }
-                selected_rules = tuple(
-                    RuleDefinition.model_validate(rule_documents[uid]) for uid in referenced_rules
-                )
                 try:
-                    effective = ProfileCompiler().compile(selected_profiles, selected_rules)
+                    selected_documents = tuple(
+                        profile_documents[str(uid)]
+                        for uid in value["profile_revision_uids"]
+                    )
+                    if all(
+                        item.get("resource_type") == "profile_revision"
+                        for item in selected_documents
+                    ):
+                        legacy_profiles = tuple(
+                            ProfileRevision.model_validate(item)
+                            for item in selected_documents
+                        )
+                        referenced_rules = {
+                            uid
+                            for profile in legacy_profiles
+                            for uid in profile.rule_revision_uids
+                        }
+                        selected_rules = tuple(
+                            RuleDefinition.model_validate(rule_documents[uid])
+                            for uid in referenced_rules
+                        )
+                        legacy_effective = ProfileCompiler().compile(
+                            legacy_profiles, selected_rules
+                        )
+                        effective_hash = legacy_effective.effective_model_hash
+                        has_conflicts = bool(legacy_effective.conflicts)
+                    else:
+                        selected_profiles = tuple(
+                            NormativeProfileRevision.model_validate(item)
+                            for item in selected_documents
+                        )
+                        referenced_rules = {
+                            uid
+                            for profile in selected_profiles
+                            for uid in profile.rule_revision_uids
+                        }
+                        if referenced_rules - rules:
+                            raise ValueError("Profile references unavailable Rule revisions")
+                        definitions = tuple(
+                            _definition_revision(document)
+                            for document in documents.values()
+                            if document.get("resource_type")
+                            in {
+                                "facet_definition_revision",
+                                "kind_definition_revision",
+                                "relation_type_revision",
+                                "workflow_revision",
+                            }
+                        )
+                        overlays = tuple(
+                            TailoringOverlay.model_validate(document)
+                            for document in documents.values()
+                            if document.get("resource_type") == "tailoring_overlay"
+                            and document.get("configuration_uid")
+                            == value["configuration_uid"]
+                        )
+                        effective = EffectiveModelCompiler().compile(
+                            selected_profiles,
+                            definitions,
+                            overlays=overlays,
+                            deviation_revision_uids=tuple(
+                                str(item)
+                                for item in value["active_deviation_revision_uids"]
+                            ),
+                        )
+                        effective_hash = effective.model_hash
+                        has_conflicts = bool(effective.conflicts)
                 except (TypeError, ValueError) as error:
                     raise IntegrityError(
                         f"configuration Effective Model is invalid: {error}"
                     ) from error
-                if effective.effective_model_hash != value["effective_model_hash"]:
+                if has_conflicts or effective_hash != value["effective_model_hash"]:
                     raise IntegrityError("configuration Effective Model hash is stale")
                 for deviation_uid in value["active_deviation_revision_uids"]:
                     if revision_documents[str(deviation_uid)].get("kind") != "deviation":
@@ -1632,9 +1942,9 @@ class GitCanonicalRepository:
             if resource_type == "review_package":
                 if value["configuration_uid"] not in configurations:
                     raise IntegrityError("review package references unavailable configuration")
-                if set(value["validation_run_uids"]) - validation_runs:
+                if set(value.get("validation_run_uids", ())) - validation_runs:
                     raise IntegrityError("review package references unavailable validation runs")
-                if set(value["open_finding_uids"]) - findings:
+                if set(value.get("open_finding_uids", ())) - findings:
                     raise IntegrityError("review package references unavailable findings")
 
     @staticmethod
@@ -1655,6 +1965,10 @@ class GitCanonicalRepository:
             "validation_run_uid",
             "finding_uid",
             "package_uid",
+            "diff_uid",
+            "snapshot_uid",
+            "bundle_uid",
+            "report_uid",
         ):
             value = document.get(name)
             if isinstance(value, str):
@@ -1669,6 +1983,11 @@ class GitCanonicalRepository:
             "revision": f"canonical/revisions/{resource.get('revision_uid')}.json",
             "immutable_record": f"canonical/records/{resource.get('record_type')}/{resource.get('record_uid')}.json",
             "profile_revision": f"canonical/profiles/{resource.get('profile_revision_uid')}.json",
+            "normative_profile_revision": f"canonical/profiles/{resource.get('profile_revision_uid')}.json",
+            "facet_definition_revision": f"canonical/definitions/{resource.get('revision_uid')}.json",
+            "kind_definition_revision": f"canonical/definitions/{resource.get('revision_uid')}.json",
+            "relation_type_revision": f"canonical/definitions/{resource.get('revision_uid')}.json",
+            "workflow_revision": f"canonical/definitions/{resource.get('revision_uid')}.json",
             "configuration_snapshot": f"canonical/configurations/{resource.get('configuration_uid')}.json",
             "baseline_manifest": f"canonical/baselines/{resource.get('baseline_uid')}.json",
             "trusted_actor": f"canonical/trust/{resource.get('actor_uid')}/{resource.get('key_uid')}.json",
@@ -1678,7 +1997,12 @@ class GitCanonicalRepository:
             "validation_run": f"canonical/validation/runs/{resource.get('validation_run_uid')}.json",
             "validation_finding": f"canonical/validation/findings/{resource.get('finding_uid')}.json",
             "review_package": f"canonical/review_packages/{resource.get('package_uid')}.json",
+            "baseline_preparation": f"canonical/baseline_preparations/{resource.get('preparation_uid')}.json",
             "provenance_record": f"canonical/provenance/{resource.get('provenance_uid')}.json",
+            "semantic_diff": f"canonical/semantic_diffs/{resource.get('diff_uid')}.json",
+            "graph_snapshot": f"canonical/graph_snapshots/{resource.get('snapshot_uid')}.json",
+            "context_bundle": f"canonical/context_bundles/{resource.get('bundle_uid')}.json",
+            "impact_report": f"canonical/impact_reports/{resource.get('report_uid')}.json",
         }
         if resource_type == "relation_assertion_revision":
             return (
@@ -1806,7 +2130,7 @@ class GitCanonicalRepository:
             "performed_by_actor_uid": transaction.actor,
             "on_behalf_of_actor_uid": None,
             "tool_uids": [],
-            "tool_identity": "lesr-runtime/0.5.0a2",
+            "tool_identity": "lesr-runtime/1.0.0rc2",
             "delegation_uid": transaction.delegation_uid,
             "used_uids": sorted(
                 {
