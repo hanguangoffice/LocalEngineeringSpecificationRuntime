@@ -46,7 +46,7 @@
       </section>
       <section class="panel" id="context">
         <div class="section-number">03 / CONTEXT CONTRACT</div><h2>Mandatory first. Similarity second.</h2>
-        <form class="stack-form" id="context-form"><label>Configuration UID<input name="configuration_uid" required></label><label>Target UID<input name="target_uid" required></label><label>Task type<select name="task_type"><option>requirement_change</option><option>test_design</option><option>deviation_review</option><option>can_analysis</option><option>mqtt_change</option></select></label><button>BUILD MANIFEST</button></form>
+        <form class="stack-form" id="context-form"><label>Configuration UID<input name="configuration_uid" required></label><label>Target UID<input name="target_uid" required></label><label>Evaluation time (UTC RFC 3339)<input name="evaluation_time" placeholder="2026-08-09T00:00:00Z" required></label><label>Task type<select name="task_type"><option>requirement_change</option><option>test_design</option><option>deviation_review</option><option>can_analysis</option><option>mqtt_change</option></select></label><button>BUILD MANIFEST</button></form>
         <pre class="output" id="context-output">No Context Manifest built.</pre>
       </section>
       <section class="panel" id="workspace">

@@ -1,49 +1,37 @@
-# LESR 0.5.0a2 audit remediation matrix
+# LESR 1.0.0a3 unified-runtime re-audit matrix
 
-This matrix responds to `LESR_1.0.0_Audit_Report.md` without copying the external
-report or licensed test documents into the repository. Design authority remains
-`LESR_Solution_Design_Baseline_v1.0/`. The historical `v1.0.0` tag is not
-rewritten; runtime maturity is now versioned independently.
+This matrix responds to `LESR_Runtime_1.0.0rc1_Independent_Reaudit_2026-08-05.md`.
+The external report and restricted local evaluation corpus are not committed. Design
+authority remains `LESR_Solution_Design_Baseline_v1.0/`; the historical
+`runtime-v1.0.0` tag is immutable and is not treated as this build's version.
 
-| Audit finding | Remediation | Executable evidence |
+| Re-audit finding | Remediation in 1.0.0a3 | Executable evidence |
 |---|---|---|
-| Pydantic models and JSON Schemas described different documents | Canonical DTO fields now map one-to-one to v1 schemas; model dumps are validated by the frozen schema catalog. | `test_canonical_models_round_trip_through_frozen_schemas` |
-| Rule storage model and runtime AST were incompatible | `RuleDefinition` is the persistent DTO; `RuleCompiler` explicitly produces a typed `RuleAST`, runs all eight fixture classes and rejects unknown paths, invalid units and executable AI semantics. | `test_v1_rules.py` |
-| Canonical JSON admitted float, NaN and Infinity | Recursive validation rejects every floating-point value; quantities use decimal strings and units. | `test_canonical_json_rejects_all_floating_point_values` |
-| Profile/effective model was not integrated | `ProfileCompiler` resolves exact rule revisions, verifies authority as a partial order, compiles fixtures, detects direct conflicts and emits a deterministic effective-model hash. Configured repository contexts compile the selected profiles and reject stale hashes. | `test_v1_profiles.py` |
-| Profile symbols, units and policies were inert | Structured resource fields and unit declarations now form the compiler symbol table; Context and Review policies are compiled into the Effective Model and enforced by repository capabilities. | `test_profile_supplies_field_symbols_for_common_field_rules`, governed E2E test |
-| Aggregate schema and runtime diverged | The typed AST now implements bounded count/sum/minimum/maximum aggregate constraints and validates quantity dimensions. | `test_v1_rules.py` aggregate fixture |
-| Evaluation kind was discarded | `RuleAST` preserves the evaluation specification. External, registered, human and AI evaluation fail closed as `not_evaluated` unless exact external evidence is supplied; advisory AI cannot become formal compliance evidence. | external-evaluation tests in `test_v1_rules.py` |
-| Apply accepted caller-defined empty validation | Review preparation now resolves an exact Canonical Configuration, recompiles the Effective Model, evaluates the checkpointed candidate, emits immutable Validation Run/Findings, derives roles from Profile policy and creates the Review Package. Apply accepts only its package UID; the Git transaction boundary independently reproduces rule observations, findings, deviation suppression, blocking decisions and the run outcome before advancing the ref. | `test_profile_governed_review_validation_and_apply_are_not_caller_defined`, `test_git_boundary_recomputes_validation_outcome` |
-| Explicit missing pinned revision fell through to a different revision | Bound resolution now stops with `INDETERMINATE`; it never tries a lower-priority selector after a specified binding is unavailable. | `test_missing_explicit_revision_never_falls_back_to_configuration` |
-| Confidential mandatory context could be omitted while reporting complete | Mandatory sensitivity removal returns `incomplete_confidentiality` and records negative context. | `test_mandatory_sensitivity_omission_is_never_reported_complete` |
-| Repository service inherited an in-memory fake | `RepositoryDomainService` implements the domain port directly, reads one exact canonical commit, uses SQLite structured projection for query, real Effective Resolution for context, recoverable workspace refs and completed task records. No-project MCP startup fails instead of serving synthetic data. | `test_v1_e2e.py`, `test_v1_contracts.py` |
-| SQLite projection was a document dump | Projection now has source metadata, typed resources, aliases, relations and FTS; Query performs FTS discovery and exposes bounded relation traversal while the projection remains disposable. | projection rebuild and MCP contract tests |
-| Git operations could write arbitrary JSON/path combinations | Every operation is restricted by operation/resource type, exact identity-derived path, JSON Schema, document hash, immutability and full candidate closure. Closure covers revision/relation lineage, namespace keys, aliases, records, trust issuers/revocation, validation and review references. | Git integrity and attack tests |
-| Workspace state was not recovered | Workspace refs are enumerated and latest checkpoints recovered on service startup; applied state receives a final checkpoint. | `test_both_checkpoint_strategies_are_git_recoverable` |
-| Trust checks could be bypassed by calling the Git adapter | Trust, delegation and Ed25519 verification now execute at the Git semantic-transaction boundary. An empty repository permits only the explicit proof-of-possession root bootstrap; the public CLI can install initial Rule/Profile governance and the first Configuration without exposing signing through MCP. | `test_public_bootstrap_installs_root_governance_and_initial_configuration`, Git tests |
-| Delegation validation only checked a non-empty string | Canonical grants bind principal, workspace, base ancestry, operation, resource scope, expiry, limits and conservative stop conditions. | repository E2E security scenario |
-| Approval did not enforce roles, scope or conditions | All Profile-derived Review Package roles need canonical-key signatures; affected resources must be covered; unresolved conditions fail closed; AI attestations fail. The signature also binds approval UID, actor/role, issuance time and provenance UID. | approval tamper and governed E2E tests |
-| Local signing key was plaintext base64 | Windows key material is protected with current-user DPAPI; non-Windows fallback requires user-only filesystem protection. | `test_ed25519_approval_binds_package_model_scope_and_role` |
-| Provenance/audit anchors were skeletal | Applied changes retain operation/approval hashes; provenance separates used/generated UIDs and records performed-by, tool identity, Review Package, Validation Runs and Context hash; audit anchors form a verifiable hash chain. | `verify_audit_chain` and governed E2E assertions |
-| Import workflow was not a canonical v1 workflow | Markdown and rights-cleared text PDF preview require rights/license declarations and emit only Workspace operations with collision-resistant source-hash keys, real timestamps and source/page anchors. Encrypted PDFs are refused without a decrypt attempt. | import and local-corpus tests |
-| Wheel did not match source | CI builds into a fresh directory; verification rejects other versions, compares every packaged Python file byte-for-byte with `src`, verifies metadata/schema sets and imports the installed wheel in an isolated environment. | `scripts/verify_distribution.py` on Windows and Ubuntu |
-| Context inferred one repository-wide configuration | Context requires an explicit Configuration UID and actor, filters Relation revisions to that snapshot, uses Profile Context Policy and reports confidentiality/budget/model incompleteness. | context tests and governed service implementation |
-| Service idempotency and operation limits were inconsistent | Workspace open/propose persist request hashes; Apply checks canonical idempotency before stale-base processing; limits count the exact checkpointed operation set once. | workspace and governed E2E replay tests |
-| Capabilities advertised operations that were absent | Repository capability negotiation lists only implemented calls. The adapter-only in-memory double remains test-only. | `test_v1_contracts.py` |
-| `1.0.0` overstated runtime maturity | Package/runtime is `0.5.0a2`; design baseline remains `1.0`; documentation states that this is a review candidate. | wheel metadata test and README |
+| Two competing production services | `RepositoryDomainService` and its legacy E2E were removed. CLI, MCP and Web use `LocalRuntimeService`; an architecture test enforces the single facade. | `test_runtime_architecture.py` |
+| Empty repository could not bootstrap | Public plan/sign/apply commands install the first human trust root, exact governance resources and initial Configuration with proof of possession. | `test_v1_bootstrap.py` |
+| CLI lost Workspace and Review state between invocations | Open, edit, submission, Candidate, diff, graph, context, impact, validation and Review Package are checkpointed on Workspace refs and recovered strictly across service processes. | cross-process flow in `test_v1_bootstrap.py` |
+| Product path did not use the new Profile kernel | Configurations select exact `NormativeProfileRevision` records. `EffectiveModelCompiler` fixes definition, Rule, workflow, context and review-policy revisions and rejects stale hashes/conflicts at the Git boundary. | Gate 1 tests and public bootstrap flow |
+| Formal Trace was isolated from Apply | The integrated evaluator maps typed `RelationMinimum` to graph-native cardinality or Formal Trace credit, including direction, Binding, lifecycle and category; inapplicable rules remain inapplicable. | Formal Trace attack tests and integrated inferred-relation test |
+| Lifecycle transition vanished at Apply | Candidate lifecycle records are typed `ImmutableRecord` values and are atomically written with candidate Revisions and Relations. Workflow revision, role, guard and evidence checks run before submit. | `test_runtime_integrated_apply.py` |
+| Review evidence hashes had no recoverable documents | Semantic Diff, Graph Snapshot, Context Bundle, Impact Report and schema-valid Validation Run are persisted as immutable canonical resources. Approval provenance is persisted and the post-commit candidate is revalidated before ref advance. | public Apply/Baseline flow and candidate-integrity tests |
+| Review policy was caller-authored | Apply and Baseline policies are selected only from the Configuration's Effective Model. Caller operation fields cannot weaken stage, role, quorum or independence. | `test_v1_bootstrap.py`, Gate 5 tests |
+| Web signing deadlocked before Apply | Review Packages are resolved from verified Workspace checkpoints as well as Canonical State. The Web endpoint derives the signature stage from the package policy and rejects ambiguous/caller-authored roles. | Web security tests and cross-process package recovery |
+| Traverse/Impact were placeholders | Both require Configuration UID and explicit Evaluation Time and consume a hashed Graph Snapshot. Incomplete Impact states remain explicit. | MCP contract and Gate 3 tests |
+| Public Query bypassed projection | Query uses the rebuildable SQLite/FTS5 projection and rejects a stale source commit. | projection and architecture tests |
+| Context ignored policy and had no Focused Read/Deep Trace | Effective Model Context Policy supplies invariants and mandatory predicates; manifests and snapshots are persisted, Focused Read enforces 100-resource/2 MiB limits, and Deep Trace is a persistent task. | Gate 3/6 and MCP contract tests |
+| Task Store had no worker | `TaskWorker` claims, checkpoints, checks cooperative cancellation, persists results/failures, and resumes Deep Trace and large Impact work. | `test_gate6_operations.py` |
+| Baseline command only calculated a hash | Prepare verifies complete Configuration, graph, validation, impact, context and Profile-derived governance; Apply revalidates at the Git boundary, atomically writes Manifest/evidence, and treats the optional tag as rebuildable. | cross-process Baseline flow in `test_v1_bootstrap.py` |
+| Capability Descriptor overclaimed | CLI/MCP flags default to false and the catalog contains only callable public capabilities. Rebase/Merge/Reconciliation are not advertised while still domain-only. | capability/MCP tests |
+| Resolve treated references as identities | Identity lookup now indexes only the primary identity fields for each resource type plus Human Key/Alias, never arbitrary referenced `*_uid` fields. | runtime identity implementation and Gate 1 identity tests |
+| Playwright used an in-memory fake | Web security and Playwright now instantiate the production runtime and a real Git/SQLite repository. | `test_gate7_playwright.py`, `test_gate7_web_security.py` |
 
-## Local corpus decision
+## Honest remaining release gates
 
-The untracked `测试文档/` corpus is intentionally ignored by Git. Three selected
-pages of the locally supplied, unencrypted ASPICE-like document exercise page
-anchors and schema-valid candidates. The encrypted MISRA source is tested only
-for fail-closed refusal; MISRA-like executable-rule tests use synthetic content.
-No extracted standard text, PDF, key material or projection database is committed.
+This build is `1.0.0a3`, not RC2 and not final 1.0. The three-way Merge/Rebase engine
+is not yet integrated into a public Workspace API, and the HTML console does not yet
+provide polished mutation forms for every HTTP capability. Windows/Ubuntu CI and the
+wheel/sdist isolation checks must run on the pushed branch. Gate 7 remains
+`IN_PROGRESS`; the capability descriptor does not claim these unfinished features.
 
-## Deferred scope
-
-P6 cross-vendor interoperability, UI, OCR, Word/Excel layout recovery,
-Chinese-specific FTS tokenization, general plugin sandboxing and executable
-SHACL/Rego backends remain outside this remediation. They are not represented as
-implemented capabilities and do not weaken P1–P5 fail-closed behavior.
+The local rights-cleared corpus remains ignored. No extracted standards text, PDF,
+private key, projection database or local test document is committed.

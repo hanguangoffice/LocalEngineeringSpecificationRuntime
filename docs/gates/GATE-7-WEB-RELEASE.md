@@ -1,15 +1,17 @@
 # Gate 7 — Local Web product and RC release
 
 - Contract version: `1.0.0`
-- State: `PASS`
-- Runtime candidate: `1.0.0rc1`
+- State: `IN_PROGRESS`
+- Runtime candidate: `1.0.0a3`
 
 ## Implemented contract
 
 The product UI uses FastAPI/Uvicorn, packaged server templates, and native JavaScript
 and CSS. It has no Node build, CDN, or remote asset, and binds only to `127.0.0.1`.
-The interface exposes repository health, structured search, Context, Working Copy,
-review/signing, Baseline, persistent task, and maintenance surfaces. Capability
+The HTTP adapter exposes repository health, structured search, Context, Working Copy,
+review/signing, Apply, Baseline, persistent task, and maintenance capabilities. The HTML
+console exposes the read, context, signing, task and maintenance surfaces; mutation forms
+for the complete product workflow remain unfinished. Capability
 negotiation does not advertise MCP tools absent from the adapter.
 
 Access requires a process-generated one-time launch token. The resulting 15-minute
@@ -28,7 +30,8 @@ capability.
 ## Evidence
 
 - HTTP security and packaged-asset contract tests.
-- Real Playwright browser flow through unlock, Resolve/Query, Context, and lock.
+- Real `LocalRuntimeService` Playwright browser flow through unlock, repository-backed
+  Query, and lock; the former synthetic in-memory Playwright path was removed.
 - One-shot signer and encrypted-key fallback tests.
 - Small CI performance data: 1,000 Objects, 5,000 Revisions, 10,000 Relations with full
   Formal Trace semantics and 10 warm-ups plus 100 measured samples.
@@ -38,6 +41,7 @@ capability.
 - One wheel and one sdist, verified byte-for-byte for runtime sources, schemas, Web
   assets, type marker, metadata, and isolated installation.
 
-The medium release and large stress protocols remain distinct recorded measurements;
+Gate 7 therefore remains `IN_PROGRESS`; no RC or final-release claim is made. The medium
+release and large stress protocols remain distinct recorded measurements;
 they do not weaken or disable Formal Trace, Rule, Configuration Resolution, or
 transaction integrity.

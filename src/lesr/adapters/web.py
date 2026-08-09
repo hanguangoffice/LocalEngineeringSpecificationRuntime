@@ -20,7 +20,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from lesr.adapters.git import GitCanonicalRepository, IntegrityError
 from lesr.adapters.operations import TaskStore, plan_workspace_gc
 from lesr.adapters.signer import sign_once
-from lesr.application.contracts import LESRDomainPort
+from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalPayload, TrustedActor
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
@@ -39,6 +39,7 @@ class ContextRequest(BaseModel):
     configuration_uid: str = Field(min_length=1)
     target_uid: str = Field(min_length=1)
     task_type: str = Field(min_length=1)
+    evaluation_time: str = Field(min_length=1)
 
 
 class SignRequest(BaseModel):
@@ -49,6 +50,29 @@ class SignRequest(BaseModel):
     human_confirm: bool
 
 
+class WebWriteRequest(BaseModel):
+    workspace_uid: str = Field(min_length=1)
+    expected_base: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    delegation_uid: str = Field(min_length=1)
+    dry_run: bool = False
+    risk_class: RiskClass
+    operation: dict[str, Any]
+
+    def envelope(self) -> WriteEnvelope:
+        return WriteEnvelope(
+            self.workspace_uid,
+            self.expected_base,
+            self.idempotency_key,
+            self.actor,
+            self.delegation_uid,
+            self.dry_run,
+            self.risk_class,
+            self.operation,
+        )
+
+
 class LocalWebRuntime:
     def __init__(
         self,
@@ -56,11 +80,15 @@ class LocalWebRuntime:
         domain: LESRDomainPort | None = None,
         *,
         launch_token: str | None = None,
+        signer_key_root: Path | None = None,
+        signer_password: str | None = None,
     ) -> None:
         self.project = project.resolve()
         self.domain = domain or LocalRuntimeService(self.project)
         self.launch_token = launch_token or secrets.token_urlsafe(32)
         self.launch_token_available = True
+        self.signer_key_root = signer_key_root
+        self.signer_password = signer_password
         self.sessions: dict[str, WebSession] = {}
         self.app = FastAPI(
             title="LESR Local Runtime",
@@ -188,15 +216,7 @@ class LocalWebRuntime:
         @app.get("/api/review-package/{package_uid}")
         async def review_package(request: Request, package_uid: str) -> dict[str, Any]:
             self._session(request)
-            package = next(
-                (
-                    value
-                    for _, value in GitCanonicalRepository(self.project).documents()
-                    if value.get("resource_type") == "review_package"
-                    and value.get("package_uid") == package_uid
-                ),
-                None,
-            )
+            package = self._review_package(package_uid)
             if package is None:
                 raise HTTPException(status_code=404, detail="Canonical Review Package not found")
             return {
@@ -204,7 +224,7 @@ class LocalWebRuntime:
                 "package_hash": package.get("package_hash"),
                 "effective_model_hash": package.get("effective_model_hash"),
                 "candidate_scope": package.get("candidate_scope", []),
-                "role": package.get("review_stage", "review"),
+                "stages": package.get("review_policy", {}).get("stages", []),
                 "conditions": package.get("approval_conditions", []),
                 "signature_expiry_minutes": 15,
             }
@@ -218,8 +238,59 @@ class LocalWebRuntime:
                 4096,
                 value.configuration_uid,
                 "local-web-user",
+                value.evaluation_time,
             ).payload()
             return self._value_or_error(result)
+
+        @app.post("/api/workspace/open")
+        async def workspace_open(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._value_or_error(self.domain.open_workspace(value.envelope()).payload())
+
+        @app.post("/api/workspace/edit")
+        async def workspace_edit(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._value_or_error(
+                self.domain.propose_operation(value.envelope()).payload()
+            )
+
+        @app.post("/api/workspace/submit")
+        async def workspace_submit(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._value_or_error(self.domain.prepare_review(value.envelope()).payload())
+
+        @app.post("/api/apply")
+        async def apply(request: Request, value: WebWriteRequest) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._value_or_error(
+                self.domain.apply_transaction(value.envelope()).payload()
+            )
+
+        @app.post("/api/baseline/prepare")
+        async def baseline_prepare(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            capability = getattr(self.domain, "prepare_baseline", None)
+            if not callable(capability):
+                raise HTTPException(status_code=404, detail="baseline.prepare unavailable")
+            return self._value_or_error(capability(value.envelope()).payload())
+
+        @app.post("/api/baseline/apply")
+        async def baseline_apply(
+            request: Request, value: WebWriteRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            capability = getattr(self.domain, "apply_baseline", None)
+            if not callable(capability):
+                raise HTTPException(status_code=404, detail="baseline.apply unavailable")
+            return self._value_or_error(capability(value.envelope()).payload())
 
         @app.get("/api/tasks")
         async def tasks(request: Request) -> list[dict[str, Any]]:
@@ -241,15 +312,32 @@ class LocalWebRuntime:
             package, trust = self._signing_resources(
                 value.package_uid, value.actor_uid, value.key_uid
             )
+            matching_stages = [
+                stage
+                for stage in package.get("review_policy", {}).get("stages", ())
+                if isinstance(stage, dict) and stage.get("role") == value.role
+            ]
+            if len(matching_stages) != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="requested role does not identify exactly one review stage",
+                )
             payload = ApprovalPayload(
                 package_hash=str(package["package_hash"]),
                 effective_model_hash=str(package["effective_model_hash"]),
                 scope={"resource_uids": list(package["candidate_scope"])},
-                approval_type=str(package.get("review_stage", "review")),
+                approval_type=str(matching_stages[0]["stage"]),
                 expires_at=(datetime.now(UTC) + timedelta(minutes=15)),
                 conditions=tuple(package.get("approval_conditions", ())),
             )
-            approval = sign_once(self.project, trust, value.role, payload)
+            approval = sign_once(
+                self.project,
+                trust,
+                value.role,
+                payload,
+                key_root=self.signer_key_root,
+                password=self.signer_password,
+            )
             return {
                 "approval": approval,
                 "broker": "terminated",
@@ -292,15 +380,7 @@ class LocalWebRuntime:
         self, package_uid: str, actor_uid: str, key_uid: str
     ) -> tuple[dict[str, Any], TrustedActor]:
         documents = GitCanonicalRepository(self.project).documents()
-        package = next(
-            (
-                value
-                for _, value in documents
-                if value.get("resource_type") == "review_package"
-                and value.get("package_uid") == package_uid
-            ),
-            None,
-        )
+        package = self._review_package(package_uid)
         trust_value = next(
             (
                 value
@@ -316,6 +396,23 @@ class LocalWebRuntime:
                 status_code=404, detail="Canonical Review Package or trusted key not found"
             )
         return package, TrustedActor.model_validate(trust_value)
+
+    def _review_package(self, package_uid: str) -> dict[str, Any] | None:
+        resolver = getattr(self.domain, "review_package", None)
+        if callable(resolver):
+            result = resolver(package_uid).payload()
+            value = result.get("value") if result.get("ok") is True else None
+            if isinstance(value, dict):
+                return value
+        return next(
+            (
+                value
+                for _, value in GitCanonicalRepository(self.project).documents()
+                if value.get("resource_type") == "review_package"
+                and value.get("package_uid") == package_uid
+            ),
+            None,
+        )
 
     @staticmethod
     def _value_or_error(payload: dict[str, Any]) -> dict[str, Any]:

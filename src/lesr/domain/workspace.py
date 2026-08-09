@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 from lesr.domain.semantic import (
     Fragment,
     FrozenModel,
+    ImmutableRecord,
     JsonValue,
     ProvenanceKind,
     RelationAssertion,
@@ -185,7 +186,7 @@ class CandidateRevisionSet(FrozenModel):
     effective_model_hash: str
     revisions: tuple[Revision, ...]
     relation_revisions: tuple[RelationAssertion, ...]
-    lifecycle_records: tuple[dict[str, JsonValue], ...]
+    lifecycle_records: tuple[ImmutableRecord, ...]
     candidate_hash: str = ""
 
     @model_validator(mode="after")
@@ -351,6 +352,8 @@ class WorkspaceEngine:
         checkpoint_uid: str,
         actor_uid: str,
         submitted_at: datetime,
+        base_revisions: tuple[Revision, ...] = (),
+        lifecycle_states: tuple[tuple[str, str], ...] = (),
     ) -> Submission:
         checkpointed, checkpoint = WorkspaceEngine.checkpoint(
             workspace,
@@ -360,9 +363,24 @@ class WorkspaceEngine:
         )
         revisions: list[Revision] = []
         relations: list[RelationAssertion] = []
-        lifecycle_records: list[dict[str, JsonValue]] = []
+        lifecycle_records: list[ImmutableRecord] = []
         changes: list[SemanticChange] = []
+        base_by_uid = {item.revision_uid: item for item in base_revisions}
         for copy in checkpointed.working_copies:
+            base_revision = (
+                base_by_uid.get(copy.base_revision_uid) if copy.base_revision_uid is not None else None
+            )
+            base_fields = {item.path: item.value for item in base_revision.fields} if base_revision else {}
+            base_fragments = (
+                {
+                    item.local_key: {
+                        field.path: field.value for field in item.fields
+                    }
+                    for item in base_revision.fragments
+                }
+                if base_revision
+                else {}
+            )
             revisions.append(
                 Revision(
                     object_uid=copy.object_uid,
@@ -378,23 +396,42 @@ class WorkspaceEngine:
                 )
             )
             relations.extend(copy.relation_proposals)
-            changes.extend(
-                SemanticChange(
-                    object_uid=copy.object_uid,
-                    path=operation.path or "/",
-                    change_type=WorkspaceEngine._change_type(operation.operation_type),
-                    after=operation.value,
+            for operation in copy.edit_log:
+                path = operation.path or "/"
+                before: JsonValue = None
+                if operation.operation_type in {
+                    EditOperationType.SET_FIELD,
+                    EditOperationType.DELETE_FIELD,
+                }:
+                    before = base_fields.get(path)
+                elif operation.operation_type in {
+                    EditOperationType.MODIFY_FRAGMENT,
+                    EditOperationType.DELETE_FRAGMENT,
+                }:
+                    before = base_fragments.get(path.removeprefix("/fragments/"))
+                changes.append(
+                    SemanticChange(
+                        object_uid=copy.object_uid,
+                        path=path,
+                        change_type=WorkspaceEngine._change_type(operation.operation_type),
+                        before=before,
+                        after=operation.value,
+                    )
                 )
-                for operation in copy.edit_log
-            )
             if copy.requested_lifecycle_state is not None:
+                current_state = dict(lifecycle_states).get(copy.object_uid)
+                fields = [SemanticField(path="/to_state", value=copy.requested_lifecycle_state)]
+                if current_state is not None:
+                    fields.insert(0, SemanticField(path="/from_state", value=current_state))
                 lifecycle_records.append(
-                    {
-                        "object_uid": copy.object_uid,
-                        "to_state": copy.requested_lifecycle_state,
-                        "actor_uid": actor_uid,
-                        "occurred_at": submitted_at.isoformat().replace("+00:00", "Z"),
-                    }
+                    ImmutableRecord(
+                        record_type="lifecycle",
+                        subject_uid=copy.object_uid,
+                        actor_uid=actor_uid,
+                        actor_type="human",
+                        occurred_at=submitted_at,
+                        fields=tuple(fields),
+                    )
                 )
         candidate = CandidateRevisionSet(
             workspace_uid=workspace.workspace_uid,
@@ -411,7 +448,10 @@ class WorkspaceEngine:
             scope=tuple(item.object_uid for item in checkpointed.working_copies),
         )
         read_only_copies = tuple(
-            item.model_copy(update={"state": WorkingCopyState.SUBMITTED})
+            WorkingCopy.model_validate(
+                item.model_dump(mode="json")
+                | {"state": WorkingCopyState.SUBMITTED, "working_state_hash": ""}
+            )
             for item in checkpointed.working_copies
         )
         submitted = checkpointed.model_copy(

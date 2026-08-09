@@ -5,19 +5,26 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import ValidationError
 
 from lesr.adapters.git import (
+    ApprovalAttestation,
     ApprovalError,
     CheckpointStrategy,
     ConcurrencyConflict,
     GitCanonicalRepository,
     IdempotencyConflict,
     IntegrityError,
+    OperationType,
+    SemanticOperation,
+    SemanticTransaction,
 )
-from lesr.adapters.operations import TaskStore
+from lesr.adapters.operations import TaskStore, TaskWorker
+from lesr.adapters.schemas import SchemaCatalog
 from lesr.application.contracts import (
     CapabilityDescriptor,
     CapabilityGroup,
@@ -26,20 +33,36 @@ from lesr.application.contracts import (
     ErrorCategory,
     WriteEnvelope,
 )
-from lesr.domain.approval import SignedApproval, TrustedActor
+from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
 from lesr.domain.catalog import CAPABILITIES
 from lesr.domain.evaluation import (
+    ConstraintEnvironment,
+    ConstraintExpression,
     Direction,
     GraphNode,
     GraphRelation,
     GraphSnapshot,
+    RuleOperator,
     SemanticEvaluator,
+    TruthValue,
     analyze_impact,
+    evaluate_constraint,
     plan_context,
 )
-from lesr.domain.model import RelationTypeRevision
+from lesr.domain.model import (
+    EffectiveModel,
+    EffectiveModelCompiler,
+    FacetDefinitionRevision,
+    KindDefinitionRevision,
+    NormativeProfileRevision,
+    RelationTypeRevision,
+    TailoringOverlay,
+    WorkflowProjector,
+    WorkflowRevision,
+)
 from lesr.domain.review import (
     ApprovalRevocation,
+    BaselinePreparation,
     CommentResolution,
     ConditionSatisfaction,
     GovernanceEvaluator,
@@ -47,12 +70,16 @@ from lesr.domain.review import (
     ReviewPackage,
     ReviewPolicy,
     StageQuorum,
+    prepare_baseline,
 )
 from lesr.domain.rules import (
+    AggregateConstraint,
     EnforcementEffect,
     EvaluationEnvironment,
+    FieldRequired,
     FieldSymbol,
     Quantity,
+    RelationMinimum,
     RuleCompiler,
     RuleDefinition,
     RuleOutcome,
@@ -62,15 +89,23 @@ from lesr.domain.rules import (
     evaluate_rule,
 )
 from lesr.domain.semantic import (
+    BindingMode,
+    ImmutableRecord,
+    ProvenanceKind,
     RelationAssertion,
     Revision,
+    document_hash,
     semantic_hash,
     uuid7_candidate,
 )
 from lesr.domain.workspace import (
+    CandidateRevisionSet,
     EditOperation,
+    SemanticDiff,
+    Submission,
     WorkingCopy,
     Workspace,
+    WorkspaceCheckpoint,
     WorkspaceEngine,
 )
 
@@ -86,6 +121,8 @@ class LocalRuntimeService:
         self.workspaces: dict[str, Workspace] = {}
         self.submissions: dict[str, Any] = {}
         self.reviews: dict[str, ReviewPackage] = {}
+        self.review_evidence: dict[str, dict[str, Any]] = {}
+        self.baseline_preparations: dict[str, BaselinePreparation] = {}
         self._reload()
         self._recover_workspaces()
 
@@ -154,6 +191,29 @@ class LocalRuntimeService:
             )
         return DomainResult(matches[0])
 
+    def review_package(self, package_uid: str) -> DomainResult:
+        package = self.reviews.get(package_uid)
+        if package is not None:
+            return DomainResult(package.model_dump(mode="json"))
+        match = next(
+            (
+                item
+                for item in self.documents
+                if item.get("resource_type") == "review_package"
+                and item.get("package_uid") == package_uid
+            ),
+            None,
+        )
+        if match is None:
+            return self._error(
+                "LESR-REVIEW-PACKAGE-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "review package is not available in Workspace or Canonical State",
+                (package_uid,),
+                suggested="workspace.submit",
+            )
+        return DomainResult(match)
+
     def query(
         self,
         kind: str | None,
@@ -171,36 +231,114 @@ class LocalRuntimeService:
             offset = int(cursor or "0")
         except ValueError:
             return self._error("LESR-CURSOR-INVALID", ErrorCategory.VALIDATION, "cursor is invalid")
-        values = self.documents
-        if kind:
-            values = [item for item in values if item.get("kind") == kind]
-        if text:
-            needle = text.casefold()
-            values = [item for item in values if needle in str(item).casefold()]
-        values.sort(key=self._primary_uid)
-        items = values[offset : offset + page_size]
-        next_cursor = str(offset + page_size) if offset + page_size < len(values) else None
-        return DomainResult({"items": items, "next_cursor": next_cursor, "total": len(values)})
+        try:
+            items, total = self.repository.query_projection(
+                self.project / ".lesr" / "projection.sqlite3",
+                kind=kind,
+                text=text,
+                offset=offset,
+                page_size=page_size,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._error(
+                "LESR-PROJECTION-QUERY-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                retryable=True,
+                suggested="projection.rebuild",
+            )
+        next_cursor = str(offset + page_size) if offset + page_size < total else None
+        return DomainResult({"items": items, "next_cursor": next_cursor, "total": total})
 
-    def traverse(self, start_uid: str, predicate: str | None, max_depth: int) -> DomainResult:
-        del predicate, max_depth
-        return self._error(
-            "LESR-CONFIGURATION-REQUIRED",
-            ErrorCategory.INDETERMINATE,
-            "traversal requires an explicit Configuration and Evaluation Time",
-            (start_uid,),
-            suggested="context.plan",
-        )
+    def traverse(
+        self,
+        start_uid: str,
+        predicate: str | None,
+        max_depth: int,
+        configuration_uid: str,
+        evaluation_time: str,
+    ) -> DomainResult:
+        try:
+            if not 1 <= max_depth <= 16:
+                raise ValueError("max_depth must be between 1 and 16")
+            evaluator = self._evaluator(
+                configuration_uid, self._parse_evaluation_time(evaluation_time)
+            )
+            frontier = [(start_uid, 0)]
+            visited = {start_uid}
+            edges: list[dict[str, Any]] = []
+            while frontier:
+                current, depth = frontier.pop(0)
+                if depth >= max_depth:
+                    continue
+                for direction in (Direction.OUTGOING, Direction.INCOMING):
+                    for other, relation in evaluator._adjacent(
+                        current, predicate=predicate, direction=direction
+                    ):
+                        edges.append(
+                            {
+                                "from": current,
+                                "to": other,
+                                "direction": direction.value,
+                                "relation_revision_uid": (
+                                    relation.assertion.relation_revision_uid
+                                ),
+                                "predicate": relation.assertion.predicate,
+                                "depth": depth + 1,
+                            }
+                        )
+                        if other not in visited:
+                            visited.add(other)
+                            frontier.append((other, depth + 1))
+            return DomainResult(
+                {
+                    "graph_snapshot_hash": evaluator.snapshot.snapshot_hash,
+                    "start_uid": start_uid,
+                    "visited_uids": sorted(visited),
+                    "edges": edges,
+                }
+            )
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
+            return self._error(
+                "LESR-TRAVERSAL-INDETERMINATE",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (start_uid, configuration_uid),
+                suggested="resolve",
+            )
 
-    def impact(self, start_uid: str, max_depth: int) -> DomainResult:
-        del max_depth
-        return self._error(
-            "LESR-CONFIGURATION-REQUIRED",
-            ErrorCategory.INDETERMINATE,
-            "impact requires an explicit Configuration and Evaluation Time",
-            (start_uid,),
-            suggested="context.plan",
-        )
+    def impact(
+        self,
+        start_uid: str,
+        max_depth: int,
+        configuration_uid: str,
+        evaluation_time: str,
+    ) -> DomainResult:
+        try:
+            configuration = self._configuration(configuration_uid)
+            evaluator = self._evaluator(
+                configuration_uid, self._parse_evaluation_time(evaluation_time)
+            )
+            report = analyze_impact(
+                evaluator,
+                (start_uid,),
+                maximum_depth=max_depth,
+                configuration_complete=configuration.get("closure_status") == "complete",
+                affected_configuration_uids=(configuration_uid,),
+                affected_deviation_uids=tuple(
+                    str(item)
+                    for item in configuration.get("active_deviation_revision_uids", ())
+                ),
+            )
+            return DomainResult(report.model_dump(mode="json"))
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-IMPACT-INDETERMINATE",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (start_uid, configuration_uid),
+                suggested="resolve",
+            )
 
     def build_context(
         self,
@@ -209,17 +347,44 @@ class LocalRuntimeService:
         token_budget: int,
         configuration_uid: str,
         actor: str,
+        evaluation_time: str,
     ) -> DomainResult:
-        del task_type, actor
         try:
-            evaluator = self._evaluator(configuration_uid, datetime.now(UTC))
+            model = self._effective_model(configuration_uid)
+            policies = [
+                item
+                for item in model.context_policies
+                if item.task_type in {task_type, "*"}
+            ]
+            exact = [item for item in policies if item.task_type == task_type]
+            selected = exact or [item for item in policies if item.task_type == "*"]
+            if len(selected) != 1:
+                raise ValueError(
+                    "Effective Model must define exactly one Context Policy for the task"
+                )
+            policy = selected[0]
+            evaluator = self._evaluator(
+                configuration_uid, self._parse_evaluation_time(evaluation_time)
+            )
             context = plan_context(
                 evaluator,
-                target_uids,
-                (),
+                tuple(sorted(set(target_uids) | set(policy.invariant_object_uids))),
+                policy.mandatory_predicates,
                 token_limit=max(1, token_budget // 256),
             )
-            return DomainResult(context.model_dump(mode="json"))
+            self.task_store.put_artifact(
+                context.bundle_hash,
+                {
+                    "context_bundle": context.model_dump(mode="json"),
+                    "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                    "configuration_uid": configuration_uid,
+                    "evaluation_time": evaluator.snapshot.evaluation_time.isoformat(),
+                },
+            )
+            return DomainResult(
+                context.model_dump(mode="json")
+                | {"task_type": task_type, "requested_by_actor_uid": actor}
+            )
         except (KeyError, TypeError, ValueError, ValidationError) as error:
             return self._error(
                 "LESR-CONTEXT-INDETERMINATE",
@@ -227,6 +392,86 @@ class LocalRuntimeService:
                 str(error),
                 target_uids,
                 suggested="resolve",
+            )
+
+    def read_context(
+        self,
+        bundle_hash: str,
+        resource_uids: tuple[str, ...] = (),
+        maximum_resources: int = 100,
+        maximum_bytes: int = 2 * 1024 * 1024,
+    ) -> DomainResult:
+        try:
+            if not 1 <= maximum_resources <= 100 or not 1 <= maximum_bytes <= 2 * 1024 * 1024:
+                raise ValueError("Focused Read limits exceed the product contract")
+            artifact = self.task_store.artifact(bundle_hash)
+            bundle = artifact.get("context_bundle")
+            snapshot_value = artifact.get("graph_snapshot")
+            if not isinstance(bundle, dict) or not isinstance(snapshot_value, dict):
+                raise TypeError("Context Manifest artifact is incomplete")
+            if bundle.get("bundle_hash") != bundle_hash:
+                raise ValueError("Context Manifest hash is invalid")
+            snapshot = GraphSnapshot.model_validate(snapshot_value)
+            allowed = {str(item) for item in bundle.get("mandatory", ())} | {
+                str(item) for item in bundle.get("supporting", ())
+            }
+            selected = tuple(resource_uids) if resource_uids else tuple(sorted(allowed))
+            if not set(selected) <= allowed:
+                raise PermissionError("Focused Read requested a resource outside the Manifest")
+            by_uid = {item.revision.object_uid: item.revision for item in snapshot.nodes}
+            values: list[dict[str, Any]] = []
+            omitted: list[str] = []
+            used = 0
+            for uid in selected:
+                revision = by_uid.get(uid)
+                if revision is None:
+                    omitted.append(uid)
+                    continue
+                value = revision.model_dump(mode="json")
+                size = len(str(value).encode("utf-8"))
+                if len(values) >= maximum_resources or used + size > maximum_bytes:
+                    omitted.append(uid)
+                    continue
+                values.append(value)
+                used += size
+            return DomainResult(
+                {
+                    "bundle_hash": bundle_hash,
+                    "stage": "focused_read",
+                    "resources": values,
+                    "omitted_candidates": omitted,
+                    "completeness": "INCOMPLETE_BUDGET" if omitted else "COMPLETE",
+                    "bytes": used,
+                }
+            )
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
+            return self._error(
+                "LESR-CONTEXT-READ-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (bundle_hash,),
+                suggested="context.plan",
+            )
+
+    def start_deep_trace(self, bundle_hash: str, start_uid: str, max_depth: int = 16) -> DomainResult:
+        try:
+            artifact = self.task_store.artifact(bundle_hash)
+            request: dict[str, object] = {
+                "start_uid": start_uid,
+                "max_depth": max_depth,
+                "configuration_uid": str(artifact["configuration_uid"]),
+                "evaluation_time": str(artifact["evaluation_time"]),
+            }
+            return DomainResult(
+                self.task_store.enqueue("deep_trace", request).model_dump(mode="json")
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            return self._error(
+                "LESR-CONTEXT-TRACE-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (bundle_hash,),
+                suggested="context.plan",
             )
 
     def open_workspace(self, request: WriteEnvelope) -> DomainResult:
@@ -248,6 +493,11 @@ class LocalRuntimeService:
             )
             if not request.dry_run:
                 self.workspaces[workspace.workspace_uid] = workspace
+                self.repository.create_checkpoint(
+                    workspace.workspace_uid,
+                    self._workspace_state(workspace),
+                    CheckpointStrategy.WORKSPACE_REF,
+                )
             return DomainResult(workspace.model_dump(mode="json"))
         except (KeyError, TypeError, ValueError, ValidationError) as error:
             return self._error(
@@ -287,12 +537,14 @@ class LocalRuntimeService:
                         "occurred_at": request.operation.get("occurred_at") or datetime.now(UTC),
                     }
                 )
+                if operation.relation is not None:
+                    self._validate_relation_proposal(workspace, operation.relation)
                 updated = WorkspaceEngine.edit(workspace, operation)
             if not request.dry_run:
                 self.workspaces[request.workspace_uid] = updated
                 self.repository.create_checkpoint(
                     request.workspace_uid,
-                    {"working_state": updated.model_dump(mode="json")},
+                    self._workspace_state(updated),
                     CheckpointStrategy.WORKSPACE_REF,
                 )
             return DomainResult(updated.model_dump(mode="json"))
@@ -302,7 +554,6 @@ class LocalRuntimeService:
                 ErrorCategory.VALIDATION,
                 str(error),
                 (request.workspace_uid,),
-                suggested="workspace.inspect",
             )
 
     def prepare_review(self, request: WriteEnvelope) -> DomainResult:
@@ -311,22 +562,67 @@ class LocalRuntimeService:
             return error
         try:
             evaluation_time = self._evaluation_time(request.operation)
+            workspace = self.workspaces[request.workspace_uid]
+            canonical_evaluator = self._evaluator(
+                workspace.configuration_uid, evaluation_time
+            )
+            self._validate_requested_transitions(
+                workspace, canonical_evaluator, request.actor
+            )
+            lifecycle_states = tuple(
+                (
+                    copy.object_uid,
+                    canonical_evaluator.nodes[copy.object_uid].lifecycle_state
+                    if copy.object_uid in canonical_evaluator.nodes
+                    else self._initial_state_for_kind(copy.kind),
+                )
+                for copy in workspace.working_copies
+            )
             submission = WorkspaceEngine.submit(
-                self.workspaces[request.workspace_uid],
+                workspace,
                 checkpoint_uid=uuid7_candidate(),
                 actor_uid=request.actor,
                 submitted_at=evaluation_time,
+                base_revisions=tuple(
+                    Revision.model_validate(value)
+                    for value in self.documents
+                    if value.get("resource_type") == "revision"
+                ),
+                lifecycle_states=lifecycle_states,
             )
             evaluator = self._evaluator(
                 submission.workspace.configuration_uid,
                 evaluation_time,
                 submission=submission,
             )
+            model = self._effective_model(submission.workspace.configuration_uid)
+            review_context_policies = [
+                item for item in model.context_policies if item.task_type in {"review", "*"}
+            ]
+            exact_review_context = [
+                item for item in review_context_policies if item.task_type == "review"
+            ]
+            selected_review_context = exact_review_context or [
+                item for item in review_context_policies if item.task_type == "*"
+            ]
+            if len(selected_review_context) != 1:
+                raise ValueError(
+                    "Effective Model must define exactly one review Context Policy"
+                )
             context = plan_context(
                 evaluator,
                 (submission.candidate.revisions[0].object_uid,),
-                (),
+                selected_review_context[0].mandatory_predicates,
                 token_limit=500,
+            )
+            self.task_store.put_artifact(
+                context.bundle_hash,
+                {
+                    "context_bundle": context.model_dump(mode="json"),
+                    "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                    "configuration_uid": submission.workspace.configuration_uid,
+                    "evaluation_time": evaluator.snapshot.evaluation_time.isoformat(),
+                },
             )
             impact = analyze_impact(
                 evaluator,
@@ -334,14 +630,8 @@ class LocalRuntimeService:
                 maximum_depth=int(request.operation.get("maximum_depth", 3)),
             )
             validation = self._validate_submission(submission, evaluator)
-            policy = ReviewPolicy(
-                stages=(
-                    StageQuorum(
-                        stage=str(request.operation.get("review_stage", "review")),
-                        role=str(request.operation.get("required_role", "technical")),
-                        minimum_count=int(request.operation.get("minimum_count", 1)),
-                    ),
-                )
+            policy = self._review_policy(
+                submission.workspace.configuration_uid, "apply_transaction"
             )
             package = ReviewPackage(
                 workspace_uid=request.workspace_uid,
@@ -365,14 +655,21 @@ class LocalRuntimeService:
                 self.workspaces[request.workspace_uid] = submission.workspace
                 self.submissions[request.workspace_uid] = submission
                 self.reviews[package.package_uid] = package
+                self.review_evidence[package.package_uid] = {
+                    "semantic_diff": submission.semantic_diff.model_dump(mode="json"),
+                    "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                    "context_bundle": context.model_dump(mode="json"),
+                    "impact_report": impact.model_dump(mode="json"),
+                    "validation": validation,
+                }
                 self.repository.create_checkpoint(
                     request.workspace_uid,
-                    {
-                        "working_state": submission.workspace.model_dump(mode="json"),
-                        "candidate": submission.candidate.model_dump(mode="json"),
-                        "semantic_diff": submission.semantic_diff.model_dump(mode="json"),
-                        "review_package": package.model_dump(mode="json"),
-                    },
+                    self._workspace_state(
+                        submission.workspace,
+                        submission=submission,
+                        review_package=package,
+                        evidence=self.review_evidence[package.package_uid],
+                    ),
                     CheckpointStrategy.WORKSPACE_REF,
                 )
             return DomainResult(
@@ -387,13 +684,12 @@ class LocalRuntimeService:
                     "review_package": package.model_dump(mode="json"),
                 }
             )
-        except (KeyError, TypeError, ValueError, ValidationError) as error:
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
             return self._error(
                 "LESR-REVIEW-PREPARATION-FAILED",
                 ErrorCategory.INDETERMINATE,
                 str(error),
                 (request.workspace_uid,),
-                suggested="workspace.validate",
             )
 
     def apply_transaction(self, request: WriteEnvelope) -> DomainResult:
@@ -463,6 +759,7 @@ class LocalRuntimeService:
                 resolutions=resolutions,
                 satisfactions=satisfactions,
                 revocations=revocations,
+                evidence=self.review_evidence.get(package_uid, {}),
                 evaluation_time=self._evaluation_time(request.operation),
                 actor_uid=request.actor,
                 delegation_uid=request.delegation_uid,
@@ -470,10 +767,18 @@ class LocalRuntimeService:
                 validation_recalculator=lambda: str(
                     self._validate_submission(
                         submission,
-                        self._evaluator(
-                            submission.workspace.configuration_uid,
-                            self._evaluation_time(request.operation),
-                            submission=submission,
+                        self._evaluator_from_review_evidence(package_uid),
+                        validation_run_uid=str(
+                            self.review_evidence[package_uid]["validation"][
+                                "validation_run"
+                            ]["validation_run_uid"]
+                        ),
+                        completed_at=self._parse_evaluation_time(
+                            str(
+                                self.review_evidence[package_uid]["validation"][
+                                    "validation_run"
+                                ]["completed_at"]
+                            )
                         ),
                     )["validation_hash"]
                 ),
@@ -506,8 +811,361 @@ class LocalRuntimeService:
                 str(error),
                 (request.workspace_uid,),
                 retryable=isinstance(error, ConcurrencyConflict),
-                suggested="workspace.rebase" if isinstance(error, ConcurrencyConflict) else None,
             )
+
+    def prepare_baseline(self, request: WriteEnvelope) -> DomainResult:
+        error = self._validate_write(request, require_workspace=False)
+        if error:
+            return error
+        try:
+            evaluation_time = self._evaluation_time(request.operation)
+            configuration_uid = str(request.operation["configuration_uid"])
+            configuration = self._configuration(configuration_uid)
+            if configuration.get("closure_status") != "complete":
+                raise ValueError("Baseline requires a complete Configuration")
+            evaluator = self._evaluator(configuration_uid, evaluation_time)
+            revisions = tuple(item.revision for item in evaluator.snapshot.nodes)
+            candidate = CandidateRevisionSet(
+                workspace_uid=request.workspace_uid,
+                checkpoint_uid=uuid7_candidate(),
+                effective_model_hash=str(configuration["effective_model_hash"]),
+                revisions=revisions,
+                relation_revisions=tuple(
+                    item.assertion for item in evaluator.snapshot.relations
+                ),
+                lifecycle_records=(),
+            )
+            workspace = Workspace(
+                workspace_uid=request.workspace_uid,
+                base_commit=request.expected_base,
+                configuration_uid=configuration_uid,
+                effective_model_hash=str(configuration["effective_model_hash"]),
+                delegation_uid=request.delegation_uid,
+                actor_uid=request.actor,
+                created_at=evaluation_time,
+            )
+            submission = SimpleNamespace(workspace=workspace, candidate=candidate)
+            validation = self._validate_submission(submission, evaluator)
+            impact = analyze_impact(
+                evaluator,
+                tuple(item.object_uid for item in revisions),
+                maximum_depth=16,
+                configuration_complete=True,
+                affected_configuration_uids=(configuration_uid,),
+                affected_deviation_uids=tuple(
+                    str(item)
+                    for item in configuration.get("active_deviation_revision_uids", ())
+                ),
+            )
+            model = self._effective_model(configuration_uid)
+            baseline_context = [
+                item for item in model.context_policies if item.task_type in {"baseline", "*"}
+            ]
+            exact_context = [item for item in baseline_context if item.task_type == "baseline"]
+            selected_context = exact_context or [
+                item for item in baseline_context if item.task_type == "*"
+            ]
+            if len(selected_context) != 1:
+                raise ValueError(
+                    "Effective Model must define exactly one baseline Context Policy"
+                )
+            context = plan_context(
+                evaluator,
+                tuple(item.object_uid for item in revisions),
+                selected_context[0].mandatory_predicates,
+                token_limit=max(1, len(revisions) + len(evaluator.snapshot.relations)),
+            )
+            semantic_diff = {
+                "schema_version": "1.0",
+                "resource_type": "semantic_diff",
+                "base_commit": request.expected_base,
+                "candidate_uid": candidate.candidate_uid,
+                "changes": [],
+                "scope": [configuration_uid],
+            }
+            semantic_diff["diff_hash"] = semantic_hash(semantic_diff)
+            policy = self._review_policy(configuration_uid, "baseline.apply")
+            package = ReviewPackage(
+                workspace_uid=request.workspace_uid,
+                base_commit=request.expected_base,
+                configuration_uid=configuration_uid,
+                candidate_hash=candidate.candidate_hash,
+                candidate_scope=(configuration_uid,),
+                semantic_diff_hash=str(semantic_diff["diff_hash"]),
+                graph_snapshot_hash=evaluator.snapshot.snapshot_hash,
+                context_bundle_hash=context.bundle_hash,
+                impact_report_hash=impact.report_hash,
+                validation_hash=str(validation["validation_hash"]),
+                finding_hashes=tuple(str(item) for item in validation["finding_hashes"]),
+                comment_hashes=(),
+                review_policy=policy,
+                effective_model_hash=str(configuration["effective_model_hash"]),
+                prepared_by_actor_uid=request.actor,
+                created_at=evaluation_time,
+            )
+            preparation = prepare_baseline(
+                configuration_uid=configuration_uid,
+                state_commit=request.expected_base,
+                graph_snapshot_hash=evaluator.snapshot.snapshot_hash,
+                validation_run_hash=str(validation["validation_hash"]),
+                impact_report_hash=impact.report_hash,
+                review_package_hash=package.package_hash,
+                configuration_complete=True,
+                validation_passed=validation["outcome"] == "pass",
+                impact_complete=impact.completeness.value == "COMPLETE",
+            )
+            evidence = {
+                "semantic_diff": semantic_diff,
+                "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                "context_bundle": context.model_dump(mode="json"),
+                "impact_report": impact.model_dump(mode="json"),
+                "validation": validation,
+            }
+            if not request.dry_run:
+                self.reviews[package.package_uid] = package
+                self.review_evidence[package.package_uid] = evidence
+                self.baseline_preparations[package.package_uid] = preparation
+                self.repository.create_checkpoint(
+                    request.workspace_uid,
+                    {
+                        "runtime_state_version": "1.0",
+                        "review_package": package.model_dump(mode="json"),
+                        "review_evidence": evidence,
+                        "baseline_preparation": preparation.model_dump(mode="json"),
+                    },
+                    CheckpointStrategy.WORKSPACE_REF,
+                )
+            return DomainResult(
+                {
+                    "baseline_preparation": preparation.model_dump(mode="json"),
+                    "review_package": package.model_dump(mode="json"),
+                    "validation": validation,
+                    "impact_report": impact.model_dump(mode="json"),
+                }
+            )
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
+            return self._error(
+                "LESR-BASELINE-PREPARATION-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (request.workspace_uid,),
+            )
+
+    def apply_baseline(self, request: WriteEnvelope) -> DomainResult:
+        error = self._validate_write(request, require_workspace=False)
+        if error:
+            return error
+        try:
+            package_uid = str(request.operation["review_package_uid"])
+            package = self.reviews[package_uid]
+            preparation = self.baseline_preparations[package_uid]
+            evidence = self.review_evidence[package_uid]
+            approvals = tuple(
+                SignedApproval.model_validate(item)
+                for item in self._records(request.operation, "signed_approvals")
+            )
+            trust = tuple(
+                TrustedActor.model_validate(item)
+                for item in self.documents
+                if item.get("resource_type") == "trusted_actor"
+            )
+            decision = GovernanceEvaluator.evaluate(
+                package,
+                approvals,
+                trust,
+                (),
+                (),
+                (),
+                (),
+                now=self._evaluation_time(request.operation),
+            )
+            if not decision.allowed:
+                raise ApprovalError("; ".join(decision.reasons))
+            self.repository._verify_review_evidence(package, evidence)
+            configuration = self._configuration(preparation.configuration_uid)
+            manifest: dict[str, Any] = {
+                "schema_version": "1.0",
+                "resource_type": "baseline_manifest",
+                "baseline_uid": uuid7_candidate(),
+                "git_commit": preparation.state_commit,
+                "revision_uids": list(configuration.get("revision_uids", ())),
+                "relation_revision_uids": list(
+                    configuration.get("relation_revision_uids", ())
+                ),
+                "profile_revision_uids": list(
+                    configuration.get("profile_revision_uids", ())
+                ),
+                "configuration_uid": preparation.configuration_uid,
+                "effective_model_hash": package.effective_model_hash,
+                "deviation_revision_uids": list(
+                    configuration.get("active_deviation_revision_uids", ())
+                ),
+                "external_references": [],
+                "evidence_revision_uids": [],
+                "created_at": self._evaluation_time(request.operation)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            manifest["manifest_hash"] = semantic_hash(manifest)
+            operations = [
+                SemanticOperation(
+                    OperationType.CREATE_BASELINE,
+                    f"canonical/baselines/{manifest['baseline_uid']}.json",
+                    manifest,
+                ),
+                SemanticOperation(
+                    OperationType.RECORD_BASELINE_PREPARATION,
+                    f"canonical/baseline_preparations/{preparation.preparation_uid}.json",
+                    preparation.model_dump(mode="json"),
+                ),
+                SemanticOperation(
+                    OperationType.RECORD_REVIEW_PACKAGE,
+                    f"canonical/review_packages/{package.package_uid}.json",
+                    package.model_dump(mode="json"),
+                ),
+            ]
+            operations.extend(
+                SemanticOperation(
+                    OperationType.RECORD_APPROVAL,
+                    f"canonical/approvals/{item.approval_uid}.json",
+                    item.model_dump(mode="json"),
+                )
+                for item in approvals
+            )
+            operations.extend(
+                SemanticOperation(
+                    OperationType.RECORD_PROVENANCE,
+                    f"canonical/provenance/{item.provenance_uid}.json",
+                    self._approval_provenance(item),
+                )
+                for item in approvals
+            )
+            recorded_provenance = {
+                str(item.payload.get("provenance_uid"))
+                for item in operations
+                if item.payload.get("resource_type") == "provenance_record"
+            }
+            if any(item.provenance_uid not in recorded_provenance for item in approvals):
+                raise IntegrityError("baseline approval provenance was not assembled")
+            transaction = SemanticTransaction(
+                transaction_uid=uuid7_candidate(),
+                base_commit=request.expected_base,
+                expected_revisions=(),
+                effective_model_hash=package.effective_model_hash,
+                review_package_hash=package.package_hash,
+                operations=tuple(operations),
+                approvals=tuple(
+                    ApprovalAttestation(
+                        item.approval_uid,
+                        item.package_hash,
+                        item.actor_uid,
+                        item.actor_type,
+                        item.approval_type,
+                    )
+                    for item in approvals
+                ),
+                actor=request.actor,
+                delegation_uid=request.delegation_uid,
+                idempotency_key=request.idempotency_key,
+            )
+            if request.dry_run:
+                return DomainResult({"dry_run": True, "baseline_manifest": manifest})
+            result = self.repository.apply(
+                transaction,
+                projection_updater=self._rebuild_projection,
+                governance_validator=lambda: self._validate_baseline_boundary(
+                    package, preparation, evidence
+                ),
+            )
+            tag_name = request.operation.get("tag_name")
+            tag_status = "not_requested"
+            if isinstance(tag_name, str) and tag_name:
+                try:
+                    self.repository._git(
+                        "tag", "-a", tag_name, result.commit, "-m", f"LESR Baseline {tag_name}"
+                    )
+                    tag_status = "created"
+                except RuntimeError:
+                    tag_status = "pending_rebuild"
+            self.base = result.commit
+            self._reload()
+            return DomainResult(
+                {
+                    "result_commit": result.commit,
+                    "baseline_uid": manifest["baseline_uid"],
+                    "manifest_hash": manifest["manifest_hash"],
+                    "tag_status": tag_status,
+                }
+            )
+        except (
+            ApprovalError,
+            ConcurrencyConflict,
+            IntegrityError,
+            KeyError,
+            TypeError,
+            ValueError,
+            ValidationError,
+        ) as error:
+            return self._error(
+                "LESR-BASELINE-APPLY-FAILED",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (request.workspace_uid,),
+                retryable=isinstance(error, ConcurrencyConflict),
+            )
+
+    def _validate_baseline_boundary(
+        self,
+        package: ReviewPackage,
+        preparation: BaselinePreparation,
+        evidence: dict[str, Any],
+    ) -> None:
+        """Recompute immutable baseline inputs at the Git authority boundary."""
+
+        self.repository._verify_review_evidence(package, evidence)
+        if preparation.state_commit != self.repository.current_commit():
+            raise ConcurrencyConflict("baseline preparation no longer pins canonical HEAD")
+        configuration = self._configuration(preparation.configuration_uid)
+        if configuration.get("closure_status") != "complete":
+            raise ApprovalError("baseline Configuration is no longer complete")
+        if str(configuration.get("effective_model_hash")) != package.effective_model_hash:
+            raise ApprovalError("baseline Effective Model changed after review")
+        evaluator = self._evaluator_from_review_evidence(package.package_uid)
+        candidate = CandidateRevisionSet(
+            workspace_uid=package.workspace_uid,
+            checkpoint_uid=uuid7_candidate(),
+            effective_model_hash=package.effective_model_hash,
+            revisions=tuple(item.revision for item in evaluator.snapshot.nodes),
+            relation_revisions=tuple(
+                item.assertion for item in evaluator.snapshot.relations
+            ),
+            lifecycle_records=(),
+        )
+        workspace = Workspace(
+            workspace_uid=package.workspace_uid,
+            base_commit=package.base_commit,
+            configuration_uid=package.configuration_uid,
+            effective_model_hash=package.effective_model_hash,
+            delegation_uid="boundary-revalidation",
+            actor_uid=package.prepared_by_actor_uid,
+            created_at=package.created_at,
+        )
+        recorded = evidence["validation"]
+        recalculated = self._validate_submission(
+            SimpleNamespace(workspace=workspace, candidate=candidate),
+            evaluator,
+            validation_run_uid=str(recorded["validation_run"]["validation_run_uid"]),
+            completed_at=self._parse_evaluation_time(
+                str(recorded["validation_run"]["completed_at"])
+            ),
+        )
+        if (
+            recalculated["snapshot_hash"] != recorded.get("snapshot_hash")
+            or recalculated["outcome"] != recorded.get("outcome")
+            or recalculated["finding_hashes"]
+            != tuple(recorded.get("finding_hashes", ()))
+        ):
+            raise ApprovalError("baseline Validation changed at transaction boundary")
 
     def start_task(self, task_type: str, request: dict[str, Any]) -> DomainResult:
         try:
@@ -532,13 +1190,400 @@ class LocalRuntimeService:
             )
 
     def task_result(self, task_uid: str) -> DomainResult:
-        return self.task_status(task_uid)
+        try:
+            result = self.task_store.result(task_uid)
+            if result is None:
+                return self._error(
+                    "LESR-TASK-RESULT-NOT-READY",
+                    ErrorCategory.CONFLICT,
+                    "task result is not available",
+                    (task_uid,),
+                    retryable=True,
+                )
+            return DomainResult(result)
+        except KeyError:
+            return self._error(
+                "LESR-TASK-NOT-FOUND", ErrorCategory.NOT_FOUND, "task not found", (task_uid,)
+            )
 
-    def bootstrap_root_owner(self, *_args: Any, **_kwargs: Any) -> DomainResult:
-        return self._removed("bootstrap_root_owner")
+    def run_next_task(self) -> DomainResult:
+        worker = TaskWorker(
+            self.task_store,
+            {
+                "deep_trace": self._run_deep_trace,
+                "large_impact": self._run_large_impact,
+            },
+        )
+        task = worker.run_next()
+        return DomainResult(task.model_dump(mode="json") if task is not None else {"idle": True})
 
-    def initialize_configuration(self, *_args: Any, **_kwargs: Any) -> DomainResult:
-        return self._removed("initialize_configuration")
+    def _run_deep_trace(
+        self,
+        request: dict[str, object],
+        progress: Any,
+        cancelled: Any,
+    ) -> dict[str, object]:
+        progress(10, {"phase": "snapshot"})
+        if cancelled():
+            return {"cancelled": True}
+        result = self.traverse(
+            str(request["start_uid"]),
+            str(request["predicate"]) if request.get("predicate") is not None else None,
+            int(str(request.get("max_depth", 16))),
+            str(request["configuration_uid"]),
+            str(request["evaluation_time"]),
+        ).payload()
+        progress(100, {"phase": "complete"})
+        return result
+
+    def _run_large_impact(
+        self,
+        request: dict[str, object],
+        progress: Any,
+        cancelled: Any,
+    ) -> dict[str, object]:
+        progress(10, {"phase": "snapshot"})
+        if cancelled():
+            return {"cancelled": True}
+        result = self.impact(
+            str(request["start_uid"]),
+            int(str(request.get("max_depth", 16))),
+            str(request["configuration_uid"]),
+            str(request["evaluation_time"]),
+        ).payload()
+        progress(100, {"phase": "complete"})
+        return result
+
+    @staticmethod
+    def bootstrap_binding(
+        base_commit: str,
+        trust: dict[str, Any],
+        delegation: dict[str, Any],
+        governance_operations: tuple[dict[str, Any], ...] = (),
+    ) -> tuple[str, str, dict[str, Any]]:
+        resources = [item.get("resource", {}) for item in governance_operations]
+        profiles = tuple(
+            NormativeProfileRevision.model_validate(item)
+            for item in resources
+            if isinstance(item, dict)
+            and item.get("resource_type") == "normative_profile_revision"
+        )
+        rules = tuple(
+            RuleDefinition.model_validate(item)
+            for item in resources
+            if isinstance(item, dict)
+            and item.get("resource_type") == "rule_definition_revision"
+        )
+        definitions = tuple(
+            LocalRuntimeService._definition_revision(item)
+            for item in resources
+            if isinstance(item, dict)
+            and item.get("resource_type")
+            in {
+                "facet_definition_revision",
+                "kind_definition_revision",
+                "relation_type_revision",
+                "workflow_revision",
+            }
+        )
+        if len(resources) != len(profiles) + len(rules) + len(definitions):
+            raise ValueError(
+                "bootstrap governance may contain only Normative Profile, Definition and Rule revisions"
+            )
+        if not profiles:
+            raise ValueError("bootstrap requires at least one Normative Profile revision")
+        model_hash = EffectiveModelCompiler().compile(profiles, definitions).model_hash
+        scope = {
+            "base_commit": base_commit,
+            "actor_uid": trust.get("actor_uid"),
+            "key_uid": trust.get("key_uid"),
+            "delegation_uid": delegation.get("delegation_uid"),
+            "governance_operation_hashes": [
+                semantic_hash(
+                    {
+                        "operation_type": item.get("operation_type"),
+                        "resource": item.get("resource"),
+                    }
+                )
+                for item in governance_operations
+            ],
+        }
+        return semantic_hash({"bootstrap": scope}), model_hash, scope
+
+    def bootstrap_root_owner(
+        self,
+        trust: dict[str, Any],
+        delegation: dict[str, Any],
+        approval: dict[str, Any],
+        idempotency_key: str,
+        governance_operations: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult:
+        if any(item.get("resource_type") == "trusted_actor" for item in self.documents):
+            return self._error(
+                "LESR-BOOTSTRAP-ALREADY-COMPLETE",
+                ErrorCategory.CONFLICT,
+                "Canonical State already has a trusted root actor",
+            )
+        try:
+            schemas = SchemaCatalog()
+            schemas.validate("trusted-actor.schema.json", trust)
+            schemas.validate("delegation-grant.schema.json", delegation)
+            schemas.validate("approval-attestation.schema.json", approval)
+            trusted = TrustedActor.model_validate(trust)
+            signed = SignedApproval.model_validate(approval)
+            package_hash, model_hash, scope = self.bootstrap_binding(
+                self.base, trust, delegation, governance_operations
+            )
+            if signed.scope != scope:
+                raise PermissionError("bootstrap approval scope is invalid")
+            verify_approval(
+                signed,
+                trusted,
+                package_hash=package_hash,
+                effective_model_hash=model_hash,
+            )
+            if (
+                delegation["base_commit"] != self.base
+                or delegation["issued_by"] != trusted.actor_uid
+                or delegation["principal_uid"] != trusted.actor_uid
+                or signed.actor_uid != trusted.actor_uid
+            ):
+                raise PermissionError("bootstrap trust and delegation identities differ")
+            governance: list[SemanticOperation] = []
+            for item in governance_operations:
+                resource = item.get("resource")
+                if not isinstance(resource, dict):
+                    raise TypeError("governance operation resource is invalid")
+                resource_type = resource.get("resource_type")
+                if resource_type == "normative_profile_revision":
+                    operation_type = OperationType.UPDATE_PROFILE_BINDING
+                    uid = resource["profile_revision_uid"]
+                    path = f"canonical/profiles/{uid}.json"
+                elif resource_type == "rule_definition_revision":
+                    operation_type = OperationType.CREATE_RULE
+                    uid = resource["rule_revision_uid"]
+                    path = f"canonical/rules/{uid}.json"
+                elif resource_type in {
+                    "facet_definition_revision",
+                    "kind_definition_revision",
+                    "relation_type_revision",
+                    "workflow_revision",
+                }:
+                    operation_type = OperationType.CREATE_RECORD
+                    uid = resource["revision_uid"]
+                    path = f"canonical/definitions/{uid}.json"
+                else:
+                    raise ValueError("unsupported bootstrap governance resource")
+                governance.append(SemanticOperation(operation_type, path, resource))
+            transaction = SemanticTransaction(
+                transaction_uid=uuid7_candidate(),
+                base_commit=self.base,
+                expected_revisions=(),
+                effective_model_hash=model_hash,
+                review_package_hash=package_hash,
+                operations=(
+                    SemanticOperation(
+                        OperationType.REGISTER_TRUSTED_ACTOR,
+                        f"canonical/trust/{trusted.actor_uid}/{trusted.key_uid}.json",
+                        trust,
+                    ),
+                    SemanticOperation(
+                        OperationType.CREATE_DELEGATION,
+                        f"canonical/delegations/{delegation['delegation_uid']}.json",
+                        delegation,
+                    ),
+                    SemanticOperation(
+                        OperationType.RECORD_APPROVAL,
+                        f"canonical/approvals/{signed.approval_uid}.json",
+                        approval,
+                    ),
+                    SemanticOperation(
+                        OperationType.RECORD_PROVENANCE,
+                        f"canonical/provenance/{signed.provenance_uid}.json",
+                        self._approval_provenance(signed),
+                    ),
+                    *governance,
+                ),
+                approvals=(
+                    ApprovalAttestation(
+                        signed.approval_uid,
+                        package_hash,
+                        signed.actor_uid,
+                        signed.actor_type,
+                        signed.approval_type,
+                    ),
+                ),
+                actor=trusted.actor_uid,
+                delegation_uid=str(delegation["delegation_uid"]),
+                idempotency_key=idempotency_key,
+            )
+            result = self.repository.apply(transaction, projection_updater=self._rebuild_projection)
+            self.base = result.commit
+            self._reload()
+            return DomainResult(
+                {
+                    "result_commit": result.commit,
+                    "actor_uid": trusted.actor_uid,
+                    "delegation_uid": delegation["delegation_uid"],
+                }
+            )
+        except (
+            JsonSchemaValidationError,
+            KeyError,
+            TypeError,
+            ValueError,
+            PermissionError,
+            RuntimeError,
+        ) as error:
+            return self._error(
+                "LESR-BOOTSTRAP-INVALID",
+                ErrorCategory.AUTHORIZATION,
+                str(error),
+            )
+
+    @staticmethod
+    def initial_configuration_binding(
+        base_commit: str, configuration: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any]]:
+        scope = {
+            "base_commit": base_commit,
+            "configuration_uid": configuration.get("configuration_uid"),
+            "configuration_hash": semantic_hash(configuration),
+        }
+        return (
+            semantic_hash({"initial_configuration": scope}),
+            str(configuration.get("effective_model_hash")),
+            scope,
+        )
+
+    def initialize_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult:
+        if any(item.get("resource_type") == "configuration_snapshot" for item in self.documents):
+            return self._error(
+                "LESR-CONFIGURATION-ALREADY-INITIALIZED",
+                ErrorCategory.CONFLICT,
+                "initial configuration already exists",
+            )
+        try:
+            schemas = SchemaCatalog()
+            schemas.validate("configuration.schema.json", configuration)
+            schemas.validate("approval-attestation.schema.json", approval)
+            if configuration["git_commit"] != self.base:
+                raise ValueError("initial configuration must pin the exact Canonical base")
+            model = self._effective_model_from_configuration_value(configuration)
+            if model.model_hash != configuration["effective_model_hash"]:
+                raise ValueError("initial configuration Effective Model is unavailable or stale")
+            signed = SignedApproval.model_validate(approval)
+            package_hash, model_hash, scope = self.initial_configuration_binding(
+                self.base, configuration
+            )
+            trust_value = next(
+                (
+                    item
+                    for item in self.documents
+                    if item.get("resource_type") == "trusted_actor"
+                    and item.get("actor_uid") == signed.actor_uid
+                    and item.get("key_uid") == signed.key_uid
+                ),
+                None,
+            )
+            if trust_value is None or signed.scope != scope:
+                raise PermissionError("initial configuration approval scope is invalid")
+            verify_approval(
+                signed,
+                TrustedActor.model_validate(trust_value),
+                package_hash=package_hash,
+                effective_model_hash=model_hash,
+            )
+            transaction = SemanticTransaction(
+                transaction_uid=uuid7_candidate(),
+                base_commit=self.base,
+                expected_revisions=(),
+                effective_model_hash=model_hash,
+                review_package_hash=package_hash,
+                operations=(
+                    SemanticOperation(
+                        OperationType.CREATE_CONFIGURATION,
+                        f"canonical/configurations/{configuration['configuration_uid']}.json",
+                        configuration,
+                    ),
+                    SemanticOperation(
+                        OperationType.RECORD_APPROVAL,
+                        f"canonical/approvals/{signed.approval_uid}.json",
+                        approval,
+                    ),
+                    SemanticOperation(
+                        OperationType.RECORD_PROVENANCE,
+                        f"canonical/provenance/{signed.provenance_uid}.json",
+                        self._approval_provenance(signed),
+                    ),
+                ),
+                approvals=(
+                    ApprovalAttestation(
+                        signed.approval_uid,
+                        package_hash,
+                        signed.actor_uid,
+                        signed.actor_type,
+                        signed.approval_type,
+                    ),
+                ),
+                actor=actor_uid,
+                delegation_uid=delegation_uid,
+                idempotency_key=idempotency_key,
+            )
+            result = self.repository.apply(transaction, projection_updater=self._rebuild_projection)
+            self.base = result.commit
+            self._reload()
+            return DomainResult(
+                {
+                    "result_commit": result.commit,
+                    "configuration_uid": configuration["configuration_uid"],
+                    "effective_model_hash": model_hash,
+                }
+            )
+        except (
+            JsonSchemaValidationError,
+            KeyError,
+            TypeError,
+            ValueError,
+            PermissionError,
+            RuntimeError,
+        ) as error:
+            return self._error(
+                "LESR-CONFIGURATION-INITIALIZATION-INVALID",
+                ErrorCategory.AUTHORIZATION,
+                str(error),
+            )
+
+    @staticmethod
+    def _approval_provenance(approval: SignedApproval) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "schema_version": "1.0",
+            "resource_type": "provenance_record",
+            "provenance_uid": approval.provenance_uid,
+            "subject_uid": approval.approval_uid,
+            "kind": "asserted",
+            "responsible_actor_uid": approval.actor_uid,
+            "performed_by_actor_uid": approval.actor_uid,
+            "on_behalf_of_actor_uid": None,
+            "tool_uids": [],
+            "tool_identity": "human-ed25519-bootstrap",
+            "delegation_uid": None,
+            "used_uids": [],
+            "generated_uids": [approval.approval_uid],
+            "review_package_uid": None,
+            "validation_run_uids": [],
+            "context_bundle_hash": None,
+            "generated_at": approval.issued_at.isoformat().replace("+00:00", "Z"),
+        }
+        value["content_hash"] = semantic_hash(value)
+        return value
 
     def _evaluator(
         self,
@@ -548,8 +1593,37 @@ class LocalRuntimeService:
         submission: Any | None = None,
     ) -> SemanticEvaluator:
         configuration = self._configuration(configuration_uid)
+        effective_model = self._effective_model(configuration_uid)
+        candidate_records = (
+            tuple(submission.candidate.lifecycle_records) if submission is not None else ()
+        )
+        kind_definitions = {
+            item.name: item
+            for item in (
+                KindDefinitionRevision.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "kind_definition_revision"
+                and value.get("revision_uid") in set(effective_model.definition_revision_uids)
+            )
+        }
+        relation_types = tuple(
+            RelationTypeRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "relation_type_revision"
+            and value.get("revision_uid") in set(effective_model.definition_revision_uids)
+        )
+        relation_type_by_uid = {item.revision_uid: item for item in relation_types}
         nodes = {
-            item.object_uid: GraphNode(revision=item, lifecycle_state="approved")
+            item.object_uid: GraphNode(
+                revision=item,
+                lifecycle_state=self._project_lifecycle(
+                    item.object_uid,
+                    kind_definitions[item.kind].workflow_revision_uid
+                    if item.kind in kind_definitions
+                    else None,
+                    candidate_records,
+                ),
+            )
             for item in (
                 Revision.model_validate(value)
                 for value in self.documents
@@ -561,7 +1635,11 @@ class LocalRuntimeService:
             GraphRelation(
                 assertion=RelationAssertion.model_validate(value),
                 relation_type_revision_uid=self._relation_type_uid(value),
-                lifecycle_state="active",
+                lifecycle_state=self._project_lifecycle(
+                    str(value.get("assertion_uid")),
+                    relation_type_by_uid[self._relation_type_uid(value)].workflow_revision_uid,
+                    candidate_records,
+                ),
             )
             for value in self.documents
             if value.get("resource_type") == "relation_assertion_revision"
@@ -577,7 +1655,15 @@ class LocalRuntimeService:
             overlay_hash = submission.candidate.candidate_hash
             for revision in submission.candidate.revisions:
                 nodes[revision.object_uid] = GraphNode(
-                    revision=revision, lifecycle_state="draft", source="candidate"
+                    revision=revision,
+                    lifecycle_state=self._project_lifecycle(
+                        revision.object_uid,
+                        kind_definitions[revision.kind].workflow_revision_uid
+                        if revision.kind in kind_definitions
+                        else None,
+                        candidate_records,
+                    ),
+                    source="candidate",
                 )
             relations.extend(
                 GraphRelation(
@@ -585,16 +1671,17 @@ class LocalRuntimeService:
                     relation_type_revision_uid=self._relation_type_uid(
                         item.model_dump(mode="json")
                     ),
-                    lifecycle_state="draft",
+                    lifecycle_state=self._project_lifecycle(
+                        item.assertion_uid,
+                        relation_type_by_uid[
+                            self._relation_type_uid(item.model_dump(mode="json"))
+                        ].workflow_revision_uid,
+                        candidate_records,
+                    ),
                     source="candidate",
                 )
                 for item in submission.candidate.relation_revisions
             )
-        relation_types = tuple(
-            RelationTypeRevision.model_validate(value)
-            for value in self.documents
-            if value.get("resource_type") == "relation_type_revision"
-        )
         unresolved = tuple(
             sorted(
                 f"{endpoint.system}:{endpoint.namespace}:{endpoint.external_id}"
@@ -618,24 +1705,212 @@ class LocalRuntimeService:
         )
         return SemanticEvaluator(snapshot, relation_types)
 
-    def _configuration(self, configuration_uid: str) -> dict[str, Any]:
-        return next(
-            item
-            for item in self.documents
-            if item.get("resource_type") == "configuration_snapshot"
-            and item.get("configuration_uid") == configuration_uid
+    def _evaluator_from_review_evidence(self, package_uid: str) -> SemanticEvaluator:
+        evidence = self.review_evidence.get(package_uid)
+        if not isinstance(evidence, dict) or not isinstance(
+            evidence.get("graph_snapshot"), dict
+        ):
+            raise TypeError("review Graph Snapshot is unavailable")
+        snapshot = GraphSnapshot.model_validate(evidence["graph_snapshot"])
+        relation_type_uids = {
+            item.relation_type_revision_uid for item in snapshot.relations
+        }
+        relation_types = tuple(
+            RelationTypeRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "relation_type_revision"
+            and value.get("revision_uid") in relation_type_uids
         )
+        if {item.revision_uid for item in relation_types} != relation_type_uids:
+            raise ValueError("review Graph Snapshot Relation Type is unavailable")
+        return SemanticEvaluator(snapshot, relation_types)
 
-    def _validate_submission(self, submission: Any, evaluator: SemanticEvaluator) -> dict[str, Any]:
+    def _project_lifecycle(
+        self,
+        subject_uid: str,
+        workflow_revision_uid: str | None,
+        candidate_records: tuple[ImmutableRecord, ...],
+    ) -> str:
+        if workflow_revision_uid is None:
+            return "indeterminate"
+        workflow_value = next(
+            (
+                value
+                for value in self.documents
+                if value.get("resource_type") == "workflow_revision"
+                and value.get("revision_uid") == workflow_revision_uid
+            ),
+            None,
+        )
+        if workflow_value is None:
+            return "indeterminate"
+        records = tuple(
+            ImmutableRecord.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "immutable_record"
+            and value.get("subject_uid") == subject_uid
+        ) + tuple(item for item in candidate_records if item.subject_uid == subject_uid)
+        projection = WorkflowProjector.project(
+            WorkflowRevision.model_validate(workflow_value), records
+        )
+        return "indeterminate" if projection.conflicts else projection.state
+
+    def _initial_state_for_kind(self, kind: str) -> str:
+        definition = next(
+            (
+                KindDefinitionRevision.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "kind_definition_revision"
+                and value.get("name") == kind
+            ),
+            None,
+        )
+        if definition is None or definition.workflow_revision_uid is None:
+            return "indeterminate"
+        workflow = next(
+            (
+                WorkflowRevision.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "workflow_revision"
+                and value.get("revision_uid") == definition.workflow_revision_uid
+            ),
+            None,
+        )
+        return workflow.initial_state if workflow is not None else "indeterminate"
+
+    def _validate_relation_proposal(
+        self, workspace: Workspace, relation: RelationAssertion
+    ) -> None:
+        if relation.relation_type_revision_uid is None:
+            raise ValueError("Relation Proposal must bind an exact Relation Type Revision")
+        model = self._effective_model(workspace.configuration_uid)
+        if relation.relation_type_revision_uid not in model.relation_policy_revision_uids:
+            raise ValueError("Relation Type Revision is not selected by the Effective Model")
+        relation_type = next(
+            RelationTypeRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "relation_type_revision"
+            and value.get("revision_uid") == relation.relation_type_revision_uid
+        )
+        if relation.predicate != relation_type.predicate or relation.core_role != relation_type.core_role:
+            raise ValueError("Relation Proposal predicate/Core Role mismatches its type")
+        for endpoint in (relation.source, relation.target):
+            if endpoint.binding not in relation_type.allowed_bindings:
+                raise ValueError("Relation Proposal uses a Binding forbidden by its type")
+        working_revisions = {
+            copy.object_uid: Revision(
+                object_uid=copy.object_uid,
+                revision_number=copy.base_revision_number + 1,
+                parent_revision_uid=copy.base_revision_uid,
+                human_key=copy.human_key,
+                kind=copy.kind,
+                facets=copy.facets,
+                fields=copy.draft_fields,
+                fragments=copy.draft_fragments,
+                provenance_origin=ProvenanceKind.AUTHORED,
+            )
+            for copy in workspace.working_copies
+        }
+        canonical_revisions = {
+            item.object_uid: item
+            for item in (
+                Revision.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "revision"
+            )
+        }
+        revisions = canonical_revisions | working_revisions
+        for endpoint, allowed, name in (
+            (relation.source, relation_type.source_kind_or_facet, "source"),
+            (relation.target, relation_type.target_kind_or_facet, "target"),
+        ):
+            if endpoint.binding is BindingMode.EXTERNAL:
+                continue
+            revision = revisions.get(endpoint.object_uid or "")
+            if revision is None:
+                raise ValueError(f"Relation Proposal {name} is unresolved")
+            if not SemanticEvaluator._matches_endpoint(revision, allowed):
+                raise ValueError(f"Relation Proposal {name} Kind/Facet is forbidden")
+
+    def _validate_requested_transitions(
+        self,
+        workspace: Workspace,
+        evaluator: SemanticEvaluator,
+        actor_uid: str,
+    ) -> None:
+        actor_roles = {
+            str(role)
+            for value in self.documents
+            if value.get("resource_type") == "trusted_actor"
+            and value.get("actor_uid") == actor_uid
+            for role in value.get("roles", ())
+        }
+        kind_definitions = {
+            str(value.get("name")): KindDefinitionRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "kind_definition_revision"
+        }
+        workflows = {
+            str(value.get("revision_uid")): WorkflowRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "workflow_revision"
+        }
+        for copy in workspace.working_copies:
+            if copy.requested_lifecycle_state is None:
+                continue
+            definition = kind_definitions.get(copy.kind)
+            workflow = (
+                workflows.get(definition.workflow_revision_uid)
+                if definition is not None and definition.workflow_revision_uid is not None
+                else None
+            )
+            if workflow is None:
+                raise ValueError("Lifecycle request has no exact Workflow Revision")
+            current = (
+                evaluator.nodes[copy.object_uid].lifecycle_state
+                if copy.object_uid in evaluator.nodes
+                else workflow.initial_state
+            )
+            transitions = [
+                item
+                for item in workflow.transitions
+                if item.from_state == current
+                and item.to_state == copy.requested_lifecycle_state
+            ]
+            if len(transitions) != 1:
+                raise ValueError("Lifecycle transition is not defined by the selected Workflow")
+            transition = transitions[0]
+            if transition.roles and not actor_roles.intersection(transition.roles):
+                raise PermissionError("actor lacks the role required by Lifecycle Workflow")
+            if transition.guards or transition.evidence_kinds:
+                raise ValueError(
+                    "Lifecycle transition guards/evidence are not satisfied by the Edit Operation"
+                )
+
+    def _configuration(self, configuration_uid: str) -> dict[str, Any]:
+        try:
+            return next(
+                item
+                for item in self.documents
+                if item.get("resource_type") == "configuration_snapshot"
+                and item.get("configuration_uid") == configuration_uid
+            )
+        except StopIteration as error:
+            raise KeyError(f"configuration is not available: {configuration_uid}") from error
+
+    def _validate_submission(
+        self,
+        submission: Any,
+        evaluator: SemanticEvaluator,
+        *,
+        validation_run_uid: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> dict[str, Any]:
         """Compile and evaluate the exact Configuration rule set against one snapshot."""
 
         configuration = self._configuration(submission.workspace.configuration_uid)
-        selected_profiles = set(configuration.get("profile_revision_uids", ()))
-        selected_rule_uids: set[str] = set()
-        for value in self.documents:
-            profile_uid = value.get("profile_revision_uid")
-            if profile_uid in selected_profiles:
-                selected_rule_uids.update(str(uid) for uid in value.get("rule_revision_uids", ()))
+        model = self._effective_model(submission.workspace.configuration_uid)
+        selected_rule_uids = set(model.rule_revision_uids)
         rule_values = [
             value
             for value in self.documents
@@ -711,6 +1986,89 @@ class LocalRuntimeService:
                     ),
                     units,
                 )
+                semantic_results = []
+                constraint_environment = ConstraintEnvironment(
+                    target_uid=revision.object_uid,
+                    fields=tuple(
+                        (
+                            field.path.removeprefix("/").replace("/", "."),
+                            field.value,
+                        )
+                        for field in revision.fields
+                    ),
+                )
+                for constraint in compiled.ast.constraints:
+                    expression: ConstraintExpression | None = None
+                    if isinstance(constraint, FieldRequired):
+                        expression = ConstraintExpression(
+                            operator=RuleOperator.FIELD_REQUIRED,
+                            field_path=constraint.path,
+                        )
+                    elif isinstance(constraint, RelationMinimum):
+                        expression = ConstraintExpression(
+                            operator=(
+                                RuleOperator.FORMAL_TRACE
+                                if constraint.formal_trace_category is not None
+                                else RuleOperator.RELATION_CARDINALITY
+                            ),
+                            predicate=constraint.predicate,
+                            direction=Direction(constraint.direction),
+                            binding=BindingMode(constraint.binding)
+                            if constraint.binding is not None
+                            else None,
+                            lifecycle_state=constraint.lifecycle_state,
+                            formal_trace_category=constraint.formal_trace_category,
+                            minimum=str(constraint.minimum),
+                        )
+                    elif (
+                        isinstance(constraint, AggregateConstraint)
+                        and constraint.function == "count"
+                    ):
+                        count = evaluator.relation_count(
+                            revision.object_uid,
+                            predicate=constraint.predicate,
+                            direction=Direction.OUTGOING,
+                        )
+                        aggregate_environment = constraint_environment.model_copy(
+                            update={"aggregate_values": tuple("1" for _ in range(count))}
+                        )
+                        expression = ConstraintExpression(
+                            operator=RuleOperator.AGGREGATE_COUNT,
+                            expected=constraint.expected
+                            if isinstance(constraint.expected, int)
+                            else str(constraint.expected.value),
+                            comparison=constraint.comparison,
+                        )
+                        semantic_results.append(
+                            evaluate_constraint(evaluator, expression, aggregate_environment)
+                        )
+                        continue
+                    if expression is not None:
+                        semantic_results.append(
+                            evaluate_constraint(evaluator, expression, constraint_environment)
+                        )
+                # The graph-native evaluator refines constraints only after the
+                # typed rule pipeline has established applicability.  Otherwise
+                # a relation constraint could turn NOT_APPLICABLE into FAIL.
+                if evaluated.outcome not in {
+                    RuleOutcome.NOT_APPLICABLE,
+                    RuleOutcome.INDETERMINATE,
+                }:
+                    semantic_truths = {item.truth for item in semantic_results}
+                    if TruthValue.FALSE in semantic_truths:
+                        evaluated = evaluated.__class__(
+                            RuleOutcome.FAIL,
+                            evaluated.applicability,
+                            evaluated.constraint,
+                            evaluated.enforcement,
+                        )
+                    elif TruthValue.INDETERMINATE in semantic_truths:
+                        evaluated = evaluated.__class__(
+                            RuleOutcome.INDETERMINATE,
+                            evaluated.applicability,
+                            evaluated.constraint,
+                            evaluated.enforcement,
+                        )
                 if evaluated.outcome not in {RuleOutcome.PASS, RuleOutcome.NOT_APPLICABLE}:
                     findings.append(
                         {
@@ -718,9 +2076,14 @@ class LocalRuntimeService:
                             "subject_uid": revision.revision_uid,
                             "outcome": evaluated.outcome,
                             "enforcement": evaluated.enforcement,
-                            "explanation": evaluated.constraint.reason
-                            if evaluated.constraint is not None
-                            else evaluated.applicability.reason,
+                            "explanation": (
+                                [item.explanation for item in semantic_results]
+                                or [
+                                    evaluated.constraint.reason
+                                    if evaluated.constraint is not None
+                                    else evaluated.applicability.reason
+                                ]
+                            ),
                         }
                     )
         serialized = [
@@ -734,15 +2097,25 @@ class LocalRuntimeService:
         outcome = "pass" if not serialized else "indeterminate" if all(
             item["outcome"] == RuleOutcome.INDETERMINATE.value for item in serialized
         ) else "fail"
-        validation_hash = semantic_hash(
-            {
-                "snapshot_hash": evaluator.snapshot.snapshot_hash,
-                "candidate_hash": submission.candidate.candidate_hash,
-                "rule_revision_uids": tuple(sorted(selected_rule_uids)),
-                "finding_hashes": finding_hashes,
-                "outcome": outcome,
-            }
-        )
+        run: dict[str, Any] = {
+            "schema_version": "1.0",
+            "resource_type": "validation_run",
+            "validation_run_uid": validation_run_uid or uuid7_candidate(),
+            "workspace_uid": submission.workspace.workspace_uid,
+            "base_commit": submission.workspace.base_commit,
+            "configuration_uid": submission.workspace.configuration_uid,
+            "effective_model_hash": submission.workspace.effective_model_hash,
+            "candidate_hash": submission.candidate.candidate_hash,
+            "observations": [],
+            "finding_uids": [],
+            "outcome": outcome,
+            "completed_at": (completed_at or evaluator.snapshot.evaluation_time)
+            .astimezone(UTC)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+        run["content_hash"] = document_hash(run, "content_hash")
+        validation_hash = str(run["content_hash"])
         return {
             "snapshot_hash": evaluator.snapshot.snapshot_hash,
             "candidate_hash": submission.candidate.candidate_hash,
@@ -750,6 +2123,7 @@ class LocalRuntimeService:
             "findings": serialized,
             "finding_hashes": finding_hashes,
             "validation_hash": validation_hash,
+            "validation_run": run,
         }
 
     @staticmethod
@@ -769,16 +2143,161 @@ class LocalRuntimeService:
 
     def _recover_workspaces(self) -> None:
         for recovered in self.repository.recover_workspaces():
-            raw = recovered.get("working_state", {})
-            if isinstance(raw, dict) and isinstance(raw.get("working_state"), dict):
-                raw = raw["working_state"]
+            state = recovered.get("working_state", {})
+            if not isinstance(state, dict):
+                continue
+            package_value = state.get("review_package")
+            if isinstance(package_value, dict):
+                try:
+                    package = ReviewPackage.model_validate(package_value)
+                    self.reviews[package.package_uid] = package
+                    evidence = state.get("review_evidence", {})
+                    if isinstance(evidence, dict):
+                        self.review_evidence[package.package_uid] = evidence
+                    preparation_value = state.get("baseline_preparation")
+                    if isinstance(preparation_value, dict):
+                        self.baseline_preparations[package.package_uid] = (
+                            BaselinePreparation.model_validate(preparation_value)
+                        )
+                except ValidationError as error:
+                    raise IntegrityError(
+                        f"LESR-WORKSPACE-REVIEW-STATE-INVALID: {error}"
+                    ) from error
+            if "working_state" not in state:
+                continue
+            raw = state.get("working_state", state)
             if not isinstance(raw, dict):
                 continue
             try:
                 workspace = Workspace.model_validate(raw)
+            except ValidationError as error:
+                raise IntegrityError(
+                    f"LESR-WORKSPACE-REVIEW-STATE-INVALID: {raw.get('workspace_uid')}: {error}"
+                ) from error
+            self.workspaces[workspace.workspace_uid] = workspace
+            candidate_value = state.get("candidate")
+            diff_value = state.get("semantic_diff")
+            checkpoint_value = state.get("workspace_checkpoint")
+            package_value = state.get("review_package")
+            if not all(
+                isinstance(item, dict)
+                for item in (candidate_value, diff_value, checkpoint_value, package_value)
+            ):
+                continue
+            try:
+                submission = Submission(
+                    workspace=workspace,
+                    checkpoint=WorkspaceCheckpoint.model_validate(checkpoint_value),
+                    candidate=CandidateRevisionSet.model_validate(candidate_value),
+                    semantic_diff=SemanticDiff.model_validate(diff_value),
+                )
+                package = ReviewPackage.model_validate(package_value)
             except ValidationError:
                 continue
-            self.workspaces[workspace.workspace_uid] = workspace
+            self.submissions[workspace.workspace_uid] = submission
+            self.reviews[package.package_uid] = package
+            evidence = state.get("review_evidence", {})
+            if isinstance(evidence, dict):
+                self.review_evidence[package.package_uid] = evidence
+
+    @staticmethod
+    def _workspace_state(
+        workspace: Workspace,
+        *,
+        submission: Submission | None = None,
+        review_package: ReviewPackage | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "runtime_state_version": "1.0",
+            "working_state": workspace.model_dump(mode="json"),
+        }
+        if submission is not None:
+            value |= {
+                "workspace_checkpoint": submission.checkpoint.model_dump(mode="json"),
+                "candidate": submission.candidate.model_dump(mode="json"),
+                "semantic_diff": submission.semantic_diff.model_dump(mode="json"),
+            }
+        if review_package is not None:
+            value["review_package"] = review_package.model_dump(mode="json")
+        if evidence is not None:
+            value["review_evidence"] = evidence
+        return value
+
+    def _review_policy(self, configuration_uid: str, operation: str) -> ReviewPolicy:
+        model = self._effective_model(configuration_uid)
+        matches = [
+            policy for policy in model.review_policies if policy.operation == operation
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Effective Model must define exactly one {operation} review policy"
+            )
+        selected = matches[0]
+        return ReviewPolicy(
+            stages=tuple(
+                StageQuorum(
+                    stage=item.stage,
+                    role=item.role,
+                    minimum_count=item.minimum_count,
+                )
+                for item in selected.stages
+            ),
+            require_preparer_independence=selected.require_preparer_independence,
+            require_comment_resolution=selected.require_comment_resolution,
+        )
+
+    def _effective_model(self, configuration_uid: str) -> EffectiveModel:
+        configuration = self._configuration(configuration_uid)
+        return self._effective_model_from_configuration_value(configuration)
+
+    def _effective_model_from_configuration_value(
+        self, configuration: dict[str, Any]
+    ) -> EffectiveModel:
+        configuration_uid = str(configuration["configuration_uid"])
+        selected_profiles = set(configuration.get("profile_revision_uids", ()))
+        profiles = tuple(
+            NormativeProfileRevision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "normative_profile_revision"
+            and value.get("profile_revision_uid") in selected_profiles
+        )
+        if {item.profile_revision_uid for item in profiles} != selected_profiles:
+            raise ValueError("Configuration references unavailable Normative Profile revisions")
+        definitions = tuple(
+            self._definition_revision(value)
+            for value in self.documents
+            if value.get("resource_type")
+            in {
+                "facet_definition_revision",
+                "kind_definition_revision",
+                "relation_type_revision",
+                "workflow_revision",
+            }
+        )
+        overlays = tuple(
+            TailoringOverlay.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "tailoring_overlay"
+            and value.get("configuration_uid") == configuration_uid
+        )
+        model = EffectiveModelCompiler().compile(
+            profiles,
+            definitions,
+            overlays=overlays,
+            deviation_revision_uids=tuple(
+                str(item)
+                for item in configuration.get("active_deviation_revision_uids", ())
+            ),
+        )
+        if model.conflicts:
+            raise ValueError(
+                "Effective Model has unresolved conflicts: "
+                + ", ".join(item.code for item in model.conflicts)
+            )
+        if model.model_hash != configuration.get("effective_model_hash"):
+            raise ValueError("Configuration Effective Model hash is stale")
+        return model
 
     def _validate_write(
         self,
@@ -794,7 +2313,6 @@ class LocalRuntimeService:
                 "expected base is stale",
                 (request.expected_base, self.base),
                 retryable=True,
-                suggested="workspace.rebase",
             )
         if require_workspace and request.workspace_uid not in self.workspaces:
             return self._error(
@@ -824,6 +2342,10 @@ class LocalRuntimeService:
         raw = operation.get("evaluation_time")
         if not isinstance(raw, str):
             raise TypeError("high-risk operation requires explicit evaluation_time")
+        return LocalRuntimeService._parse_evaluation_time(raw)
+
+    @staticmethod
+    def _parse_evaluation_time(raw: str) -> datetime:
         value = datetime.fromisoformat(raw)
         if value.tzinfo is None:
             raise ValueError("evaluation_time must include UTC offset")
@@ -844,11 +2366,50 @@ class LocalRuntimeService:
         return uid
 
     @staticmethod
+    def _definition_revision(
+        value: dict[str, Any],
+    ) -> (
+        FacetDefinitionRevision
+        | KindDefinitionRevision
+        | RelationTypeRevision
+        | WorkflowRevision
+    ):
+        resource_type = value.get("resource_type")
+        if resource_type == "facet_definition_revision":
+            return FacetDefinitionRevision.model_validate(value)
+        if resource_type == "kind_definition_revision":
+            return KindDefinitionRevision.model_validate(value)
+        if resource_type == "relation_type_revision":
+            return RelationTypeRevision.model_validate(value)
+        if resource_type == "workflow_revision":
+            return WorkflowRevision.model_validate(value)
+        raise TypeError(f"unsupported definition revision: {resource_type}")
+
+    @staticmethod
     def _identifiers(value: dict[str, Any]) -> set[str]:
+        # Resolve only a resource's own identity.  Reference UIDs (actor,
+        # profile, configuration, endpoint, etc.) must never make the
+        # containing document appear to be that referenced resource.
+        primary_keys = {
+            "logical_object": ("object_uid",),
+            "revision": ("revision_uid",),
+            "relation_assertion": ("relation_revision_uid",),
+            "configuration_snapshot": ("configuration_uid",),
+            "normative_profile_revision": ("profile_revision_uid",),
+            "rule_definition_revision": ("rule_revision_uid",),
+            "kind_definition_revision": ("kind_revision_uid",),
+            "facet_definition_revision": ("facet_revision_uid",),
+            "relation_type_revision": ("relation_type_revision_uid",),
+            "workflow_revision": ("workflow_revision_uid",),
+            "mapping_pack_revision": ("mapping_pack_revision_uid",),
+            "tailoring_overlay_revision": ("overlay_revision_uid",),
+            "trusted_actor": ("key_uid",),
+            "delegation_grant": ("delegation_uid",),
+            "review_package": ("package_uid",),
+            "baseline_manifest": ("baseline_uid",),
+        }.get(str(value.get("resource_type")), ())
         identifiers = {
-            str(item)
-            for key, item in value.items()
-            if key.endswith("_uid") and isinstance(item, str)
+            str(value[key]) for key in primary_keys if isinstance(value.get(key), str)
         }
         if isinstance(value.get("human_key"), str):
             identifiers.add(str(value["human_key"]))

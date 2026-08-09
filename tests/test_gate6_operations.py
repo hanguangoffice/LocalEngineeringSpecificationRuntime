@@ -10,6 +10,7 @@ from lesr.adapters.operations import (
     PersistentTaskState,
     RepositoryMaintenance,
     TaskStore,
+    TaskWorker,
     plan_workspace_gc,
 )
 from lesr.domain.catalog import CAPABILITIES, CapabilityAccess
@@ -40,6 +41,23 @@ def test_runtime_task_database_is_outside_canonical_git(tmp_path: Path) -> None:
     TaskStore(tmp_path).enqueue("full_validation", {"scope": "all"})
     assert repository.current_commit() == commit
     assert all(not path.startswith(".lesr/") for path, _ in repository._tree_entries(commit))
+
+
+def test_task_worker_executes_registered_handler_and_persists_result(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path)
+    task = store.enqueue("deep_trace", {"target": "REQ-1"})
+    worker = TaskWorker(
+        store,
+        {
+            "deep_trace": lambda request, progress, cancelled: (
+                progress(50, {"phase": "trace"})
+                or {"target": request["target"], "cancelled": cancelled()}
+            )
+        },
+    )
+    completed = worker.run_next()
+    assert completed is not None and completed.state is PersistentTaskState.COMPLETED
+    assert store.result(task.task_uid) == {"cancelled": False, "target": "REQ-1"}
 
 
 def test_backup_restore_verifies_bundle_and_requires_empty_destination(tmp_path: Path) -> None:
@@ -94,7 +112,6 @@ def test_shared_capabilities_never_offer_mcp_admin_or_private_signing() -> None:
     assert all(item.access is not CapabilityAccess.ADMIN for item in CAPABILITIES if item.mcp)
     assert {item.name for item in CAPABILITIES if item.access is CapabilityAccess.ADMIN} == {
         "backup",
-        "gc",
-        "migrate",
+        "projection.rebuild",
         "restore",
     }

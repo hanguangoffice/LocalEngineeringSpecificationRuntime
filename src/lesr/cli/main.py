@@ -27,7 +27,7 @@ from lesr.domain.approval import (
     TrustedActor,
 )
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
-from lesr.domain.semantic import document_hash, uuid7_candidate
+from lesr.domain.semantic import uuid7_candidate
 
 app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
 context_app = typer.Typer(no_args_is_help=True)
@@ -84,6 +84,21 @@ def task_cancel(project: Path, task_uid: str) -> None:
     emit(TaskStore(project).request_cancel(task_uid).model_dump(mode="json"))
 
 
+@task_app.command("run-next")
+def task_run_next(project: Path) -> None:
+    emit(LocalRuntimeService(project).run_next_task().payload())
+
+
+@task_app.command("result")
+def task_result(project: Path, task_uid: str) -> None:
+    emit(LocalRuntimeService(project).task_result(task_uid).payload())
+
+
+@task_app.command("resume")
+def task_resume(project: Path, task_uid: str) -> None:
+    emit(TaskStore(project).resume(task_uid).model_dump(mode="json"))
+
+
 @app.command("backup")
 def backup_repository(project: Path, destination: Path) -> None:
     result = RepositoryMaintenance(project).backup(destination)
@@ -118,6 +133,100 @@ def initialize(project: Path) -> None:
     emit({"canonical_ref": GitCanonicalRepository.CANONICAL_REF, "commit": commit})
 
 
+@app.command("bootstrap-root")
+def bootstrap_root(
+    project: Path,
+    trust_record: Path,
+    delegation_record: Path,
+    approval_record: Path,
+    idempotency_key: str,
+    governance_operation: list[Path] | None = None,
+) -> None:
+    """Install the first human root key and exact bootstrap governance set."""
+
+    operations = tuple(read_object(path) for path in (governance_operation or []))
+    emit(
+        LocalRuntimeService(project)
+        .bootstrap_root_owner(
+            read_object(trust_record),
+            read_object(delegation_record),
+            read_object(approval_record),
+            idempotency_key,
+            operations,
+        )
+        .payload()
+    )
+
+
+@app.command("bootstrap-plan")
+def plan_bootstrap(
+    project: Path,
+    trust_record: Path,
+    delegation_record: Path,
+    governance_operation: list[Path] | None = None,
+) -> None:
+    """Build the immutable payload that the root owner must sign."""
+
+    domain = LocalRuntimeService(project)
+    package_hash, model_hash, scope = domain.bootstrap_binding(
+        domain.base,
+        read_object(trust_record),
+        read_object(delegation_record),
+        tuple(read_object(path) for path in (governance_operation or [])),
+    )
+    emit(
+        ApprovalPayload(
+            package_hash=package_hash,
+            effective_model_hash=model_hash,
+            scope=scope,
+            approval_type="technical",
+        ).model_dump(mode="json")
+    )
+
+
+@app.command("configuration-init")
+def initialize_configuration(
+    project: Path,
+    configuration_record: Path,
+    approval_record: Path,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+) -> None:
+    """Create the first complete Configuration through the production facade."""
+
+    emit(
+        LocalRuntimeService(project)
+        .initialize_configuration(
+            read_object(configuration_record),
+            read_object(approval_record),
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+        )
+        .payload()
+    )
+
+
+@app.command("configuration-plan")
+def plan_initial_configuration(project: Path, configuration_record: Path) -> None:
+    """Build the immutable payload for first Configuration approval."""
+
+    domain = LocalRuntimeService(project)
+    configuration = read_object(configuration_record)
+    package_hash, model_hash, scope = domain.initial_configuration_binding(
+        domain.base, configuration
+    )
+    emit(
+        ApprovalPayload(
+            package_hash=package_hash,
+            effective_model_hash=model_hash,
+            scope=scope,
+            approval_type="technical",
+        ).model_dump(mode="json")
+    )
+
+
 @app.command()
 def resolve(project: Path, identifier: str) -> None:
     emit(LocalRuntimeService(project).resolve(identifier).payload())
@@ -143,15 +252,31 @@ def query(
 def trace(
     project: Path,
     start_uid: str,
+    configuration_uid: str,
+    evaluation_time: str,
     predicate: str | None = None,
     max_depth: int = 4,
 ) -> None:
-    emit(LocalRuntimeService(project).traverse(start_uid, predicate, max_depth).payload())
+    emit(
+        LocalRuntimeService(project)
+        .traverse(start_uid, predicate, max_depth, configuration_uid, evaluation_time)
+        .payload()
+    )
 
 
 @app.command("impact")
-def impact(project: Path, start_uid: str, max_depth: int = 4) -> None:
-    emit(LocalRuntimeService(project).impact(start_uid, max_depth).payload())
+def impact(
+    project: Path,
+    start_uid: str,
+    configuration_uid: str,
+    evaluation_time: str,
+    max_depth: int = 4,
+) -> None:
+    emit(
+        LocalRuntimeService(project)
+        .impact(start_uid, max_depth, configuration_uid, evaluation_time)
+        .payload()
+    )
 
 
 @context_app.command("build")
@@ -161,11 +286,50 @@ def build_context(
     target: list[str],
     configuration_uid: str,
     actor_uid: str,
+    evaluation_time: str,
     token_budget: int = 4096,
 ) -> None:
     emit(
         LocalRuntimeService(project)
-        .build_context(task_type, tuple(target), token_budget, configuration_uid, actor_uid)
+        .build_context(
+            task_type,
+            tuple(target),
+            token_budget,
+            configuration_uid,
+            actor_uid,
+            evaluation_time,
+        )
+        .payload()
+    )
+
+
+@context_app.command("read")
+def read_context(
+    project: Path,
+    bundle_hash: str,
+    resource_uid: list[str] | None = None,
+    maximum_resources: int = 100,
+    maximum_bytes: int = 2 * 1024 * 1024,
+) -> None:
+    emit(
+        LocalRuntimeService(project)
+        .read_context(
+            bundle_hash,
+            tuple(resource_uid or ()),
+            maximum_resources,
+            maximum_bytes,
+        )
+        .payload()
+    )
+
+
+@context_app.command("trace")
+def start_context_trace(
+    project: Path, bundle_hash: str, start_uid: str, max_depth: int = 16
+) -> None:
+    emit(
+        LocalRuntimeService(project)
+        .start_deep_trace(bundle_hash, start_uid, max_depth)
         .payload()
     )
 
@@ -173,6 +337,7 @@ def build_context(
 @workspace_app.command("open")
 def open_workspace(
     project: Path,
+    configuration_uid: str,
     delegation_uid: str,
     actor_uid: str,
     idempotency_key: str,
@@ -190,7 +355,7 @@ def open_workspace(
             delegation_uid,
             dry_run,
             RiskClass.MEDIUM,
-            {"type": "open_workspace"},
+            {"type": "open_workspace", "configuration_uid": configuration_uid},
         )
     )
     emit(result.payload())
@@ -249,6 +414,7 @@ def build_review_package(
     actor_uid: str,
     delegation_uid: str,
     idempotency_key: str,
+    evaluation_time: str,
     dry_run: bool = False,
 ) -> None:
     emit(
@@ -262,7 +428,10 @@ def build_review_package(
                 delegation_uid,
                 dry_run,
                 RiskClass.HIGH,
-                {"configuration_uid": configuration_uid},
+                {
+                    "configuration_uid": configuration_uid,
+                    "evaluation_time": evaluation_time,
+                },
             )
         )
         .payload()
@@ -342,6 +511,7 @@ def apply_transaction(
     idempotency_key: str,
     review_package_uid: str,
     approval_file: list[Path],
+    evaluation_time: str,
     transaction_uid: str = "",
     dry_run: bool = False,
 ) -> None:
@@ -360,16 +530,81 @@ def apply_transaction(
                 "transaction_uid": transaction_uid or uuid7_candidate(),
                 "review_package_uid": review_package_uid,
                 "signed_approvals": approval_values,
+                "evaluation_time": evaluation_time,
             },
         )
     )
     emit(result.payload())
 
 
-@baseline_app.command("create")
-def create_baseline(manifest: Path) -> None:
-    value = read_object(manifest)
-    emit(value | {"manifest_hash": document_hash(value, "manifest_hash")})
+@baseline_app.command("prepare")
+def prepare_baseline(
+    project: Path,
+    workspace_uid: str,
+    expected_base: str,
+    configuration_uid: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    evaluation_time: str,
+    dry_run: bool = False,
+) -> None:
+    emit(
+        LocalRuntimeService(project)
+        .prepare_baseline(
+            WriteEnvelope(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor_uid,
+                delegation_uid,
+                dry_run,
+                RiskClass.HIGH,
+                {
+                    "configuration_uid": configuration_uid,
+                    "evaluation_time": evaluation_time,
+                },
+            )
+        )
+        .payload()
+    )
+
+
+@baseline_app.command("apply")
+def apply_baseline(
+    project: Path,
+    workspace_uid: str,
+    expected_base: str,
+    review_package_uid: str,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    evaluation_time: str,
+    approval_file: list[Path],
+    tag_name: str = "",
+    dry_run: bool = False,
+) -> None:
+    emit(
+        LocalRuntimeService(project)
+        .apply_baseline(
+            WriteEnvelope(
+                workspace_uid,
+                expected_base,
+                idempotency_key,
+                actor_uid,
+                delegation_uid,
+                dry_run,
+                RiskClass.HIGH,
+                {
+                    "review_package_uid": review_package_uid,
+                    "signed_approvals": [read_object(path) for path in approval_file],
+                    "evaluation_time": evaluation_time,
+                    "tag_name": tag_name or None,
+                },
+            )
+        )
+        .payload()
+    )
 
 
 @projection_app.command("rebuild")

@@ -61,7 +61,7 @@ document.querySelector('#sign-form [name="package_uid"]').addEventListener('chan
     document.querySelector('#sign-package').textContent = value.package_hash;
     document.querySelector('#sign-model').textContent = value.effective_model_hash;
     document.querySelector('#sign-scope').textContent = value.candidate_scope.join(', ');
-    document.querySelector('#sign-role').textContent = `${value.role} / ${value.signature_expiry_minutes} min`;
+    document.querySelector('#sign-role').textContent = `${value.stages.map((stage) => `${stage.stage}: ${stage.role}`).join(', ')} / ${value.signature_expiry_minutes} min`;
     document.querySelector('#sign-output').textContent = `Conditions: ${JSON.stringify(value.conditions)}`;
   } catch (error) {
     document.querySelector('#sign-package').textContent = 'Not found';

@@ -30,7 +30,7 @@ class CapabilityAccess(StrEnum):
 class RuntimeCapability(FrozenModel):
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_.-]+$")
     access: CapabilityAccess
-    cli: bool = True
+    cli: bool = False
     mcp: bool = False
     persistent_task: bool = False
 
@@ -65,6 +65,7 @@ SCHEMA_CATALOG: tuple[str, ...] = (
     "logical-object.schema.json",
     "mapping-pack.schema.json",
     "merge-conflict.schema.json",
+    "normative-profile.schema.json",
     "profile.schema.json",
     "provenance.schema.json",
     "relation-assertion.schema.json",
@@ -90,36 +91,32 @@ SCHEMA_CATALOG: tuple[str, ...] = (
 CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
     sorted(
         (
-            RuntimeCapability(name=name, access=access, mcp=mcp, persistent_task=task)
-            for name, access, mcp, task in (
-                ("resolve", CapabilityAccess.READ, True, False),
-                ("inspect", CapabilityAccess.READ, True, False),
-                ("query", CapabilityAccess.READ, True, False),
-                ("traverse", CapabilityAccess.READ, True, False),
-                ("impact", CapabilityAccess.READ, True, True),
-                ("context.plan", CapabilityAccess.READ, True, False),
-                ("context.read", CapabilityAccess.READ, False, False),
-                ("context.trace", CapabilityAccess.READ, True, True),
-                ("workspace.inspect", CapabilityAccess.READ, False, False),
-                ("repository.health", CapabilityAccess.READ, False, False),
-                ("workspace.open", CapabilityAccess.WRITE, True, False),
-                ("workspace.edit", CapabilityAccess.WRITE, True, False),
-                ("workspace.checkpoint", CapabilityAccess.WRITE, False, False),
-                ("workspace.validate", CapabilityAccess.WRITE, False, True),
-                ("workspace.submit", CapabilityAccess.WRITE, True, False),
-                ("workspace.rebase", CapabilityAccess.WRITE, False, False),
-                ("workspace.merge", CapabilityAccess.WRITE, False, False),
-                ("workspace.resolve", CapabilityAccess.WRITE, False, False),
-                ("review.comment", CapabilityAccess.WRITE, False, False),
-                ("review.resolve", CapabilityAccess.WRITE, False, False),
-                ("apply", CapabilityAccess.WRITE, True, False),
-                ("baseline.prepare", CapabilityAccess.WRITE, False, True),
-                ("baseline.apply", CapabilityAccess.WRITE, False, False),
-                ("reconciliation", CapabilityAccess.WRITE, False, False),
-                ("migrate", CapabilityAccess.ADMIN, False, True),
-                ("backup", CapabilityAccess.ADMIN, False, True),
-                ("restore", CapabilityAccess.ADMIN, False, True),
-                ("gc", CapabilityAccess.ADMIN, False, True),
+            RuntimeCapability(
+                name=name,
+                access=access,
+                cli=cli,
+                mcp=mcp,
+                persistent_task=task,
+            )
+            for name, access, cli, mcp, task in (
+                ("resolve", CapabilityAccess.READ, True, True, False),
+                ("inspect", CapabilityAccess.READ, True, True, False),
+                ("query", CapabilityAccess.READ, True, True, False),
+                ("traverse", CapabilityAccess.READ, True, True, False),
+                ("impact", CapabilityAccess.READ, True, True, False),
+                ("context.plan", CapabilityAccess.READ, True, True, False),
+                ("context.read", CapabilityAccess.READ, True, True, False),
+                ("context.trace", CapabilityAccess.READ, True, True, True),
+                ("workspace.open", CapabilityAccess.WRITE, True, True, False),
+                ("workspace.edit", CapabilityAccess.WRITE, True, True, False),
+                ("workspace.checkpoint", CapabilityAccess.WRITE, True, False, False),
+                ("workspace.submit", CapabilityAccess.WRITE, True, True, False),
+                ("apply", CapabilityAccess.WRITE, True, True, False),
+                ("baseline.prepare", CapabilityAccess.WRITE, True, True, False),
+                ("baseline.apply", CapabilityAccess.WRITE, True, True, False),
+                ("projection.rebuild", CapabilityAccess.ADMIN, True, False, False),
+                ("backup", CapabilityAccess.ADMIN, True, False, False),
+                ("restore", CapabilityAccess.ADMIN, True, False, False),
             )
         ),
         key=lambda item: item.name,

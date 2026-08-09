@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.0rc1
+# LESR Runtime 1.0.0a3
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -6,7 +6,7 @@ SQLite/FTS5 is a disposable projection. The requirements authority is
 `LESR_Solution_Design_Baseline_v1.0/`, while
 `docs/LESR_Codex_Construction_Spec_v1.0.md` freezes the implementation contract.
 
-This branch is the external-review candidate. Architecture validation, feature
+This branch is the unified-runtime remediation candidate. Architecture validation, feature
 implementation, integration, and release qualification are reported separately in
 `docs/gates/`. The recovery point for the previous runtime is `runtime-0.5.0a2`.
 
@@ -44,32 +44,44 @@ The medium and large performance protocols are fixed in `docs/performance/README
 
 ```powershell
 lesr init PROJECT
+lesr bootstrap-plan PROJECT TRUST.json DELEGATION.json --governance-operation RULE.json --governance-operation PROFILE.json
+lesr bootstrap-root PROJECT TRUST.json DELEGATION.json APPROVAL.json KEY --governance-operation RULE.json --governance-operation PROFILE.json
+lesr configuration-plan PROJECT CONFIGURATION.json
+lesr configuration-init PROJECT CONFIGURATION.json APPROVAL.json ACTOR_UID DELEGATION_UID KEY
 lesr capabilities
 lesr resolve PROJECT IDENTIFIER
 lesr inspect PROJECT UID
 lesr query PROJECT --kind software_requirement --text reconnect
-lesr context build PROJECT TASK CONFIGURATION_UID ACTOR_UID --target UID
-lesr workspace open PROJECT DELEGATION_UID ACTOR_UID IDEMPOTENCY_KEY
+lesr context build PROJECT TASK CONFIGURATION_UID ACTOR_UID EVALUATION_TIME --target UID
+lesr workspace open PROJECT CONFIGURATION_UID DELEGATION_UID ACTOR_UID IDEMPOTENCY_KEY
 lesr workspace propose PROJECT WORKSPACE_UID BASE ACTOR_UID DELEGATION_UID KEY operation.json
-lesr review-package PROJECT WORKSPACE_UID BASE CONFIGURATION_UID ACTOR_UID DELEGATION_UID KEY
+lesr review-package PROJECT WORKSPACE_UID BASE CONFIGURATION_UID ACTOR_UID DELEGATION_UID KEY EVALUATION_TIME
 lesr approval keygen ACTOR_UID "Reviewer" --role technical
 lesr approval sign TRUST.json PACKAGE.json technical
-lesr apply PROJECT WORKSPACE_UID BASE ACTOR_UID DELEGATION_UID KEY operation.json
+lesr apply PROJECT WORKSPACE_UID BASE ACTOR_UID DELEGATION_UID KEY PACKAGE_UID APPROVAL.json EVALUATION_TIME
+lesr baseline prepare PROJECT WORKSPACE_UID BASE CONFIGURATION_UID ACTOR_UID DELEGATION_UID KEY EVALUATION_TIME
+lesr baseline apply PROJECT WORKSPACE_UID BASE PACKAGE_UID ACTOR_UID DELEGATION_UID KEY EVALUATION_TIME APPROVAL.json
 lesr projection rebuild PROJECT
 lesr mcp serve PROJECT
 lesr web PROJECT
 ```
 
-`lesr init` creates only a format-1.0 repository Manifest. Governed resources,
-Configuration, trust records, and delegations must be supplied through reviewed
-Canonical State; a missing 1.0 Manifest is rejected rather than treated as a legacy
-repository. Private-key signing is never available through MCP. The MCP adapter
+`lesr init` creates the format-1.0 repository Manifest. The explicit bootstrap-plan /
+bootstrap-root proof-of-possession flow installs the first human trust root and exact
+Profile/Rule governance; configuration-plan / configuration-init then creates the first
+Configuration. A missing 1.0 Manifest is rejected rather than treated as a legacy
+repository. Workspace candidates and review evidence live on recoverable Workspace refs
+before Apply, so separate CLI invocations can complete one workflow. Private-key signing
+is never available through MCP. The MCP adapter
 advertises only tools it actually exposes; admin maintenance remains CLI/local UI only.
 
-The Web UI binds to `127.0.0.1`, has no CDN or Node build, and uses a one-time launch
+The local Web adapter binds to `127.0.0.1`, has no CDN or Node build, and uses a one-time launch
 token, idle locking, Host/Origin/CSRF checks, and a short-lived signer broker. Windows
 keys use DPAPI; Linux prefers Secret Service; the fallback is an scrypt/AES-GCM
-encrypted PKCS#8 file and never plaintext.
+encrypted PKCS#8 file and never plaintext. Its HTTP capability layer supports Context,
+Workspace Open/Edit/Submit, human signing, Apply, and Baseline Prepare/Apply. The current
+HTML console does not yet expose every one of those mutations as a polished form, so this
+build remains alpha rather than RC.
 
 ## Compatibility and deferred scope
 

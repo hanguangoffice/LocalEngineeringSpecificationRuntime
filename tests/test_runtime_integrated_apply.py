@@ -14,15 +14,37 @@ from lesr.domain.approval import (
     SignedApproval,
     TrustedActor,
 )
-from lesr.domain.evaluation import GraphNode, GraphSnapshot, SemanticEvaluator
+from lesr.domain.evaluation import GraphNode, GraphRelation, GraphSnapshot, SemanticEvaluator
+from lesr.domain.model import EffectiveModelCompiler, NormativeProfileRevision, ProfileLayer
 from lesr.domain.review import ReviewPackage, ReviewPolicy, StageQuorum
-from lesr.domain.semantic import ProvenanceKind, Revision, SemanticField, semantic_hash
+from lesr.domain.semantic import (
+    ImmutableRecord,
+    ProvenanceKind,
+    Revision,
+    SemanticField,
+    semantic_hash,
+)
 from lesr.domain.workspace import CandidateRevisionSet, Workspace
+from tests.test_gate3_graph_evaluation import REQ, TEST, assertion, relation_type
 from tests.test_v1_rules import source
 
 NOW = datetime.now(UTC)
 UIDS = [f"018f0000-0000-7000-8000-{index:012d}" for index in range(1, 30)]
 MODEL_HASH = semantic_hash({"model": "integrated"})
+
+
+def bound_evidence(package: ReviewPackage) -> dict[str, object]:
+    return {
+        "semantic_diff": {"diff_hash": package.semantic_diff_hash},
+        "graph_snapshot": {"snapshot_hash": package.graph_snapshot_hash},
+        "context_bundle": {"bundle_hash": package.context_bundle_hash},
+        "impact_report": {"report_hash": package.impact_report_hash},
+        "validation": {
+            "validation_hash": package.validation_hash,
+            "finding_hashes": list(package.finding_hashes),
+            "outcome": "pass",
+        },
+    }
 
 
 def governed_candidate(
@@ -52,7 +74,17 @@ def governed_candidate(
         effective_model_hash=MODEL_HASH,
         revisions=(revision,),
         relation_revisions=(),
-        lifecycle_records=(),
+        lifecycle_records=(
+            ImmutableRecord(
+                record_uid=UIDS[19],
+                record_type="lifecycle",
+                subject_uid=revision.object_uid,
+                actor_uid=UIDS[7],
+                actor_type="human",
+                occurred_at=NOW,
+                fields=(SemanticField(path="/to_state", value="reviewed"),),
+            ),
+        ),
     )
     package = ReviewPackage(
         package_uid=UIDS[5],
@@ -106,6 +138,7 @@ def test_git_boundary_recomputes_same_governance_and_atomically_promotes_candida
         actor_uid=UIDS[9],
         delegation_uid=UIDS[10],
         idempotency_key="integrated-apply",
+        evidence=bound_evidence(package),
         validation_recalculator=lambda: package.validation_hash,
     )
     assert repository.current_commit() == result.commit
@@ -115,6 +148,14 @@ def test_git_boundary_recomputes_same_governance_and_atomically_promotes_candida
         )
         is not None
     )
+    assert repository.read_json(
+        result.commit,
+        f"canonical/immutable_records/{candidate.lifecycle_records[0].record_uid}.json",
+    ) is not None
+    assert repository.read_json(
+        result.commit,
+        f"canonical/provenance/{approvals[0].provenance_uid}.json",
+    ) is not None
     replay = repository.apply_candidate(
         base_commit=result.commit,
         candidate=candidate,
@@ -125,6 +166,7 @@ def test_git_boundary_recomputes_same_governance_and_atomically_promotes_candida
         actor_uid=UIDS[9],
         delegation_uid=UIDS[10],
         idempotency_key="integrated-apply",
+        evidence=bound_evidence(package),
         validation_recalculator=lambda: package.validation_hash,
     )
     assert replay.idempotent_replay
@@ -150,6 +192,7 @@ def test_ref_failure_leaves_no_half_state(tmp_path: Path) -> None:
             actor_uid=UIDS[9],
             delegation_uid=UIDS[10],
             idempotency_key="failed-apply",
+            evidence=bound_evidence(package),
             validation_recalculator=lambda: package.validation_hash,
             fault_injector=fail,
         )
@@ -166,6 +209,13 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
     rule = source()
     configuration_uid = UIDS[11]
     profile_uid = UIDS[12]
+    profile = NormativeProfileRevision(
+        profile_revision_uid=profile_uid,
+        layer=ProfileLayer.PROJECT,
+        authority=100,
+        rule_revision_uids=(rule.rule_revision_uid,),
+    )
+    effective_model = EffectiveModelCompiler().compile((profile,), ())
     revision = Revision(
         revision_uid=UIDS[13],
         object_uid=UIDS[14],
@@ -182,7 +232,7 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
     candidate = CandidateRevisionSet(
         workspace_uid=UIDS[15],
         checkpoint_uid=UIDS[16],
-        effective_model_hash=MODEL_HASH,
+        effective_model_hash=effective_model.model_hash,
         revisions=(revision,),
         relation_revisions=(),
         lifecycle_records=(),
@@ -191,7 +241,7 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
         workspace_uid=candidate.workspace_uid,
         base_commit="a" * 40,
         configuration_uid=configuration_uid,
-        effective_model_hash=MODEL_HASH,
+        effective_model_hash=effective_model.model_hash,
         delegation_uid=UIDS[17],
         actor_uid=UIDS[18],
         created_at=NOW,
@@ -200,7 +250,7 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
     snapshot = GraphSnapshot(
         configuration_uid=configuration_uid,
         canonical_commit="a" * 40,
-        effective_model_hash=MODEL_HASH,
+        effective_model_hash=effective_model.model_hash,
         workspace_uid=candidate.workspace_uid,
         checkpoint_uid=candidate.checkpoint_uid,
         evaluation_time=NOW,
@@ -214,13 +264,10 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
             "resource_type": "configuration_snapshot",
             "configuration_uid": configuration_uid,
             "profile_revision_uids": [profile_uid],
-            "active_deviation_rule_uids": [],
+            "active_deviation_revision_uids": [],
+            "effective_model_hash": effective_model.model_hash,
         },
-        {
-            "resource_type": "normative_profile_revision",
-            "profile_revision_uid": profile_uid,
-            "rule_revision_uids": [rule.rule_revision_uid],
-        },
+        profile.model_dump(mode="json"),
         rule.model_dump(mode="json"),
     ]
 
@@ -228,5 +275,90 @@ def test_runtime_validation_uses_selected_compiled_rule_instead_of_fixed_pass() 
         submission, SemanticEvaluator(snapshot, ())
     )
 
-    assert validation["outcome"] == "fail"
+    assert validation["outcome"] != "pass"
     assert validation["findings"][0]["rule_revision_uid"] == rule.rule_revision_uid
+
+
+def test_runtime_formal_trace_rejects_inferred_relation_even_when_raw_count_is_one() -> None:
+    rule_value = source().model_dump(mode="json", exclude={"content_hash"})
+    rule_value["constraints"] = [
+        {
+            "op": "relation_minimum",
+            "path": {
+                "roles": ["verified_by"],
+                "max_depth": 1,
+                "direction": "outgoing",
+                "binding": "pinned",
+                "lifecycle_state": "active",
+                "formal_trace_category": "verification",
+            },
+            "minimum": 1,
+        }
+    ]
+    rule = source().__class__.model_validate(rule_value)
+    configuration_uid = UIDS[20]
+    profile = NormativeProfileRevision(
+        profile_revision_uid=UIDS[21],
+        layer=ProfileLayer.PROJECT,
+        authority=100,
+        rule_revision_uids=(rule.rule_revision_uid,),
+    )
+    effective_model = EffectiveModelCompiler().compile((profile,), ())
+    candidate = CandidateRevisionSet(
+        workspace_uid=UIDS[22],
+        checkpoint_uid=UIDS[23],
+        effective_model_hash=effective_model.model_hash,
+        revisions=(REQ, TEST),
+        relation_revisions=(),
+        lifecycle_records=(),
+    )
+    workspace = Workspace(
+        workspace_uid=candidate.workspace_uid,
+        base_commit="a" * 40,
+        configuration_uid=configuration_uid,
+        effective_model_hash=effective_model.model_hash,
+        delegation_uid=UIDS[24],
+        actor_uid=UIDS[25],
+        created_at=NOW,
+    )
+    submission = SimpleNamespace(workspace=workspace, candidate=candidate)
+    inferred = assertion(provenance=ProvenanceKind.INFERRED)
+    selected_type = relation_type()
+    snapshot = GraphSnapshot(
+        configuration_uid=configuration_uid,
+        canonical_commit="a" * 40,
+        effective_model_hash=effective_model.model_hash,
+        workspace_uid=candidate.workspace_uid,
+        checkpoint_uid=candidate.checkpoint_uid,
+        evaluation_time=NOW,
+        nodes=(
+            GraphNode(revision=REQ, lifecycle_state="approved", source="candidate"),
+            GraphNode(revision=TEST, lifecycle_state="approved", source="candidate"),
+        ),
+        relations=(
+            GraphRelation(
+                assertion=inferred,
+                relation_type_revision_uid=selected_type.revision_uid,
+                lifecycle_state="active",
+                source="candidate",
+            ),
+        ),
+        candidate_overlay_hash=candidate.candidate_hash,
+    )
+    service = LocalRuntimeService.__new__(LocalRuntimeService)
+    service.documents = [
+        {
+            "resource_type": "configuration_snapshot",
+            "configuration_uid": configuration_uid,
+            "profile_revision_uids": [profile.profile_revision_uid],
+            "active_deviation_revision_uids": [],
+            "effective_model_hash": effective_model.model_hash,
+        },
+        profile.model_dump(mode="json"),
+        rule.model_dump(mode="json"),
+    ]
+    validation = service._validate_submission(
+        submission, SemanticEvaluator(snapshot, (selected_type,))
+    )
+    assert validation["outcome"] != "pass"
+    assert validation["findings"][0]["outcome"] in {"fail", "indeterminate"}

@@ -68,7 +68,12 @@ def test_resolve_query_context_and_structured_errors() -> None:
         "correlation_id",
     }
     assert domain.query(None, None, 1).payload()["value"]["next_cursor"] == "1"
-    context = domain.build_context("coding", ("018f0000-0000-7000-8000-000000000001",), 1).payload()["value"]
+    context = domain.build_context(
+        "coding",
+        ("018f0000-0000-7000-8000-000000000001",),
+        1,
+        evaluation_time="2026-08-05T00:00:00Z",
+    ).payload()["value"]
     assert context["completeness"] == "incomplete_budget"
 
 
@@ -117,6 +122,10 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
         "workspace_submit",
         "apply",
         "context_trace",
+        "context_read",
+        "task_start",
+        "baseline_prepare",
+        "baseline_apply",
     } == set(tools)
     for name in (
         "workspace_open",

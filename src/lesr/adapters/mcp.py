@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -15,6 +15,7 @@ from lesr.application.contracts import (
     WriteEnvelope,
 )
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
+from lesr.domain.semantic import uuid7_candidate
 
 
 def create_server(domain: LESRDomainPort) -> FastMCP:
@@ -68,15 +69,28 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
 
     @server.tool(annotations=read_only, structured_output=True)
     def traverse(
-        start_uid: str, predicate: str | None = None, max_depth: int = 4
+        start_uid: str,
+        configuration_uid: str,
+        evaluation_time: str,
+        predicate: str | None = None,
+        max_depth: int = 4,
     ) -> dict[str, Any]:
         """Traverse the bounded canonical relation graph without exposing SQL."""
-        return domain.traverse(start_uid, predicate, max_depth).payload()
+        return domain.traverse(
+            start_uid, predicate, max_depth, configuration_uid, evaluation_time
+        ).payload()
 
     @server.tool(annotations=read_only, structured_output=True)
-    def impact(start_uid: str, max_depth: int = 4) -> dict[str, Any]:
+    def impact(
+        start_uid: str,
+        configuration_uid: str,
+        evaluation_time: str,
+        max_depth: int = 4,
+    ) -> dict[str, Any]:
         """Return bounded bidirectional impact over canonical relations."""
-        return domain.impact(start_uid, max_depth).payload()
+        return domain.impact(
+            start_uid, max_depth, configuration_uid, evaluation_time
+        ).payload()
 
     @server.tool(name="context_plan", annotations=read_only, structured_output=True)
     def build_context(
@@ -85,11 +99,50 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         token_budget: int,
         configuration_uid: str,
         actor: str,
+        evaluation_time: str,
     ) -> dict[str, Any]:
         """Build an explainable Context Contract with explicit completeness."""
         return domain.build_context(
-            task_type, tuple(target_uids), token_budget, configuration_uid, actor
+            task_type,
+            tuple(target_uids),
+            token_budget,
+            configuration_uid,
+            actor,
+            evaluation_time,
         ).payload()
+
+    @server.tool(name="context_read", annotations=read_only, structured_output=True)
+    def read_context(
+        bundle_hash: str,
+        resource_uids: list[str] | None = None,
+        maximum_resources: int = 100,
+        maximum_bytes: int = 2 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        """Read exact fields, Fragments and text selected by a Context Manifest."""
+        reader = getattr(domain, "read_context", None)
+        if not callable(reader):
+            return _capability_unavailable("context.read")
+        return cast(
+            dict[str, Any],
+            reader(
+                bundle_hash,
+                tuple(resource_uids or ()),
+                maximum_resources,
+                maximum_bytes,
+            ).payload(),
+        )
+
+    @server.tool(name="context_trace", annotations=write, structured_output=True)
+    def start_context_trace(
+        bundle_hash: str, start_uid: str, max_depth: int = 16
+    ) -> dict[str, Any]:
+        """Queue a persistent Deep Trace task from an immutable Context Manifest."""
+        starter = getattr(domain, "start_deep_trace", None)
+        if not callable(starter):
+            return _capability_unavailable("context.trace")
+        return cast(
+            dict[str, Any], starter(bundle_hash, start_uid, max_depth).payload()
+        )
 
     @server.tool(name="workspace_submit", annotations=write, structured_output=True)
     def prepare_review(
@@ -191,7 +244,65 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             )
         ).payload()
 
-    @server.tool(name="context_trace", annotations=write, structured_output=True)
+    @server.tool(name="baseline_prepare", annotations=write, structured_output=True)
+    def prepare_baseline(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        preparer = getattr(domain, "prepare_baseline", None)
+        if not callable(preparer):
+            return _capability_unavailable("baseline.prepare")
+        return cast(
+            dict[str, Any],
+            preparer(
+                _write(
+                    workspace_uid,
+                    expected_base,
+                    idempotency_key,
+                    actor,
+                    delegation_uid,
+                    dry_run,
+                    RiskClass.HIGH,
+                    operation,
+                )
+            ).payload(),
+        )
+
+    @server.tool(name="baseline_apply", annotations=atomic_apply, structured_output=True)
+    def apply_baseline(
+        workspace_uid: str,
+        expected_base: str,
+        idempotency_key: str,
+        actor: str,
+        delegation_uid: str,
+        dry_run: bool,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        applier = getattr(domain, "apply_baseline", None)
+        if not callable(applier):
+            return _capability_unavailable("baseline.apply")
+        return cast(
+            dict[str, Any],
+            applier(
+                _write(
+                    workspace_uid,
+                    expected_base,
+                    idempotency_key,
+                    actor,
+                    delegation_uid,
+                    dry_run,
+                    RiskClass.HIGH,
+                    operation,
+                )
+            ).payload(),
+        )
+
+    @server.tool(name="task_start", annotations=write, structured_output=True)
     def start_task(task_type: str, request: dict[str, Any]) -> dict[str, Any]:
         """Start a protocol-independent long-running domain task."""
         return domain.start_task(task_type, request).payload()
@@ -211,6 +322,22 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         return json.dumps(domain.task_status(uid).payload(), ensure_ascii=False, sort_keys=True)
 
     return server
+
+
+def _capability_unavailable(name: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {
+            "code": "LESR-CAPABILITY-UNAVAILABLE",
+            "category": "not_found",
+            "message": f"capability is unavailable: {name}",
+            "affected_resources": [],
+            "rule_or_policy": None,
+            "retryable": False,
+            "suggested_capability": None,
+            "correlation_id": uuid7_candidate(),
+        },
+    }
 
 
 def _write(

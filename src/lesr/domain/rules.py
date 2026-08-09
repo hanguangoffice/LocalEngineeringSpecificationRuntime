@@ -379,6 +379,10 @@ class RelationMinimum:
     predicate: str
     minimum: int
     maximum_depth: int = 1
+    direction: Literal["outgoing", "incoming"] = "outgoing"
+    binding: str | None = None
+    lifecycle_state: str | None = None
+    formal_trace_category: str | None = None
 
     def __post_init__(self) -> None:
         if self.maximum_depth < 1:
@@ -405,11 +409,23 @@ class RelationMinimum:
         return frozenset()
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        value: dict[str, Any] = {
             "op": "relation_minimum",
-            "path": {"roles": [self.predicate], "max_depth": self.maximum_depth},
+            "path": {
+                "roles": [self.predicate],
+                "max_depth": self.maximum_depth,
+                "direction": self.direction,
+            },
             "minimum": self.minimum,
         }
+        path = cast(dict[str, Any], value["path"])
+        if self.binding is not None:
+            path["binding"] = self.binding
+        if self.lifecycle_state is not None:
+            path["lifecycle_state"] = self.lifecycle_state
+        if self.formal_trace_category is not None:
+            path["formal_trace_category"] = self.formal_trace_category
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +865,14 @@ def _parse_constraint(value: dict[str, JsonValue]) -> Constraint:
             str(roles[0]),
             int(str(value["minimum"])),
             int(str(path["max_depth"])),
+            cast(Literal["outgoing", "incoming"], str(path.get("direction", "outgoing"))),
+            str(path["binding"]) if path.get("binding") is not None else None,
+            str(path["lifecycle_state"])
+            if path.get("lifecycle_state") is not None
+            else None,
+            str(path["formal_trace_category"])
+            if path.get("formal_trace_category") is not None
+            else None,
         )
     if operation == "aggregate":
         path = _require_dict(value.get("path"))

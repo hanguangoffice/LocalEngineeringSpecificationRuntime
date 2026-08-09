@@ -9,16 +9,13 @@ from fastapi.testclient import TestClient
 from lesr.adapters.git import GitCanonicalRepository
 from lesr.adapters.signer import sign_once
 from lesr.adapters.web import LocalWebRuntime
-from lesr.application.contracts import InMemoryDomainService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.semantic import semantic_hash
 
 
 def unlocked(tmp_path: Path) -> tuple[LocalWebRuntime, TestClient, str]:
     GitCanonicalRepository(tmp_path).initialize()
-    runtime = LocalWebRuntime(
-        tmp_path, InMemoryDomainService(), launch_token="one-time-launch-token"
-    )
+    runtime = LocalWebRuntime(tmp_path, launch_token="one-time-launch-token")
     client = TestClient(runtime.app)
     response = client.get("/unlock?token=one-time-launch-token", follow_redirects=False)
     assert response.status_code == 303

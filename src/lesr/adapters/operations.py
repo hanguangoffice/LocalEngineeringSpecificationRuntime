@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -192,6 +193,31 @@ class TaskStore:
             raise KeyError(task_uid)
         return self._from_row(row)
 
+    def request(self, task_uid: str) -> dict[str, object]:
+        return self._json_record("task_requests", task_uid)
+
+    def result(self, task_uid: str) -> dict[str, object] | None:
+        try:
+            return self._json_record("task_results", task_uid)
+        except KeyError:
+            return None
+
+    def checkpoint(self, task_uid: str) -> dict[str, object] | None:
+        try:
+            return self._json_record("task_checkpoints", task_uid)
+        except KeyError:
+            return None
+
+    def put_artifact(self, artifact_hash: str, value: dict[str, object]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO runtime_artifacts VALUES (?, ?)",
+                (artifact_hash, canonical_json(value)),
+            )
+
+    def artifact(self, artifact_hash: str) -> dict[str, object]:
+        return self._json_record("runtime_artifacts", artifact_hash)
+
     def list(self, state: PersistentTaskState | None = None) -> tuple[PersistentTask, ...]:
         with self._connect() as connection:
             if state is None:
@@ -230,11 +256,34 @@ class TaskStore:
                 CREATE TABLE IF NOT EXISTS task_results (
                     task_uid TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS runtime_artifacts (
+                    task_uid TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
                 """
             )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _json_record(self, table: str, task_uid: str) -> dict[str, object]:
+        if table not in {
+            "task_requests",
+            "task_results",
+            "task_checkpoints",
+            "runtime_artifacts",
+        }:
+            raise ValueError("invalid task record table")
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT value FROM {table} WHERE task_uid = ?",
+                (task_uid,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_uid)
+        value = json.loads(str(row[0]))
+        if not isinstance(value, dict):
+            raise IntegrityError("task record is not an object")
+        return value
 
     @staticmethod
     def _row(task: PersistentTask) -> tuple[object, ...]:
@@ -267,6 +316,40 @@ class TaskStore:
                 "updated_at": datetime.fromisoformat(str(row[9])),
             }
         )
+
+
+TaskHandler = Callable[
+    [dict[str, object], Callable[[int, dict[str, object] | None], None], Callable[[], bool]],
+    dict[str, object],
+]
+
+
+class TaskWorker:
+    """Explicit local worker; callers decide when one queued task may consume resources."""
+
+    def __init__(self, store: TaskStore, handlers: dict[str, TaskHandler]) -> None:
+        self.store = store
+        self.handlers = handlers
+
+    def run_next(self) -> PersistentTask | None:
+        task = self.store.claim_next()
+        if task is None:
+            return None
+        handler = self.handlers.get(task.task_type)
+        if handler is None:
+            return self.store.finish(task.task_uid, None, error="LESR-TASK-HANDLER-UNAVAILABLE")
+
+        def progress(value: int, checkpoint: dict[str, object] | None = None) -> None:
+            self.store.update_progress(task.task_uid, value, checkpoint)
+
+        def cancelled() -> bool:
+            return self.store.cancellation_requested(task.task_uid)
+
+        try:
+            result = handler(self.store.request(task.task_uid), progress, cancelled)
+            return self.store.finish(task.task_uid, result)
+        except Exception as error:  # noqa: BLE001 - task failure is persisted, not hidden
+            return self.store.finish(task.task_uid, None, error=str(error))
 
 
 class BackupManifest(FrozenModel):
