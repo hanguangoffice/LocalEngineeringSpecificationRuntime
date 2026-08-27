@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.0rc4
+# LESR Runtime 1.0.0
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -6,9 +6,9 @@ SQLite/FTS5 is a disposable projection. The requirements authority is
 `LESR_Solution_Design_Baseline_v1.0/`, while
 `docs/LESR_Codex_Construction_Spec_v1.0.md` freezes the implementation contract.
 
-This branch is the unified-runtime remediation candidate. Architecture validation, feature
-implementation, integration, and release qualification are reported separately in
-`docs/gates/`. The recovery point for the previous runtime is `runtime-0.5.0a2`.
+This is the stable local runtime. Architecture validation, feature implementation,
+integration, and release qualification are reported separately in `docs/gates/`. The
+recovery point for the previous runtime is `runtime-0.5.0a2`.
 
 ## Runtime model
 
@@ -48,6 +48,9 @@ lesr bootstrap-plan PROJECT TRUST.json DELEGATION.json --governance-operation RU
 lesr bootstrap-root PROJECT TRUST.json DELEGATION.json APPROVAL.json KEY --governance-operation RULE.json --governance-operation PROFILE.json
 lesr configuration-plan PROJECT CONFIGURATION.json
 lesr configuration-init PROJECT CONFIGURATION.json APPROVAL.json ACTOR_UID DELEGATION_UID KEY
+lesr configuration-create-plan PROJECT CONFIGURATION.json --supporting-approval GOVERNANCE_APPROVAL.json
+lesr governance-approval-record PROJECT GOVERNANCE_APPROVAL.json ACTOR_UID DELEGATION_UID KEY
+lesr configuration-create PROJECT CONFIGURATION.json APPROVAL.json ACTOR_UID DELEGATION_UID KEY --supporting-approval GOVERNANCE_APPROVAL.json
 lesr capabilities
 lesr resolve PROJECT IDENTIFIER
 lesr inspect PROJECT UID
@@ -69,10 +72,12 @@ lesr web PROJECT
 `lesr init` creates the format-1.0 repository Manifest. The explicit bootstrap-plan /
 bootstrap-root proof-of-possession flow installs the first human trust root and exact
 Profile/Rule governance; configuration-plan / configuration-init then creates the first
-Configuration. A missing 1.0 Manifest is rejected rather than treated as a legacy
-repository. Workspace candidates and review evidence live on recoverable Workspace refs
-before Apply, so separate CLI invocations can complete one workflow. Private-key signing
-is never available through MCP. The MCP adapter
+Configuration. Successor Configurations are planned and human-approved explicitly;
+Deviation, Exception, and Rule-conflict approvals are independently recorded before an
+exact successor Configuration selects them. A missing 1.0 Manifest is rejected rather
+than treated as a legacy repository. Workspace candidates and review evidence live on
+recoverable Workspace refs before Apply, so separate CLI invocations can complete one
+workflow. Private-key signing is never available through MCP. The MCP adapter
 advertises only tools it actually exposes; admin maintenance remains CLI/local UI only.
 
 The local Web adapter binds to `127.0.0.1`, has no CDN or runtime Node build, and uses a one-time launch

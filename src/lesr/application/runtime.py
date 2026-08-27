@@ -1894,19 +1894,30 @@ class LocalRuntimeService:
             )
 
     @staticmethod
-    def initial_configuration_binding(
-        base_commit: str, configuration: dict[str, Any]
+    def configuration_binding(
+        base_commit: str,
+        configuration: dict[str, Any],
+        supporting_approvals: tuple[dict[str, Any], ...] = (),
     ) -> tuple[str, str, dict[str, Any]]:
         scope = {
             "base_commit": base_commit,
             "configuration_uid": configuration.get("configuration_uid"),
             "configuration_hash": semantic_hash(configuration),
+            "supporting_approval_hashes": sorted(
+                semantic_hash(item) for item in supporting_approvals
+            ),
         }
         return (
-            semantic_hash({"initial_configuration": scope}),
+            semantic_hash({"configuration": scope}),
             str(configuration.get("effective_model_hash")),
             scope,
         )
+
+    @staticmethod
+    def initial_configuration_binding(
+        base_commit: str, configuration: dict[str, Any]
+    ) -> tuple[str, str, dict[str, Any]]:
+        return LocalRuntimeService.configuration_binding(base_commit, configuration)
 
     def initialize_configuration(
         self,
@@ -1922,19 +1933,74 @@ class LocalRuntimeService:
                 ErrorCategory.CONFLICT,
                 "initial configuration already exists",
             )
+        return self._create_configuration(
+            configuration,
+            approval,
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+            (),
+        )
+
+    def create_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+        supporting_approvals: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult:
+        return self._create_configuration(
+            configuration,
+            approval,
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+            supporting_approvals,
+        )
+
+    def plan_configuration(self, configuration: dict[str, Any]) -> DomainResult:
+        """Resolve a successor Configuration without mutating Canonical State."""
+
         try:
-            schemas = SchemaCatalog()
-            schemas.validate("configuration.schema.json", configuration)
-            schemas.validate("approval-attestation.schema.json", approval)
-            if configuration["base_commit"] != self.base:
-                raise ValueError("initial configuration must pin the exact Canonical base")
-            model = self._effective_model_from_configuration_value(configuration)
-            if model.model_hash != configuration["effective_model_hash"]:
-                raise ValueError("initial configuration Effective Model is unavailable or stale")
-            signed = SignedApproval.model_validate(approval)
-            package_hash, model_hash, scope = self.initial_configuration_binding(
-                self.base, configuration
+            value = dict(configuration)
+            value["base_commit"] = self.base
+            value["state_anchor"] = ""
+            value["configuration_hash"] = ""
+            model = self._compile_effective_model_from_configuration_value(value)
+            value["effective_model_hash"] = model.model_hash
+            planned = ConfigurationSnapshot.model_validate(value)
+            return DomainResult(planned.model_dump(mode="json"))
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-CONFIGURATION-PLAN-INVALID",
+                ErrorCategory.VALIDATION,
+                str(error),
             )
+
+    def record_governance_approval(
+        self,
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult:
+        """Persist a human-signed governance approval before selecting it in a Configuration."""
+
+        try:
+            SchemaCatalog().validate("approval-attestation.schema.json", approval)
+            signed = SignedApproval.model_validate(approval)
+            if signed.approval_type not in {
+                "deviation",
+                "exception",
+                "rule_conflict_resolution",
+            }:
+                raise PermissionError(
+                    f"unsupported standalone approval type: {signed.approval_type}"
+                )
+            if actor_uid != signed.actor_uid:
+                raise PermissionError("approval can only be recorded by its human signer")
             trust_value = next(
                 (
                     item
@@ -1945,13 +2011,164 @@ class LocalRuntimeService:
                 ),
                 None,
             )
+            if trust_value is None:
+                raise PermissionError("approval trust is unavailable")
+            verify_approval(
+                signed,
+                TrustedActor.model_validate(trust_value),
+                package_hash=signed.package_hash,
+                effective_model_hash=signed.effective_model_hash,
+            )
+            transaction = SemanticTransaction(
+                transaction_uid=uuid7_candidate(),
+                base_commit=self.base,
+                expected_revisions=(),
+                effective_model_hash=signed.effective_model_hash,
+                review_package_hash=signed.package_hash,
+                operations=(
+                    SemanticOperation(
+                        OperationType.RECORD_APPROVAL,
+                        f"canonical/approvals/{signed.approval_uid}.json",
+                        signed.model_dump(mode="json"),
+                    ),
+                    SemanticOperation(
+                        OperationType.RECORD_PROVENANCE,
+                        f"canonical/provenance/{signed.provenance_uid}.json",
+                        self._approval_provenance(signed),
+                    ),
+                ),
+                approvals=(
+                    ApprovalAttestation(
+                        signed.approval_uid,
+                        signed.package_hash,
+                        signed.actor_uid,
+                        signed.actor_type,
+                        signed.approval_type,
+                    ),
+                ),
+                actor=actor_uid,
+                delegation_uid=delegation_uid,
+                idempotency_key=idempotency_key,
+            )
+            result = self.repository.apply(
+                transaction, projection_updater=self._rebuild_projection
+            )
+            self.base = result.commit
+            self._reload()
+            return DomainResult(
+                {
+                    "result_commit": result.commit,
+                    "approval_uid": signed.approval_uid,
+                }
+            )
+        except (
+            JsonSchemaValidationError,
+            KeyError,
+            TypeError,
+            ValueError,
+            PermissionError,
+            RuntimeError,
+        ) as error:
+            return self._error(
+                "LESR-GOVERNANCE-APPROVAL-RECORD-INVALID",
+                ErrorCategory.AUTHORIZATION,
+                str(error),
+            )
+
+    def _create_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+        supporting_approvals: tuple[dict[str, Any], ...],
+    ) -> DomainResult:
+        try:
+            schemas = SchemaCatalog()
+            schemas.validate("configuration.schema.json", configuration)
+            schemas.validate("approval-attestation.schema.json", approval)
+            for supporting_value in supporting_approvals:
+                schemas.validate("approval-attestation.schema.json", supporting_value)
+            if configuration["base_commit"] != self.base:
+                raise ValueError("configuration must pin the exact Canonical base")
+            existing = tuple(
+                item
+                for item in self.documents
+                if item.get("resource_type") == "configuration_snapshot"
+            )
+            if any(
+                item.get("configuration_uid") == configuration.get("configuration_uid")
+                for item in existing
+            ):
+                raise ValueError("configuration UID already exists")
+            parent_uid = configuration.get("parent_configuration_uid")
+            if existing and not any(
+                item.get("configuration_uid") == parent_uid for item in existing
+            ):
+                raise ValueError(
+                    "subsequent configuration must reference an existing parent configuration"
+                )
+            model = self._effective_model_from_configuration_value(configuration)
+            if model.model_hash != configuration["effective_model_hash"]:
+                raise ValueError("configuration Effective Model is unavailable or stale")
+            signed = SignedApproval.model_validate(approval)
+            supporting_signed = tuple(
+                SignedApproval.model_validate(item) for item in supporting_approvals
+            )
+            if len({item.approval_uid for item in supporting_signed}) != len(
+                supporting_signed
+            ):
+                raise ValueError("supporting approval UIDs must be unique")
+            package_hash, model_hash, scope = self.configuration_binding(
+                self.base, configuration, supporting_approvals
+            )
+            trust_values = {
+                (str(item.get("actor_uid")), str(item.get("key_uid"))): item
+                for item in self.documents
+                if item.get("resource_type") == "trusted_actor"
+            }
+            trust_value = trust_values.get((signed.actor_uid, signed.key_uid))
             if trust_value is None or signed.scope != scope:
-                raise PermissionError("initial configuration approval scope is invalid")
+                raise PermissionError("configuration approval scope is invalid")
             verify_approval(
                 signed,
                 TrustedActor.model_validate(trust_value),
                 package_hash=package_hash,
                 effective_model_hash=model_hash,
+            )
+            allowed_supporting_types = {
+                "deviation",
+                "exception",
+                "rule_conflict_resolution",
+            }
+            for item in supporting_signed:
+                if item.approval_type not in allowed_supporting_types:
+                    raise PermissionError(
+                        f"unsupported configuration approval type: {item.approval_type}"
+                    )
+                item_trust = trust_values.get((item.actor_uid, item.key_uid))
+                if item_trust is None:
+                    raise PermissionError(
+                        f"supporting approval trust is unavailable: {item.approval_uid}"
+                    )
+                verify_approval(
+                    item,
+                    TrustedActor.model_validate(item_trust),
+                    package_hash=item.package_hash,
+                    effective_model_hash=model_hash,
+                )
+                if not any(
+                    value.get("resource_type") == "approval_attestation"
+                    and value.get("approval_uid") == item.approval_uid
+                    and semantic_hash(value) == semantic_hash(item.model_dump(mode="json"))
+                    for value in self.documents
+                ):
+                    raise PermissionError(
+                        f"supporting approval is not canonical: {item.approval_uid}"
+                    )
+            self._validate_configuration_governance(
+                configuration, model, supporting_signed, datetime.now(UTC)
             )
             transaction = SemanticTransaction(
                 transaction_uid=uuid7_candidate(),
@@ -2008,9 +2225,157 @@ class LocalRuntimeService:
             RuntimeError,
         ) as error:
             return self._error(
-                "LESR-CONFIGURATION-INITIALIZATION-INVALID",
+                "LESR-CONFIGURATION-CREATION-INVALID",
                 ErrorCategory.AUTHORIZATION,
                 str(error),
+            )
+
+    def _validate_configuration_governance(
+        self,
+        configuration: dict[str, Any],
+        model: EffectiveModel,
+        approvals: tuple[SignedApproval, ...],
+        evaluation_time: datetime,
+    ) -> None:
+        """Require exact human evidence for every governed Configuration selection."""
+
+        revisions = {
+            str(value.get("revision_uid")): Revision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "revision"
+        }
+        records = {
+            str(value.get("record_uid")): ImmutableRecord.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "immutable_record"
+        }
+        rules = {
+            str(value.get("rule_revision_uid")): RuleDefinition.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "rule_definition_revision"
+            and value.get("rule_revision_uid") in set(model.rule_revision_uids)
+        }
+        trust_by_key = {
+            str(value.get("key_uid")): TrustedActor.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "trusted_actor"
+        }
+        revoked = frozenset(
+            str(value.get("approval_uid"))
+            for value in self.documents
+            if value.get("resource_type") == "approval_revocation"
+            and datetime.fromisoformat(str(value["revoked_at"])) <= evaluation_time
+        )
+        requirements: dict[
+            tuple[str, str], tuple[str, dict[str, object], frozenset[str]]
+        ] = {}
+        for revision_uid in configuration.get("active_deviation_revision_uids", ()):
+            revision = revisions.get(str(revision_uid))
+            if revision is None or revision.kind != "deviation":
+                raise PermissionError(f"selected deviation is unavailable: {revision_uid}")
+            fields = {item.path: item.value for item in revision.fields}
+            rule_uid = str(fields.get("/rule_revision_uid", ""))
+            rule = rules.get(rule_uid)
+            if rule is None or not rule.deviation_policy.allowed:
+                raise PermissionError(
+                    f"selected deviation does not reference an effective relaxable Rule: {revision_uid}"
+                )
+            expiry = fields.get("/valid_until")
+            if (
+                not isinstance(expiry, str)
+                or datetime.fromisoformat(expiry) <= evaluation_time
+                or not fields.get("/compensating_control")
+            ):
+                raise PermissionError(f"selected deviation is expired or incomplete: {revision_uid}")
+            subject_hash = governance_subject_hash(revision)
+            scope: dict[str, object] = {
+                "deviation_revision_uid": revision.revision_uid,
+                "deviation_hash": subject_hash,
+                "rule_revision_uid": rule_uid,
+                "subject_uid": str(fields.get("/subject_uid", "")),
+            }
+            requirements[("deviation", revision.revision_uid)] = (
+                subject_hash,
+                scope,
+                frozenset(rule.deviation_policy.required_approval_roles),
+            )
+        for revision_uid in configuration.get("active_exception_revision_uids", ()):
+            revision = revisions.get(str(revision_uid))
+            if revision is None or revision.kind != "exception":
+                raise PermissionError(f"selected exception is unavailable: {revision_uid}")
+            fields = {item.path: item.value for item in revision.fields}
+            rule_uid = str(fields.get("/rule_revision_uid", ""))
+            rule = rules.get(rule_uid)
+            policy = rule.exception_policy if rule is not None else None
+            if not isinstance(policy, dict) or not bool(policy.get("allowed", False)):
+                raise PermissionError(
+                    f"selected exception does not reference an effective exceptable Rule: {revision_uid}"
+                )
+            expiry = fields.get("/valid_until")
+            if not isinstance(expiry, str) or datetime.fromisoformat(expiry) <= evaluation_time:
+                raise PermissionError(f"selected exception is expired: {revision_uid}")
+            raw_roles = policy.get("required_approval_roles", [])
+            if not isinstance(raw_roles, list):
+                raise TypeError("exception approval roles must be a list")
+            subject_hash = governance_subject_hash(revision)
+            scope = {
+                "exception_revision_uid": revision.revision_uid,
+                "exception_hash": subject_hash,
+                "rule_revision_uid": rule_uid,
+                "subject_uid": str(fields.get("/subject_uid", "")),
+            }
+            requirements[("exception", revision.revision_uid)] = (
+                subject_hash,
+                scope,
+                frozenset(str(item) for item in raw_roles),
+            )
+        for record_uid in configuration.get("conflict_resolution_uids", ()):
+            record = records.get(str(record_uid))
+            if record is None or record.record_type != "rule_conflict_resolution":
+                raise PermissionError(f"selected conflict resolution is unavailable: {record_uid}")
+            left = record.field_value("/left_rule_revision_uid")
+            right = record.field_value("/right_rule_revision_uid")
+            if not isinstance(left, str) or not isinstance(right, str):
+                raise PermissionError(f"selected conflict resolution is incomplete: {record_uid}")
+            scope = {
+                "resolution_record_uid": record.record_uid,
+                "resolution_hash": record.content_hash,
+                "left_rule_revision_uid": left,
+                "right_rule_revision_uid": right,
+            }
+            requirements[("rule_conflict_resolution", record.record_uid)] = (
+                record.content_hash,
+                scope,
+                frozenset(("technical",)),
+            )
+        uid_fields = {
+            "deviation": "deviation_revision_uid",
+            "exception": "exception_revision_uid",
+            "rule_conflict_resolution": "resolution_record_uid",
+        }
+        provided = {
+            (item.approval_type, str(item.scope.get(uid_fields[item.approval_type], ""))): item
+            for item in approvals
+        }
+        if set(provided) != set(requirements):
+            raise PermissionError(
+                "supporting approvals must exactly cover all governed Configuration selections"
+            )
+        for key, (package_hash, scope, roles) in requirements.items():
+            approval = provided[key]
+            trust = trust_by_key.get(approval.key_uid)
+            if trust is None:
+                raise PermissionError(f"supporting approval trust is unavailable: {approval.approval_uid}")
+            verify_bound_approval(
+                approval,
+                trust,
+                package_hash=package_hash,
+                effective_model_hash=model.model_hash,
+                approval_type=key[0],
+                scope=scope,
+                allowed_roles=roles,
+                revoked_approval_uids=revoked,
+                now=evaluation_time,
             )
 
     @staticmethod
@@ -2495,7 +2860,9 @@ class LocalRuntimeService:
             else:
                 compiled_rules.append((rule, compiled.ast))
 
-        conflicted_rule_uids = self._conflicted_rule_uids(configuration, compiled_rules)
+        conflicted_rule_uids = self._conflicted_rule_uids(
+            configuration, compiled_rules, evaluation_time
+        )
 
         observations: list[ValidationObservation] = []
         findings: list[ValidationFinding] = []
@@ -3224,10 +3591,6 @@ class LocalRuntimeService:
                 for item in value.get("fields", ())
                 if isinstance(item, dict) and isinstance(item.get("path"), str)
             }
-            approval_uid = str(fields.get("/approval_uid", ""))
-            approval = approvals.get(approval_uid)
-            if approval is None:
-                raise ValueError(f"active deviation lacks a signed approval: {deviation_uid}")
             valid_until = fields.get("/valid_until")
             if not isinstance(valid_until, str):
                 raise TypeError(f"active deviation lacks expiration: {deviation_uid}")
@@ -3250,9 +3613,6 @@ class LocalRuntimeService:
                     f"deviation does not reference an effective relaxable Rule: {deviation_uid}"
                 )
             rule, _ = selected
-            trust = trust_by_key.get(approval.key_uid)
-            if trust is None:
-                raise ValueError(f"deviation approval trust is unavailable: {deviation_uid}")
             subject_hash = governance_subject_hash(Revision.model_validate(value))
             expected_scope: dict[str, object] = {
                 "deviation_revision_uid": str(deviation_uid),
@@ -3260,17 +3620,39 @@ class LocalRuntimeService:
                 "rule_revision_uid": rule_revision_uid,
                 "subject_uid": str(fields["/subject_uid"]),
             }
-            verify_bound_approval(
-                approval,
-                trust,
-                package_hash=subject_hash,
-                effective_model_hash=effective_model_hash,
-                approval_type="deviation",
-                scope=expected_scope,
-                allowed_roles=frozenset(rule.deviation_policy.required_approval_roles),
-                revoked_approval_uids=revoked,
-                now=evaluation_time,
+            matching_approvals = tuple(
+                item
+                for item in approvals.values()
+                if item.approval_type == "deviation"
+                and item.package_hash == subject_hash
+                and item.scope == expected_scope
             )
+            valid_approvals: list[SignedApproval] = []
+            for approval in matching_approvals:
+                trust = trust_by_key.get(approval.key_uid)
+                if trust is None:
+                    continue
+                try:
+                    verify_bound_approval(
+                        approval,
+                        trust,
+                        package_hash=subject_hash,
+                        effective_model_hash=effective_model_hash,
+                        approval_type="deviation",
+                        scope=expected_scope,
+                        allowed_roles=frozenset(
+                            rule.deviation_policy.required_approval_roles
+                        ),
+                        revoked_approval_uids=revoked,
+                        now=evaluation_time,
+                    )
+                except (PermissionError, ValueError):
+                    continue
+                valid_approvals.append(approval)
+            if len(valid_approvals) != 1:
+                raise PermissionError(
+                    f"active deviation requires exactly one bound approval: {deviation_uid}"
+                )
             active[selected[0].rule_uid] = str(deviation_uid)
         return active
 
@@ -3334,12 +3716,6 @@ class LocalRuntimeService:
             valid_until = fields.get("/valid_until")
             if not isinstance(valid_until, str) or datetime.fromisoformat(valid_until) <= evaluation_time:
                 raise ValueError(f"active exception is expired: {exception_uid}")
-            approval = approvals.get(str(fields.get("/approval_uid", "")))
-            if approval is None:
-                raise ValueError(f"active exception lacks a signed approval: {exception_uid}")
-            trust = trust_by_key.get(approval.key_uid)
-            if trust is None:
-                raise ValueError(f"exception approval trust is unavailable: {exception_uid}")
             subject_hash = governance_subject_hash(Revision.model_validate(value))
             expected_scope: dict[str, object] = {
                 "exception_revision_uid": str(exception_uid),
@@ -3351,17 +3727,37 @@ class LocalRuntimeService:
             if not isinstance(raw_roles, list):
                 raise TypeError("exception approval roles must be a list")
             roles = frozenset(str(item) for item in raw_roles)
-            verify_bound_approval(
-                approval,
-                trust,
-                package_hash=subject_hash,
-                effective_model_hash=str(configuration["effective_model_hash"]),
-                approval_type="exception",
-                scope=expected_scope,
-                allowed_roles=roles,
-                revoked_approval_uids=revoked,
-                now=evaluation_time,
+            matching_approvals = tuple(
+                item
+                for item in approvals.values()
+                if item.approval_type == "exception"
+                and item.package_hash == subject_hash
+                and item.scope == expected_scope
             )
+            valid_approvals = []
+            for approval in matching_approvals:
+                trust = trust_by_key.get(approval.key_uid)
+                if trust is None:
+                    continue
+                try:
+                    verify_bound_approval(
+                        approval,
+                        trust,
+                        package_hash=subject_hash,
+                        effective_model_hash=str(configuration["effective_model_hash"]),
+                        approval_type="exception",
+                        scope=expected_scope,
+                        allowed_roles=roles,
+                        revoked_approval_uids=revoked,
+                        now=evaluation_time,
+                    )
+                except (PermissionError, ValueError):
+                    continue
+                valid_approvals.append(approval)
+            if len(valid_approvals) != 1:
+                raise PermissionError(
+                    f"active exception requires exactly one bound approval: {exception_uid}"
+                )
             active.add(rule.rule_uid)
         return frozenset(active)
 
@@ -3369,12 +3765,31 @@ class LocalRuntimeService:
         self,
         configuration: dict[str, Any],
         compiled_rules: list[tuple[RuleDefinition, Any]],
+        evaluation_time: datetime,
     ) -> frozenset[str]:
         """Fail closed on normative Rule conflicts unless an exact resolution is selected."""
 
         selected_resolution_uids = {
             str(item) for item in configuration.get("conflict_resolution_uids", ())
         }
+        approvals = tuple(
+            SignedApproval.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "approval_attestation"
+        )
+        trust_by_key = {
+            actor.key_uid: actor
+            for actor in (
+                TrustedActor.model_validate(value)
+                for value in self.documents
+                if value.get("resource_type") == "trusted_actor"
+            )
+        }
+        revoked = frozenset(
+            str(value.get("approval_uid"))
+            for value in self.documents
+            if value.get("resource_type") == "approval_revocation"
+        )
         resolutions: set[frozenset[str]] = set()
         for value in self.documents:
             if (
@@ -3386,8 +3801,42 @@ class LocalRuntimeService:
             record = ImmutableRecord.model_validate(value)
             left = record.field_value("/left_rule_revision_uid")
             right = record.field_value("/right_rule_revision_uid")
-            if isinstance(left, str) and isinstance(right, str):
-                resolutions.add(frozenset((left, right)))
+            if not isinstance(left, str) or not isinstance(right, str):
+                continue
+            expected_scope: dict[str, object] = {
+                "resolution_record_uid": record.record_uid,
+                "resolution_hash": record.content_hash,
+                "left_rule_revision_uid": left,
+                "right_rule_revision_uid": right,
+            }
+            matching = tuple(
+                item
+                for item in approvals
+                if item.approval_type == "rule_conflict_resolution"
+                and item.package_hash == record.content_hash
+                and item.scope == expected_scope
+            )
+            if len(matching) != 1:
+                continue
+            approval = matching[0]
+            trust = trust_by_key.get(approval.key_uid)
+            if trust is None:
+                continue
+            try:
+                verify_bound_approval(
+                    approval,
+                    trust,
+                    package_hash=record.content_hash,
+                    effective_model_hash=str(configuration.get("effective_model_hash", "")),
+                    approval_type="rule_conflict_resolution",
+                    scope=expected_scope,
+                    allowed_roles=frozenset(("technical",)),
+                    revoked_approval_uids=revoked,
+                    now=evaluation_time,
+                )
+            except (PermissionError, ValueError):
+                continue
+            resolutions.add(frozenset((left, right)))
         conflicted: set[str] = set()
         for index, (left_rule, left_ast) in enumerate(compiled_rules):
             for right_rule, right_ast in compiled_rules[index + 1 :]:
@@ -3844,6 +4293,14 @@ class LocalRuntimeService:
     def _effective_model_from_configuration_value(
         self, configuration: dict[str, Any]
     ) -> EffectiveModel:
+        model = self._compile_effective_model_from_configuration_value(configuration)
+        if model.model_hash != configuration.get("effective_model_hash"):
+            raise ValueError("Configuration Effective Model hash is stale")
+        return model
+
+    def _compile_effective_model_from_configuration_value(
+        self, configuration: dict[str, Any]
+    ) -> EffectiveModel:
         configuration_uid = str(configuration["configuration_uid"])
         selected_profiles = set(configuration.get("profile_revision_uids", ()))
         profiles = tuple(
@@ -3893,8 +4350,6 @@ class LocalRuntimeService:
                 "Effective Model has unresolved conflicts: "
                 + ", ".join(item.code for item in model.conflicts)
             )
-        if model.model_hash != configuration.get("effective_model_hash"):
-            raise ValueError("Configuration Effective Model hash is stale")
         return model
 
     def _validate_write(

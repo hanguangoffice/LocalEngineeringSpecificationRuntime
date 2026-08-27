@@ -243,7 +243,12 @@ class GovernanceEvaluator:
                 reasons.append(f"CONDITION_UNSATISFIED:{approval.approval_uid}")
                 continue
             valid.append(approval)
-        findings_by_uid = {item.finding_uid: item for item in findings}
+        all_findings_by_uid = {item.finding_uid: item for item in findings}
+        findings_by_uid = {
+            uid: all_findings_by_uid[uid]
+            for uid in package.governance_finding_uids
+            if uid in all_findings_by_uid
+        }
         if set(findings_by_uid) != set(package.governance_finding_uids):
             reasons.append("GOVERNANCE_FINDING_SET_MISMATCH")
         for finding_uid in package.governance_finding_uids:
