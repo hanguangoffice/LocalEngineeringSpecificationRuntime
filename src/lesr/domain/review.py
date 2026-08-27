@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
+from lesr.domain.governance import ValidationFinding
+from lesr.domain.rules import EnforcementEffect
 from lesr.domain.semantic import (
     FrozenModel,
     document_hash,
@@ -142,7 +144,7 @@ class ReviewPackage(FrozenModel):
     impact_report_hash: str
     validation_hash: str
     finding_hashes: tuple[str, ...]
-    comment_hashes: tuple[str, ...]
+    governance_finding_uids: tuple[str, ...] = ()
     review_policy: ReviewPolicy
     effective_model_hash: str
     prepared_by_actor_uid: str
@@ -155,7 +157,6 @@ class ReviewPackage(FrozenModel):
         if not self.candidate_scope:
             raise ValueError("review package candidate scope cannot be empty")
         subject_document = self.model_dump(mode="json")
-        subject_document["comment_hashes"] = []
         subject_document.pop("subject_hash", None)
         subject_document.pop("package_hash", None)
         expected_subject = semantic_hash(subject_document)
@@ -190,6 +191,7 @@ class GovernanceEvaluator:
         revocations: tuple[ApprovalRevocation, ...],
         *,
         now: datetime,
+        findings: tuple[ValidationFinding, ...] = (),
     ) -> GovernanceDecision:
         reasons: list[str] = []
         trust_by_key = {item.key_uid: item for item in trust}
@@ -198,7 +200,7 @@ class GovernanceEvaluator:
         package_comments = {
             item.comment_hash
             for item in comments
-            if item.package_hash == package.subject_hash
+            if item.package_hash == package.package_hash
         }
         if (
             package.review_policy.require_comment_resolution
@@ -241,6 +243,26 @@ class GovernanceEvaluator:
                 reasons.append(f"CONDITION_UNSATISFIED:{approval.approval_uid}")
                 continue
             valid.append(approval)
+        findings_by_uid = {item.finding_uid: item for item in findings}
+        if set(findings_by_uid) != set(package.governance_finding_uids):
+            reasons.append("GOVERNANCE_FINDING_SET_MISMATCH")
+        for finding_uid in package.governance_finding_uids:
+            finding = findings_by_uid.get(finding_uid)
+            if finding is None:
+                continue
+            required_type = {
+                EnforcementEffect.REQUIRE_ACKNOWLEDGEMENT: "finding_acknowledgement",
+                EnforcementEffect.REQUIRE_REVIEW: "finding_review",
+            }.get(finding.enforcement)
+            if required_type is None:
+                reasons.append(f"GOVERNANCE_FINDING_EFFECT_INVALID:{finding_uid}")
+                continue
+            if not any(
+                item.approval_type == required_type
+                and item.scope == {"finding_uid": finding_uid}
+                for item in valid
+            ):
+                reasons.append(f"GOVERNANCE_FINDING_UNFULFILLED:{finding_uid}")
         covered: set[str] = set()
         counts: Counter[tuple[str, str]] = Counter()
         for approval in valid:
@@ -324,7 +346,6 @@ class BaselineManifest(FrozenModel):
     resource_type: Literal["baseline_manifest"] = "baseline_manifest"
     baseline_uid: str = Field(default_factory=uuid7_candidate)
     state_commit: str
-    manifest_commit: str | None = None
     configuration_uid: str
     exact_revision_uids: tuple[str, ...]
     exact_relation_revision_uids: tuple[str, ...]
@@ -332,14 +353,10 @@ class BaselineManifest(FrozenModel):
     deviation_revision_uids: tuple[str, ...]
     review_package_hash: str
     created_at: datetime
-    tag_name: str | None = None
-    tag_status: Literal["not_requested", "created", "pending_rebuild"] = "not_requested"
     manifest_hash: str = ""
 
     @model_validator(mode="after")
     def validate_and_hash(self) -> BaselineManifest:
-        if self.manifest_commit is not None and self.manifest_commit == self.state_commit:
-            raise ValueError("manifest commit must contain and therefore follow frozen state")
         expected = document_hash(self.model_dump(mode="json"), "manifest_hash")
         if self.manifest_hash and self.manifest_hash != expected:
             raise ValueError("manifest_hash is invalid")

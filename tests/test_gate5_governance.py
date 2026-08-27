@@ -24,7 +24,7 @@ UIDS = [f"018f0000-0000-7000-8000-{index:012d}" for index in range(1, 30)]
 HASHES = [semantic_hash({"value": index}) for index in range(20)]
 
 
-def package(*, comment_hashes: tuple[str, ...] = ()) -> ReviewPackage:
+def package() -> ReviewPackage:
     return ReviewPackage(
         package_uid=UIDS[0],
         workspace_uid=UIDS[1],
@@ -40,7 +40,6 @@ def package(*, comment_hashes: tuple[str, ...] = ()) -> ReviewPackage:
         impact_report_hash=HASHES[4],
         validation_hash=HASHES[5],
         finding_hashes=(),
-        comment_hashes=comment_hashes,
         review_policy=ReviewPolicy(
             stages=(StageQuorum(stage="review", role="technical", minimum_count=2),)
         ),
@@ -98,7 +97,7 @@ def test_partial_conditional_approvals_jointly_cover_scope_and_quorum(tmp_path: 
         (),
         (satisfaction,),
         (),
-        now=NOW + timedelta(minutes=1),
+        now=datetime.now(UTC),
     )
     assert decision.allowed
     assert decision.covered_scope == tuple(sorted(review_package.candidate_scope))
@@ -106,16 +105,15 @@ def test_partial_conditional_approvals_jointly_cover_scope_and_quorum(tmp_path: 
 
 
 def test_open_comment_and_pre_apply_revocation_both_block(tmp_path: Path) -> None:
-    review_subject = package()
+    review_package = package()
     comment = ReviewComment(
-        package_hash=review_subject.subject_hash,
+        package_hash=review_package.package_hash,
         resource_uid=UIDS[3],
         location="/statement",
         author_uid=UIDS[10],
         body="Clarify the timing bound",
         created_at=NOW,
     )
-    review_package = package(comment_hashes=(comment.comment_hash,))
     store = ApprovalKeyStore(tmp_path / "keys")
     reviewer = store.generate(UIDS[6], "Reviewer", ("technical",))
     approval = store.sign(
@@ -143,7 +141,7 @@ def test_open_comment_and_pre_apply_revocation_both_block(tmp_path: Path) -> Non
         (),
         (),
         (revocation,),
-        now=NOW + timedelta(minutes=1),
+        now=datetime.now(UTC),
     )
     assert not decision.allowed
     assert "OPEN_REVIEW_COMMENT" in decision.reasons

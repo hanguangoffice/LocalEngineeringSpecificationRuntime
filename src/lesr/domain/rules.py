@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol, cast
@@ -11,12 +12,24 @@ from typing import Any, Literal, Protocol, cast
 from pydantic import Field, model_validator
 
 from lesr.domain.evaluation import (
+    ConstraintEnvironment,
     ConstraintExpression,
     Direction,
+    GraphSnapshot,
+    Quantity,
     RelationPath,
     RelationPathStep,
     RuleOperator,
+    RuntimeValueKind,
+    SemanticEvaluator,
+    TruthValue,
+    UnitRegistry,
     ValidationTarget,
+    decode_runtime_value,
+    evaluate_constraint,
+)
+from lesr.domain.evaluation import (
+    ConstraintResult as SemanticConstraintResult,
 )
 from lesr.domain.semantic import BindingMode, FrozenModel, JsonValue, canonical_json, semantic_hash
 
@@ -255,49 +268,6 @@ class Not:
 
     def to_data(self) -> dict[str, Any]:
         return {"op": "not", "item": self.child.to_data()}
-
-
-@dataclass(frozen=True, slots=True)
-class Quantity:
-    value: Decimal
-    unit: str
-
-
-@dataclass(frozen=True, slots=True)
-class UnitDefinition:
-    unit: str
-    dimension: str
-    scale_to_base: Decimal
-
-
-class UnitRegistry:
-    def __init__(self, definitions: tuple[UnitDefinition, ...]) -> None:
-        self._definitions = {item.unit: item for item in definitions}
-
-    def compare(self, left: Quantity, right: Quantity) -> int:
-        left_definition = self._require(left.unit)
-        right_definition = self._require(right.unit)
-        if left_definition.dimension != right_definition.dimension:
-            raise ValueError(
-                f"incompatible dimensions: {left_definition.dimension} and "
-                f"{right_definition.dimension}"
-            )
-        left_base = left.value * left_definition.scale_to_base
-        right_base = right.value * right_definition.scale_to_base
-        return (left_base > right_base) - (left_base < right_base)
-
-    def _require(self, unit: str) -> UnitDefinition:
-        try:
-            return self._definitions[unit]
-        except KeyError as error:
-            raise ValueError(f"unknown unit: {unit}") from error
-
-    def require(self, unit: str) -> UnitDefinition:
-        return self._require(unit)
-
-    @property
-    def definitions(self) -> tuple[UnitDefinition, ...]:
-        return tuple(sorted(self._definitions.values(), key=lambda item: item.unit))
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,7 +565,7 @@ class AuthorityDeclaration(FrozenModel):
     deviation_allowed: bool
     non_overridable: bool
     overrides: tuple[str, ...] = ()
-    approval_record_uid: str | None = None
+    approval_uid: str | None = None
 
 
 class DeviationPolicy(FrozenModel):
@@ -827,7 +797,11 @@ class RuleCompiler:
                     )
                 )
                 continue
-            result = evaluate_rule(ast, environment, self.units)
+            result = evaluate_rule(
+                ast,
+                environment,
+                _fixture_constraint_evaluator(environment, self.units),
+            )
             outcomes.append((fixture.fixture_uid, result.outcome))
             if result.outcome is not fixture.expected_outcome:
                 diagnostics.append(
@@ -1086,9 +1060,89 @@ def _require_list(value: JsonValue | None) -> list[JsonValue]:
     return value
 
 
+def _fixture_constraint_evaluator(
+    environment: EvaluationEnvironment,
+    units: UnitRegistry,
+) -> Callable[[ConstraintExpression], SemanticConstraintResult]:
+    """Adapt deterministic compiler fixtures to the production evaluator contract."""
+
+    snapshot = GraphSnapshot(
+        configuration_uid="fixture",
+        canonical_commit="fixture",
+        effective_model_hash="fixture",
+        evaluation_time=datetime.now(UTC),
+        nodes=(),
+        relations=(),
+    )
+    evaluator = SemanticEvaluator(snapshot, ())
+    fields = []
+    for path, cell in environment.fields.items():
+        if cell.state is ValueState.ABSENT:
+            value = decode_runtime_value(None, kind_hint=RuntimeValueKind.ABSENT)
+        elif cell.state is ValueState.UNKNOWN:
+            value = decode_runtime_value(None, kind_hint=RuntimeValueKind.UNKNOWN)
+        elif isinstance(cell.value, Quantity):
+            value = decode_runtime_value(
+                {"decimal": str(cell.value.value), "unit": cell.value.unit}
+            )
+        else:
+            value = decode_runtime_value(cast(JsonValue, cell.value))
+        fields.append((path, value))
+
+    def evaluate(expression: ConstraintExpression) -> SemanticConstraintResult:
+        raw_values = environment.relation_values.get(expression.predicate or "", ())
+        aggregate_values = (
+            tuple(
+                decode_runtime_value("1")
+                for _ in range(
+                    environment.relation_counts.get(expression.predicate or "", 0)
+                )
+            )
+            if expression.operator is RuleOperator.AGGREGATE_COUNT
+            else tuple(
+                decode_runtime_value(
+                    {"decimal": str(item.value), "unit": item.unit}
+                    if isinstance(item, Quantity)
+                    else cast(JsonValue, item)
+                )
+                for item in raw_values
+            )
+        )
+        return evaluate_constraint(
+            evaluator,
+            expression,
+            ConstraintEnvironment(
+                target_uid="fixture",
+                fields=tuple(fields),
+                relation_counts=tuple(sorted(environment.relation_counts.items())),
+                relation_path_counts=tuple(
+                    sorted(
+                        (key, count)
+                        for key, count in environment.relation_counts.items()
+                        if ">" in key
+                    )
+                ),
+                aggregate_values=aggregate_values,
+                evidence_kinds=tuple(sorted(environment.evidence_kinds)),
+                lifecycle_transition=environment.lifecycle_transition,
+                fixed_external_observations=tuple(
+                    sorted(environment.fixed_external_observations.items())
+                ),
+                human_attestations=tuple(sorted(environment.human_attestations)),
+            ),
+            units,
+        )
+
+    return evaluate
+
+
 def evaluate_rule(
-    ast: RuleAST, environment: EvaluationEnvironment, units: UnitRegistry
+    ast: RuleAST,
+    environment: EvaluationEnvironment,
+    constraint_evaluator: Callable[[ConstraintExpression], SemanticConstraintResult],
 ) -> RuleEvaluation:
+    """Orchestrate policy only; constraint semantics have one authoritative evaluator."""
+
     enforcement = ast.enforcement.get(environment.operation, EnforcementEffect.REQUIRE_REVIEW)
     applicability = ast.applicability.evaluate(environment)
     if ast.rule_uid in environment.conflicted_rule_uids:
@@ -1105,16 +1159,23 @@ def evaluate_rule(
             ast.rule_revision_uid, RuleOutcome.NOT_EVALUATED
         )
         return RuleEvaluation(outcome, applicability, None, enforcement)
+    semantic_results = tuple(constraint_evaluator(item) for item in ast.constraints)
     evaluated = tuple(
-        _evaluate_compiled_constraint(item, environment, units)
-        for item in ast.constraints
+        ExplanationNode(
+            item.operator.value,
+            {
+                TruthValue.TRUE: ConstraintResult.SATISFIED,
+                TruthValue.FALSE: ConstraintResult.VIOLATED,
+                TruthValue.INDETERMINATE: ConstraintResult.INDETERMINATE,
+            }[result.truth],
+            result.explanation,
+        )
+        for item, result in zip(ast.constraints, semantic_results, strict=True)
     )
-    results = {ConstraintResult(item.result) for item in evaluated}
-    if ConstraintResult.EVALUATOR_ERROR in results:
-        constraint_result = ConstraintResult.EVALUATOR_ERROR
-    elif ConstraintResult.VIOLATED in results:
+    truths = {item.truth for item in semantic_results}
+    if TruthValue.FALSE in truths:
         constraint_result = ConstraintResult.VIOLATED
-    elif ConstraintResult.INDETERMINATE in results:
+    elif TruthValue.INDETERMINATE in truths:
         constraint_result = ConstraintResult.INDETERMINATE
     else:
         constraint_result = ConstraintResult.SATISFIED
@@ -1141,209 +1202,14 @@ def evaluate_rule(
     return RuleEvaluation(outcome, applicability, constraint, enforcement)
 
 
-def _evaluate_compiled_constraint(
-    expression: ConstraintExpression,
+def evaluate_fixture_rule(
+    ast: RuleAST,
     environment: EvaluationEnvironment,
     units: UnitRegistry,
-) -> ExplanationNode:
-    """Pure fixture/runtime primitive for the same Canonical ConstraintExpression."""
+) -> RuleEvaluation:
+    """Evaluate a compiler fixture through the same authoritative constraint evaluator."""
 
-    operator = expression.operator
-    cell = environment.read(expression.field_path or "")
-    if operator is RuleOperator.FIELD_REQUIRED:
-        if cell.state is ValueState.VALUE:
-            result = ConstraintResult.SATISFIED
-        elif cell.state in {ValueState.ABSENT, ValueState.NULL}:
-            result = ConstraintResult.VIOLATED
-        else:
-            result = ConstraintResult.INDETERMINATE
-        return ExplanationNode(operator, result, f"{expression.field_path} is {cell.state}")
-    if operator is RuleOperator.FIELD_FORBIDDEN:
-        return ExplanationNode(
-            operator,
-            ConstraintResult.SATISFIED
-            if cell.state is ValueState.ABSENT
-            else ConstraintResult.VIOLATED,
-            "forbidden field check",
-        )
-    if operator in {
-        RuleOperator.FIELD_TYPE,
-        RuleOperator.FIELD_ENUM,
-        RuleOperator.FIELD_PATTERN,
-        RuleOperator.FIELD_RANGE,
-        RuleOperator.FIELD_TOLERANCE,
-        RuleOperator.SET,
-        RuleOperator.UNIQUE,
-        RuleOperator.TEMPORAL_FRESHNESS,
-    } and cell.state is not ValueState.VALUE:
-        return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "field unavailable")
-    try:
-        if operator is RuleOperator.FIELD_TYPE:
-            actual = (
-                "boolean" if isinstance(cell.value, bool) else
-                "integer" if isinstance(cell.value, int) else
-                "string" if isinstance(cell.value, str) else
-                "array" if isinstance(cell.value, list) else
-                "object" if isinstance(cell.value, dict) else "null"
-            )
-            passed = actual == str(expression.expected)
-        elif operator is RuleOperator.FIELD_ENUM:
-            passed = cell.value in (
-                expression.expected if isinstance(expression.expected, list) else []
-            )
-        elif operator is RuleOperator.FIELD_PATTERN:
-            import re
-
-            passed = isinstance(cell.value, str) and isinstance(
-                expression.expected, str
-            ) and re.fullmatch(expression.expected, cell.value) is not None
-        elif operator in {RuleOperator.FIELD_RANGE, RuleOperator.FIELD_TOLERANCE}:
-            if isinstance(cell.value, Quantity):
-                expected_unit = (
-                    str(expression.expected.get("unit"))
-                    if isinstance(expression.expected, dict)
-                    else cell.value.unit
-                )
-                lower = (
-                    Quantity(Decimal(expression.minimum), expected_unit)
-                    if expression.minimum is not None
-                    else None
-                )
-                upper = (
-                    Quantity(Decimal(expression.maximum), expected_unit)
-                    if expression.maximum is not None
-                    else None
-                )
-                passed = bool(
-                    (lower is None or units.compare(cell.value, lower) >= 0)
-                    and (upper is None or units.compare(cell.value, upper) <= 0)
-                )
-            else:
-                observed = Decimal(str(cell.value))
-                if operator is RuleOperator.FIELD_TOLERANCE:
-                    passed = abs(observed - Decimal(str(expression.expected))) <= Decimal(
-                        expression.tolerance or "0"
-                    )
-                else:
-                    passed = bool(
-                        (expression.minimum is None or observed >= Decimal(expression.minimum))
-                        and (expression.maximum is None or observed <= Decimal(expression.maximum))
-                    )
-        elif operator is RuleOperator.SET:
-            passed = isinstance(cell.value, list) and isinstance(
-                expression.expected, list
-            ) and {str(item) for item in cell.value} == {
-                str(item) for item in expression.expected
-            }
-        elif operator is RuleOperator.UNIQUE:
-            passed = isinstance(cell.value, list) and len(cell.value) == len(
-                {str(item) for item in cell.value}
-            )
-        elif operator in {
-            RuleOperator.RELATION_CARDINALITY,
-            RuleOperator.RELATION_DIRECTION,
-            RuleOperator.RELATION_ENDPOINT,
-            RuleOperator.RELATION_BINDING,
-            RuleOperator.RELATION_STATE,
-            RuleOperator.FORMAL_TRACE,
-        }:
-            count = environment.relation_counts.get(expression.predicate or "", 0)
-            passed = count >= int(expression.minimum or "1") and (
-                expression.maximum is None or count <= int(expression.maximum)
-            )
-        elif operator is RuleOperator.GRAPH_PATH:
-            roles = (
-                tuple(step.predicates[0] for step in expression.relation_path.steps)
-                if expression.relation_path is not None
-                else ()
-            )
-            if not roles:
-                raise ValueError("graph path is absent")
-            passed = all(environment.relation_counts.get(role, 0) > 0 for role in roles)
-        elif operator in {
-            RuleOperator.AGGREGATE_COUNT,
-            RuleOperator.AGGREGATE_SUM,
-            RuleOperator.AGGREGATE_MIN,
-            RuleOperator.AGGREGATE_MAX,
-            RuleOperator.AGGREGATE_RATIO,
-            RuleOperator.AGGREGATE_ALL,
-            RuleOperator.AGGREGATE_ANY,
-            RuleOperator.AGGREGATE_NONE,
-        }:
-            values = environment.relation_values.get(expression.predicate or "", ())
-            if operator is RuleOperator.AGGREGATE_COUNT:
-                observed_value: Any = environment.relation_counts.get(
-                    expression.predicate or "", len(values)
-                )
-            elif not values:
-                return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "aggregate unavailable")
-            elif operator is RuleOperator.AGGREGATE_SUM:
-                observed_value = sum(value for value in values if isinstance(value, int))
-            elif operator is RuleOperator.AGGREGATE_MIN:
-                observed_value = min(values, key=lambda item: str(item))
-            elif operator is RuleOperator.AGGREGATE_MAX:
-                observed_value = max(values, key=lambda item: str(item))
-            elif operator is RuleOperator.AGGREGATE_RATIO:
-                observed_value = Decimal(sum(bool(item) for item in values)) / Decimal(len(values))
-            elif operator is RuleOperator.AGGREGATE_ALL:
-                observed_value = all(bool(item) for item in values)
-            elif operator is RuleOperator.AGGREGATE_ANY:
-                observed_value = any(bool(item) for item in values)
-            else:
-                observed_value = not any(bool(item) for item in values)
-            expected = expression.expected
-            if isinstance(expected, dict) and isinstance(observed_value, Quantity):
-                ordering = units.compare(
-                    observed_value,
-                    Quantity(Decimal(str(expected["decimal"])), str(expected["unit"])),
-                )
-            elif isinstance(observed_value, bool):
-                ordering = 0 if observed_value == expected else 1
-            else:
-                ordering = (Decimal(str(observed_value)) > Decimal(str(expected))) - (
-                    Decimal(str(observed_value)) < Decimal(str(expected))
-                )
-            passed = _comparison_passed(ordering, expression.comparison or "eq")
-        elif operator is RuleOperator.LIFECYCLE_TRANSITION:
-            passed = list(environment.lifecycle_transition or ()) == expression.expected
-        elif operator is RuleOperator.PROCESS_EVIDENCE:
-            passed = expression.evidence_kind in environment.evidence_kinds
-        elif operator is RuleOperator.EXTERNAL_OBSERVATION:
-            passed = environment.fixed_external_observations.get(
-                expression.observation_key or ""
-            ) == expression.expected
-        elif operator is RuleOperator.HUMAN_ATTESTATION:
-            passed = expression.observation_key in environment.human_attestations
-        elif operator is RuleOperator.ADVISORY_AI_OBSERVATION:
-            return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "AI is advisory")
-        elif operator is RuleOperator.TEMPORAL_FRESHNESS:
-            observed_at = datetime.fromisoformat(str(cell.value))
-            # Fixtures have no implicit clock; an explicit external observation owns it.
-            reference = environment.fixed_external_observations.get("evaluation_time")
-            if not isinstance(reference, str):
-                return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "evaluation time absent")
-            age = (datetime.fromisoformat(reference) - observed_at).total_seconds()
-            passed = 0 <= age <= int(expression.maximum_age_seconds or 0)
-        else:
-            return ExplanationNode(operator, ConstraintResult.INDETERMINATE, "unsupported")
-    except (ArithmeticError, KeyError, TypeError, ValueError) as error:
-        return ExplanationNode(operator, ConstraintResult.EVALUATOR_ERROR, str(error))
-    return ExplanationNode(
-        operator,
-        ConstraintResult.SATISFIED if passed else ConstraintResult.VIOLATED,
-        "canonical constraint evaluated",
-    )
-
-
-def _comparison_passed(ordering: int, comparison: str) -> bool:
-    return {
-        "eq": ordering == 0,
-        "ne": ordering != 0,
-        "lt": ordering < 0,
-        "lte": ordering <= 0,
-        "gt": ordering > 0,
-        "gte": ordering >= 0,
-    }[comparison]
+    return evaluate_rule(ast, environment, _fixture_constraint_evaluator(environment, units))
 
 
 def detect_direct_conflict(left: RuleAST, right: RuleAST) -> bool:

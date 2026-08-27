@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.0rc3
+# LESR Runtime 1.0.0rc4
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;

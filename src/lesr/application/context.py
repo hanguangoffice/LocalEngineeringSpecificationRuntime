@@ -70,7 +70,7 @@ class ConfigurationMembership:
 @dataclass(frozen=True, slots=True)
 class ConfigurationDefinition:
     configuration_uid: str
-    git_commit: str
+    base_commit: str
     memberships: tuple[ConfigurationMembership, ...]
     profile_revision_uids: tuple[str, ...]
     effective_model_hash: str

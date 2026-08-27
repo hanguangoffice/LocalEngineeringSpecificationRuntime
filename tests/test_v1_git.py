@@ -17,7 +17,7 @@ from lesr.adapters.git import (
     SemanticOperation,
     SemanticTransaction,
 )
-from lesr.domain.semantic import document_hash, semantic_hash
+from lesr.domain.semantic import configuration_state_anchor, document_hash, semantic_hash
 from tests.support.canonical_auth import CanonicalAuth, bootstrap_repository
 
 OBJECT_UID = "018f0000-0000-7000-8000-000000000101"
@@ -261,7 +261,7 @@ def test_snapshot_cannot_claim_a_commit_that_does_not_contain_its_closure(
         "schema_version": "1.0",
         "resource_type": "configuration_snapshot",
         "configuration_uid": "018f0000-0000-7000-8000-000000000109",
-        "git_commit": repo.current_commit(),
+        "base_commit": repo.current_commit(),
         "revision_uids": [REVISION_UID],
         "relation_revision_uids": [],
         "profile_revision_uids": [],
@@ -271,6 +271,13 @@ def test_snapshot_cannot_claim_a_commit_that_does_not_contain_its_closure(
         "closure_reasons": [],
         "created_at": "2026-08-05T00:00:00Z",
     }
+    configuration["state_anchor"] = configuration_state_anchor(
+        revision_uids=(REVISION_UID,),
+        relation_revision_uids=(),
+        profile_revision_uids=(),
+        active_deviation_revision_uids=(),
+        effective_model_hash=MODEL_HASH,
+    )
     snapshot = SemanticOperation(
         OperationType.CREATE_CONFIGURATION,
         f"canonical/configurations/{configuration['configuration_uid']}.json",

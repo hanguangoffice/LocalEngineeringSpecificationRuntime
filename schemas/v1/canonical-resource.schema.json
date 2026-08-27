@@ -8,7 +8,7 @@
     {"$ref":"relation-identity.schema.json"},
     {"$ref":"relation-assertion.schema.json"},
     {"$ref":"immutable-record.schema.json"},
-    {"$ref":"profile.schema.json"},
+    {"$ref":"normative-profile.schema.json"},
     {"$ref":"configuration.schema.json"},
     {"$ref":"delegation-grant.schema.json"},
     {"$ref":"review-package.schema.json"},

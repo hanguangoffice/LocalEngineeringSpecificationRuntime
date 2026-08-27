@@ -278,6 +278,8 @@ def verify_approval(
         raise PermissionError("approval key is not currently trusted")
     if approval.expires_at and instant >= approval.expires_at:
         raise PermissionError("approval has expired")
+    if approval.issued_at > instant:
+        raise PermissionError("approval was issued in the future")
     if approval.package_hash != package_hash:
         raise PermissionError("approval does not bind the review package")
     if approval.effective_model_hash != effective_model_hash:
@@ -292,6 +294,37 @@ def verify_approval(
         )
     except (InvalidSignature, ValueError) as error:
         raise PermissionError("approval signature is invalid") from error
+
+
+def verify_bound_approval(
+    approval: SignedApproval,
+    trust: TrustedActor,
+    *,
+    package_hash: str,
+    effective_model_hash: str,
+    approval_type: str,
+    scope: dict[str, object],
+    allowed_roles: frozenset[str],
+    revoked_approval_uids: frozenset[str] = frozenset(),
+    now: datetime | None = None,
+) -> None:
+    """Verify signature, trust, time and the exact governed semantic subject."""
+
+    if approval.approval_uid in revoked_approval_uids:
+        raise PermissionError("approval has been revoked")
+    verify_approval(
+        approval,
+        trust,
+        package_hash=package_hash,
+        effective_model_hash=effective_model_hash,
+        now=now,
+    )
+    if approval.approval_type != approval_type:
+        raise PermissionError("approval type does not match the governed action")
+    if approval.actor_role not in allowed_roles:
+        raise PermissionError("approval role is not authorized for the governed action")
+    if approval.scope != scope:
+        raise PermissionError("approval scope does not exactly bind the governed subject")
 
 
 class _DataBlob(ctypes.Structure):

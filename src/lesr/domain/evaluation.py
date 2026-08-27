@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -27,6 +28,48 @@ class TruthValue(StrEnum):
     TRUE = "TRUE"
     FALSE = "FALSE"
     INDETERMINATE = "INDETERMINATE"
+
+
+@dataclass(frozen=True, slots=True)
+class Quantity:
+    """Canonical decoded quantity used by the sole constraint evaluator."""
+
+    value: Decimal
+    unit: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnitDefinition:
+    unit: str
+    dimension: str
+    scale_to_base: Decimal
+
+
+class UnitRegistry:
+    def __init__(self, definitions: tuple[UnitDefinition, ...]) -> None:
+        self._definitions = {item.unit: item for item in definitions}
+
+    def compare(self, left: Quantity, right: Quantity) -> int:
+        left_definition = self.require(left.unit)
+        right_definition = self.require(right.unit)
+        if left_definition.dimension != right_definition.dimension:
+            raise ValueError(
+                f"incompatible dimensions: {left_definition.dimension} and "
+                f"{right_definition.dimension}"
+            )
+        left_base = left.value * left_definition.scale_to_base
+        right_base = right.value * right_definition.scale_to_base
+        return (left_base > right_base) - (left_base < right_base)
+
+    def require(self, unit: str) -> UnitDefinition:
+        try:
+            return self._definitions[unit]
+        except KeyError as error:
+            raise ValueError(f"unknown unit: {unit}") from error
+
+    @property
+    def definitions(self) -> tuple[UnitDefinition, ...]:
+        return tuple(sorted(self._definitions.values(), key=lambda item: item.unit))
 
 
 class CyclePolicy(StrEnum):
@@ -386,6 +429,68 @@ class RuleOperator(StrEnum):
     ADVISORY_AI_OBSERVATION = "advisory_ai_observation"
 
 
+class RuntimeValueKind(StrEnum):
+    ABSENT = "absent"
+    NULL = "null"
+    UNKNOWN = "unknown"
+    SCALAR = "scalar"
+    QUANTITY = "quantity"
+    TIMESTAMP = "timestamp"
+    ENUM = "enum"
+    LIST = "list"
+    SET = "set"
+    REFERENCE = "reference"
+
+
+class RuntimeValue(FrozenModel):
+    """One canonical decoded value representation for every validation target."""
+
+    kind: RuntimeValueKind
+    value: JsonValue = None
+    decimal: str | None = None
+    unit: str | None = None
+
+    def as_json(self) -> JsonValue:
+        if self.kind is RuntimeValueKind.QUANTITY:
+            return {"decimal": self.decimal, "unit": self.unit}
+        return self.value
+
+    def as_quantity(self) -> Quantity | None:
+        if (
+            self.kind is RuntimeValueKind.QUANTITY
+            and self.decimal is not None
+            and self.unit is not None
+        ):
+            return Quantity(Decimal(self.decimal), self.unit)
+        return None
+
+
+def decode_runtime_value(
+    value: JsonValue,
+    *,
+    kind_hint: RuntimeValueKind | None = None,
+) -> RuntimeValue:
+    """Decode Canonical JSON once at the validation boundary."""
+
+    if kind_hint is RuntimeValueKind.ABSENT:
+        return RuntimeValue(kind=RuntimeValueKind.ABSENT)
+    if kind_hint is RuntimeValueKind.UNKNOWN:
+        return RuntimeValue(kind=RuntimeValueKind.UNKNOWN)
+    if value is None:
+        return RuntimeValue(kind=RuntimeValueKind.NULL)
+    if isinstance(value, dict) and set(value) == {"decimal", "unit"}:
+        return RuntimeValue(
+            kind=RuntimeValueKind.QUANTITY,
+            decimal=str(value["decimal"]),
+            unit=str(value["unit"]),
+        )
+    if kind_hint is not None:
+        return RuntimeValue(kind=kind_hint, value=value)
+    if isinstance(value, list):
+        return RuntimeValue(kind=RuntimeValueKind.LIST, value=value)
+    return RuntimeValue(kind=RuntimeValueKind.SCALAR, value=value)
+
+
 class ConstraintResult(FrozenModel):
     truth: TruthValue
     observed: JsonValue = None
@@ -413,8 +518,10 @@ class ConstraintExpression(FrozenModel):
 
 class ConstraintEnvironment(FrozenModel):
     target_uid: str
-    fields: tuple[tuple[str, JsonValue], ...] = ()
-    aggregate_values: tuple[str | bool | None, ...] = ()
+    fields: tuple[tuple[str, RuntimeValue], ...] = ()
+    relation_counts: tuple[tuple[str, int], ...] = ()
+    relation_path_counts: tuple[tuple[str, int], ...] = ()
+    aggregate_values: tuple[RuntimeValue, ...] = ()
     evidence_kinds: tuple[str, ...] = ()
     lifecycle_transition: tuple[str, str] | None = None
     fixed_external_observations: tuple[tuple[str, JsonValue], ...] = ()
@@ -426,15 +533,28 @@ def evaluate_constraint(
     evaluator: SemanticEvaluator,
     expression: ConstraintExpression,
     environment: ConstraintEnvironment,
+    units: UnitRegistry,
 ) -> ConstraintResult:
     """Evaluate the frozen operator vocabulary without arbitrary Profile code."""
 
     fields = dict(environment.fields)
-    value = fields.get(expression.field_path or "")
-    field_known = expression.field_path in fields
+    runtime_value = fields.get(
+        expression.field_path or "", RuntimeValue(kind=RuntimeValueKind.ABSENT)
+    )
+    value = runtime_value.as_json()
+    field_known = runtime_value.kind not in {
+        RuntimeValueKind.ABSENT,
+        RuntimeValueKind.UNKNOWN,
+    }
     operator = expression.operator
     if operator is RuleOperator.FIELD_REQUIRED:
-        return _truth(field_known, value, "required field check")
+        if runtime_value.kind is RuntimeValueKind.UNKNOWN:
+            return _unknown("required field value is unknown")
+        return _truth(
+            field_known and runtime_value.kind is not RuntimeValueKind.NULL,
+            value,
+            "required field check",
+        )
     if operator is RuleOperator.FIELD_FORBIDDEN:
         return _truth(not field_known, value, "forbidden field check")
     if (
@@ -476,24 +596,72 @@ def evaluate_constraint(
         return _truth(re.fullmatch(expression.expected, value) is not None, value, "pattern check")
     if operator in {RuleOperator.FIELD_RANGE, RuleOperator.FIELD_TOLERANCE}:
         try:
-            numeric_observed = Decimal(str(value))
-            numeric_minimum = (
-                Decimal(expression.minimum) if expression.minimum is not None else None
-            )
-            numeric_maximum = (
-                Decimal(expression.maximum) if expression.maximum is not None else None
-            )
-            if operator is RuleOperator.FIELD_TOLERANCE:
-                numeric_expected = Decimal(str(expression.expected))
-                tolerance = Decimal(expression.tolerance or "0")
-                passed = abs(numeric_observed - numeric_expected) <= tolerance
-            else:
-                passed = (numeric_minimum is None or numeric_observed >= numeric_minimum) and (
-                    numeric_maximum is None or numeric_observed <= numeric_maximum
+            quantity = runtime_value.as_quantity()
+            if quantity is not None:
+                expected_unit = (
+                    str(expression.expected.get("unit"))
+                    if isinstance(expression.expected, dict)
+                    else quantity.unit
                 )
+                quantity_minimum = (
+                    Quantity(Decimal(expression.minimum), expected_unit)
+                    if expression.minimum is not None
+                    else None
+                )
+                quantity_maximum = (
+                    Quantity(Decimal(expression.maximum), expected_unit)
+                    if expression.maximum is not None
+                    else None
+                )
+                if operator is RuleOperator.FIELD_TOLERANCE:
+                    expected_decimal = (
+                        expression.expected.get("decimal")
+                        if isinstance(expression.expected, dict)
+                        else expression.expected
+                    )
+                    expected_quantity = Quantity(Decimal(str(expected_decimal)), expected_unit)
+                    tolerance = Quantity(Decimal(expression.tolerance or "0"), expected_unit)
+                    difference = abs(
+                        quantity.value
+                        * units.require(quantity.unit).scale_to_base
+                        - expected_quantity.value
+                        * units.require(expected_quantity.unit).scale_to_base
+                    )
+                    passed = difference <= (
+                        tolerance.value * units.require(tolerance.unit).scale_to_base
+                    )
+                else:
+                    passed = bool(
+                        (
+                            quantity_minimum is None
+                            or units.compare(quantity, quantity_minimum) >= 0
+                        )
+                        and (
+                            quantity_maximum is None
+                            or units.compare(quantity, quantity_maximum) <= 0
+                        )
+                    )
+                observed: JsonValue = runtime_value.as_json()
+            else:
+                numeric_observed = Decimal(str(value))
+                numeric_minimum = (
+                    Decimal(expression.minimum) if expression.minimum is not None else None
+                )
+                numeric_maximum = (
+                    Decimal(expression.maximum) if expression.maximum is not None else None
+                )
+                if operator is RuleOperator.FIELD_TOLERANCE:
+                    numeric_expected = Decimal(str(expression.expected))
+                    tolerance_decimal = Decimal(expression.tolerance or "0")
+                    passed = abs(numeric_observed - numeric_expected) <= tolerance_decimal
+                else:
+                    passed = (
+                        numeric_minimum is None or numeric_observed >= numeric_minimum
+                    ) and (numeric_maximum is None or numeric_observed <= numeric_maximum)
+                observed = str(numeric_observed)
         except (InvalidOperation, ValueError):
             return _unknown("numeric value or decimal bound is invalid")
-        return _truth(passed, str(numeric_observed), "numeric constraint")
+        return _truth(passed, observed, "numeric constraint")
     if operator is RuleOperator.SET:
         if not isinstance(value, list) or not isinstance(expression.expected, list):
             return _unknown("set constraint requires arrays")
@@ -516,15 +684,19 @@ def evaluate_constraint(
     }:
         if expression.predicate is None:
             return _unknown("relation constraint has no predicate")
-        count = evaluator.relation_count(
-            environment.target_uid,
-            predicate=expression.predicate,
-            direction=expression.direction,
-            binding=expression.binding,
-            lifecycle_state=expression.lifecycle_state,
-            formal_trace_category=expression.formal_trace_category
-            if operator is RuleOperator.FORMAL_TRACE
-            else None,
+        count = (
+            evaluator.relation_count(
+                environment.target_uid,
+                predicate=expression.predicate,
+                direction=expression.direction,
+                binding=expression.binding,
+                lifecycle_state=expression.lifecycle_state,
+                formal_trace_category=expression.formal_trace_category
+                if operator is RuleOperator.FORMAL_TRACE
+                else None,
+            )
+            if environment.target_uid in evaluator.nodes
+            else dict(environment.relation_counts).get(expression.predicate, 0)
         )
         relation_minimum = int(
             expression.minimum
@@ -539,6 +711,19 @@ def evaluate_constraint(
     if operator is RuleOperator.GRAPH_PATH:
         if expression.relation_path is None:
             return _unknown("graph path expression is absent")
+        path_key = ">".join(
+            "|".join(step.predicates) for step in expression.relation_path.steps
+        )
+        precomputed = dict(environment.relation_path_counts).get(path_key)
+        if precomputed is not None:
+            minimum = int(expression.minimum or "1")
+            maximum = int(expression.maximum) if expression.maximum is not None else None
+            return _truth(
+                precomputed >= minimum
+                and (maximum is None or precomputed <= maximum),
+                precomputed,
+                "graph path constraint",
+            )
         result = evaluate_path(evaluator, environment.target_uid, expression.relation_path)
         if result.truncated and not result.matches:
             return _unknown("graph path reached its depth or cycle bound")
@@ -592,8 +777,7 @@ def evaluate_constraint(
         RuleOperator.AGGREGATE_NONE,
     }:
         values: tuple[Decimal | bool | None, ...] = tuple(
-            Decimal(item) if isinstance(item, str) else item
-            for item in environment.aggregate_values
+            _aggregate_runtime_value(item) for item in environment.aggregate_values
         )
         aggregated = evaluate_aggregate(operator, values)
         if aggregated.truth is TruthValue.INDETERMINATE or expression.comparison is None:
@@ -601,13 +785,13 @@ def evaluate_constraint(
         if expression.expected is None:
             return _unknown("aggregate comparison has no expected value")
         try:
-            observed = Decimal(str(aggregated.observed))
+            numeric_aggregate_observed = Decimal(str(aggregated.observed))
             expected_value = (
                 expression.expected.get("decimal")
                 if isinstance(expression.expected, dict)
                 else expression.expected
             )
-            expected = Decimal(str(expected_value))
+            numeric_aggregate_expected = Decimal(str(expected_value))
         except (InvalidOperation, ValueError):
             if expression.comparison not in {"eq", "ne"}:
                 return _unknown("non-numeric aggregate supports only equality")
@@ -616,12 +800,12 @@ def evaluate_constraint(
                 passed = not passed
         else:
             passed = {
-                "eq": observed == expected,
-                "ne": observed != expected,
-                "lt": observed < expected,
-                "lte": observed <= expected,
-                "gt": observed > expected,
-                "gte": observed >= expected,
+                "eq": numeric_aggregate_observed == numeric_aggregate_expected,
+                "ne": numeric_aggregate_observed != numeric_aggregate_expected,
+                "lt": numeric_aggregate_observed < numeric_aggregate_expected,
+                "lte": numeric_aggregate_observed <= numeric_aggregate_expected,
+                "gt": numeric_aggregate_observed > numeric_aggregate_expected,
+                "gte": numeric_aggregate_observed >= numeric_aggregate_expected,
             }[expression.comparison]
         return _truth(passed, aggregated.observed, "aggregate comparison")
     if operator is RuleOperator.EXTERNAL_OBSERVATION:
@@ -659,19 +843,40 @@ def _unknown(explanation: str) -> ConstraintResult:
     return ConstraintResult(truth=TruthValue.INDETERMINATE, explanation=explanation)
 
 
+def _aggregate_runtime_value(value: RuntimeValue) -> Decimal | bool | None:
+    if value.kind in {RuntimeValueKind.ABSENT, RuntimeValueKind.NULL, RuntimeValueKind.UNKNOWN}:
+        return None
+    quantity = value.as_quantity()
+    if quantity is not None:
+        return quantity.value
+    raw = value.as_json()
+    if isinstance(raw, bool):
+        return raw
+    try:
+        return Decimal(str(raw))
+    except InvalidOperation:
+        return None
+
+
 def evaluate_aggregate(
     operator: RuleOperator,
     values: tuple[Decimal | bool | None, ...],
 ) -> ConstraintResult:
+    if operator is RuleOperator.AGGREGATE_COUNT:
+        return ConstraintResult(
+            truth=TruthValue.TRUE,
+            observed=len(values),
+            explanation="aggregate evaluated",
+        )
     if not values or any(item is None for item in values):
         return ConstraintResult(
             truth=TruthValue.INDETERMINATE,
             explanation="aggregate input is absent or unknown",
         )
-    if operator is RuleOperator.AGGREGATE_COUNT:
-        observed: JsonValue = len(values)
-    elif operator is RuleOperator.AGGREGATE_SUM:
-        observed = str(sum(item for item in values if isinstance(item, Decimal)))
+    if operator is RuleOperator.AGGREGATE_SUM:
+        observed: JsonValue = str(
+            sum(item for item in values if isinstance(item, Decimal))
+        )
     elif operator is RuleOperator.AGGREGATE_MIN:
         observed = str(min(item for item in values if isinstance(item, Decimal)))
     elif operator is RuleOperator.AGGREGATE_MAX:

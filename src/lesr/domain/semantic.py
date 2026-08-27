@@ -268,6 +268,16 @@ class Revision(FrozenModel):
         return self
 
 
+def governance_subject_hash(revision: Revision) -> str:
+    """Hash governed Revision semantics without the approval-link back-reference."""
+
+    payload = revision.model_dump(mode="json", exclude={"content_hash"}, exclude_none=True)
+    payload["fields"] = [
+        field for field in payload.get("fields", []) if field.get("path") != "/approval_uid"
+    ]
+    return semantic_hash(payload)
+
+
 class ImmutableRecord(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["immutable_record"] = "immutable_record"
@@ -459,17 +469,49 @@ class ChangeWorkspace(FrozenModel):
         return self
 
 
+def configuration_state_anchor(
+    *,
+    revision_uids: tuple[str, ...],
+    relation_revision_uids: tuple[str, ...],
+    profile_revision_uids: tuple[str, ...],
+    active_deviation_revision_uids: tuple[str, ...],
+    active_exception_revision_uids: tuple[str, ...] = (),
+    conflict_resolution_uids: tuple[str, ...] = (),
+    effective_model_hash: str,
+    variant: str | None = None,
+    valid_at: datetime | None = None,
+) -> str:
+    """Hash an exact semantic selection without self-referencing its Git container."""
+
+    return semantic_hash(
+        {
+            "revision_uids": sorted(revision_uids),
+            "relation_revision_uids": sorted(relation_revision_uids),
+            "profile_revision_uids": sorted(profile_revision_uids),
+            "active_deviation_revision_uids": sorted(active_deviation_revision_uids),
+            "active_exception_revision_uids": sorted(active_exception_revision_uids),
+            "conflict_resolution_uids": sorted(conflict_resolution_uids),
+            "effective_model_hash": effective_model_hash,
+            "variant": variant,
+            "valid_at": valid_at,
+        }
+    )
+
+
 class ConfigurationSnapshot(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["configuration_snapshot"] = "configuration_snapshot"
     configuration_uid: str = Field(default_factory=uuid7_candidate)
     parent_configuration_uid: str | None = None
-    git_commit: str
+    base_commit: str
+    state_anchor: str = ""
     revision_uids: tuple[str, ...]
     relation_revision_uids: tuple[str, ...]
     profile_revision_uids: tuple[str, ...]
     effective_model_hash: str
     active_deviation_revision_uids: tuple[str, ...] = ()
+    active_exception_revision_uids: tuple[str, ...] = ()
+    conflict_resolution_uids: tuple[str, ...] = ()
     variant: str | None = None
     valid_at: datetime | None = None
     closure_status: str = "complete"
@@ -479,6 +521,20 @@ class ConfigurationSnapshot(FrozenModel):
 
     @model_validator(mode="after")
     def calculate_hash(self) -> ConfigurationSnapshot:
+        expected_anchor = configuration_state_anchor(
+            revision_uids=self.revision_uids,
+            relation_revision_uids=self.relation_revision_uids,
+            profile_revision_uids=self.profile_revision_uids,
+            active_deviation_revision_uids=self.active_deviation_revision_uids,
+            active_exception_revision_uids=self.active_exception_revision_uids,
+            conflict_resolution_uids=self.conflict_resolution_uids,
+            effective_model_hash=self.effective_model_hash,
+            variant=self.variant,
+            valid_at=self.valid_at,
+        )
+        if self.state_anchor and self.state_anchor != expected_anchor:
+            raise ValueError("configuration state_anchor is invalid")
+        object.__setattr__(self, "state_anchor", expected_anchor)
         expected = document_hash(self.model_dump(mode="json"), "configuration_hash")
         if self.configuration_hash and self.configuration_hash != expected:
             raise ValueError("configuration_hash is invalid")

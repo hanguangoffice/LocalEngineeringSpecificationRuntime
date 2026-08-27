@@ -116,7 +116,7 @@ def governed_candidate(
     configuration = ConfigurationSnapshot(
         configuration_uid=UIDS[20],
         parent_configuration_uid=UIDS[6],
-        git_commit=base,
+        base_commit=base,
         revision_uids=(revision.revision_uid,),
         relation_revision_uids=(),
         profile_revision_uids=(),
@@ -138,7 +138,6 @@ def governed_candidate(
         impact_report_hash=semantic_hash({"impact": 1}),
         validation_hash=semantic_hash({"validation": "pass"}),
         finding_hashes=(),
-        comment_hashes=(),
         review_policy=ReviewPolicy(
             stages=(StageQuorum(stage="review", role="technical", minimum_count=1),)
         ),

@@ -66,7 +66,7 @@
         "deviation_allowed": {"type": "boolean"},
         "non_overridable": {"type": "boolean"},
         "overrides": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
-        "approval_record_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]}
+        "approval_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]}
       }
     },
     "exception_policy": {"$ref": "common.schema.json#/$defs/canonical_value"},

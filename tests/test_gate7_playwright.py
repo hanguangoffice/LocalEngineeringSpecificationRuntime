@@ -205,8 +205,8 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
                 and item.get("configuration_uid") == result_configuration_uid
             )
             assert configuration["revision_uids"]
-            assert manifest["revision_uids"] == configuration["revision_uids"]
-            assert manifest["relation_revision_uids"] == configuration[
+            assert manifest["exact_revision_uids"] == configuration["revision_uids"]
+            assert manifest["exact_relation_revision_uids"] == configuration[
                 "relation_revision_uids"
             ]
             browser.close()

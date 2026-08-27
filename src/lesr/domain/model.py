@@ -349,6 +349,7 @@ class EffectiveModelCompiler:
         overlays: tuple[TailoringOverlay, ...] = (),
         exception_revision_uids: tuple[str, ...] = (),
         deviation_revision_uids: tuple[str, ...] = (),
+        conflict_resolution_uids: tuple[str, ...] = (),
         function_registry: tuple[str, ...] = (),
         unit_registry: tuple[ProfileUnitDefinition, ...] = (),
     ) -> EffectiveModel:
@@ -476,6 +477,7 @@ class EffectiveModelCompiler:
         overlay_uids = tuple(sorted(item.overlay_uid for item in overlays))
         exception_uids = tuple(sorted(exception_revision_uids))
         deviation_uids = tuple(sorted(deviation_revision_uids))
+        resolution_uids = tuple(sorted(conflict_resolution_uids))
         function_names = tuple(sorted(function_registry))
         profile_units = tuple(
             unit
@@ -505,6 +507,7 @@ class EffectiveModelCompiler:
             "overlays": overlay_uids,
             "exceptions": exception_uids,
             "deviations": deviation_uids,
+            "conflict_resolutions": resolution_uids,
             "workflows": workflow_uids,
             "functions": function_names,
             "units": tuple(item.model_dump(mode="json") for item in unit_names),
@@ -539,7 +542,7 @@ class EffectiveModelCompiler:
                 )
             ),
             workflow_revision_uids=workflow_uids,
-            conflict_resolutions=(),
+            conflict_resolutions=resolution_uids,
             function_registry=function_names,
             unit_registry=unit_names,
             review_policies=review_policies,

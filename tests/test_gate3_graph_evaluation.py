@@ -20,7 +20,9 @@ from lesr.domain.evaluation import (
     RuleOperator,
     SemanticEvaluator,
     TruthValue,
+    UnitRegistry,
     analyze_impact,
+    decode_runtime_value,
     evaluate_aggregate,
     evaluate_constraint,
     evaluate_path,
@@ -263,7 +265,7 @@ def test_rule_vocabulary_executes_field_relation_and_advisory_observation() -> N
     _, evaluator = graph()
     environment = ConstraintEnvironment(
         target_uid=REQ.object_uid,
-        fields=(("/priority", "high"),),
+        fields=(("/priority", decode_runtime_value("high")),),
     )
     field = evaluate_constraint(
         evaluator,
@@ -273,6 +275,7 @@ def test_rule_vocabulary_executes_field_relation_and_advisory_observation() -> N
             expected=["high", "critical"],
         ),
         environment,
+        UnitRegistry(()),
     )
     relation = evaluate_constraint(
         evaluator,
@@ -283,6 +286,7 @@ def test_rule_vocabulary_executes_field_relation_and_advisory_observation() -> N
             minimum="1",
         ),
         environment,
+        UnitRegistry(()),
     )
     advisory = evaluate_constraint(
         evaluator,
@@ -291,6 +295,7 @@ def test_rule_vocabulary_executes_field_relation_and_advisory_observation() -> N
             observation_key="ai-risk",
         ),
         environment,
+        UnitRegistry(()),
     )
     assert field.truth.value == "TRUE"
     assert relation.truth.value == "TRUE"

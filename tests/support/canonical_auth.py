@@ -18,8 +18,21 @@ from lesr.domain.governance import (
     OperationDisposition,
     ValidationRun,
 )
-from lesr.domain.profiles import ProfileCompiler, ProfileRevision
-from lesr.domain.semantic import document_hash, semantic_hash, uuid7_candidate
+from lesr.domain.model import (
+    EffectiveModelCompiler,
+    NormativeProfileRevision,
+    ProfileContextPolicy,
+    ProfileLayer,
+    ProfileReviewPolicy,
+    ProfileReviewStage,
+)
+from lesr.domain.review import ReviewPackage, ReviewPolicy, StageQuorum
+from lesr.domain.semantic import (
+    configuration_state_anchor,
+    document_hash,
+    semantic_hash,
+    uuid7_candidate,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,60 +82,6 @@ class CanonicalAuth:
             ),
             outcome="pass",
         )
-        validation_summary_hash = semantic_hash(
-            {"run": run.content_hash, "findings": []}
-        )
-        package: dict[str, object] = {
-            "schema_version": "1.0",
-            "resource_type": "review_package",
-            "package_uid": uuid7_candidate(),
-            "workspace_uid": self.workspace_uid,
-            "base_commit": actual_base,
-            "configuration_uid": self.configuration_uid,
-            "result_configuration_uid": self.configuration_uid,
-            "result_configuration_hash": semantic_hash(
-                {
-                    "configuration_uid": self.configuration_uid,
-                    "candidate_hash": candidate_hash,
-                }
-            ),
-            "candidate_hash": candidate_hash,
-            "base_revision_uids": [],
-            "candidate_revision_uids": [
-                str(item.payload["revision_uid"])
-                for item in operations
-                if item.payload.get("resource_type") == "revision"
-                and "revision_uid" in item.payload
-            ],
-            "relation_changes": [],
-            "disposition_changes": [],
-            "semantic_diff": {
-                "operation_hashes": [
-                    semantic_hash(
-                        {
-                            "operation_type": item.operation_type.value,
-                            "resource": item.payload,
-                        }
-                    )
-                    for item in operations
-                ]
-            },
-            "impact_analysis": {"test_harness": True},
-            "validation_run_uids": [run.validation_run_uid],
-            "validation_summary_hash": validation_summary_hash,
-            "open_finding_uids": [],
-            "effective_model_hash": self.model_hash,
-            "evaluation_context_hash": semantic_hash(
-                {"configuration_uid": self.configuration_uid, "candidate_hash": candidate_hash}
-            ),
-            "prepared_by_actor_uid": self.actor_uid,
-            "required_review_roles": ["technical"],
-            "minimum_approval_count": 1,
-            "preparer_independence_required": False,
-            "created_at": "2026-08-05T00:00:00Z",
-        }
-        package["package_hash"] = document_hash(package, "package_hash")
-        actual_package_hash = str(package["package_hash"])
         scope_uids = sorted(
             {
                 str(value)
@@ -140,6 +99,42 @@ class CanonicalAuth:
                 if value is not None
             }
         )
+        operation_hashes = tuple(
+            semantic_hash(
+                {
+                    "operation_type": item.operation_type.value,
+                    "resource": item.payload,
+                }
+            )
+            for item in operations
+        )
+        package_model = ReviewPackage(
+            workspace_uid=self.workspace_uid,
+            base_commit=actual_base,
+            configuration_uid=self.configuration_uid,
+            result_configuration_uid=self.configuration_uid,
+            result_configuration_hash=semantic_hash(
+                {"configuration_uid": self.configuration_uid, "candidate_hash": candidate_hash}
+            ),
+            candidate_hash=candidate_hash,
+            candidate_scope=tuple(scope_uids or (self.configuration_uid,)),
+            semantic_diff_hash=semantic_hash({"operation_hashes": operation_hashes}),
+            graph_snapshot_hash=semantic_hash({"test_harness": "graph"}),
+            context_bundle_hash=semantic_hash({"test_harness": "context"}),
+            impact_report_hash=semantic_hash({"test_harness": "impact"}),
+            validation_hash=run.content_hash,
+            finding_hashes=(),
+            review_policy=ReviewPolicy(
+                stages=(StageQuorum(stage="technical", role="technical", minimum_count=1),),
+                require_preparer_independence=False,
+                require_comment_resolution=False,
+            ),
+            effective_model_hash=self.model_hash,
+            prepared_by_actor_uid=self.actor_uid,
+            created_at="2026-08-05T00:00:00Z",
+        )
+        package = package_model.model_dump(mode="json")
+        actual_package_hash = package_model.package_hash
         approval = self.store.sign(
             self.trust,
             "technical",
@@ -288,34 +283,23 @@ def bootstrap_repository(
     repository.apply(transaction)
     profile_revision_uid = "018f0000-0000-7000-8000-000000000706"
     configuration_uid = "018f0000-0000-7000-8000-000000000704"
-    profile = ProfileRevision(
+    profile = NormativeProfileRevision(
         profile_uid="018f0000-0000-7000-8000-000000000705",
         profile_revision_uid=profile_revision_uid,
-        profile_kind="project",
-        configuration_policies=(
-            {
-                "latest_fallback": False,
-                "context": {
-                    "*": {
-                        "mandatory_predicates": [],
-                        "conditional_predicates": [],
-                        "invariant_object_uids": [],
-                        "forbidden_sensitivities": [],
-                    }
-                },
-            },
+        layer=ProfileLayer.PROJECT,
+        authority=100,
+        context_policies=(
+            ProfileContextPolicy(task_type="*"),
         ),
         review_policies=(
-            {
-                "operation": "apply_transaction",
-                "required_roles": ["technical"],
-                "minimum_approval_count": 1,
-                "require_preparer_independence": False,
-                "blocking_effects": ["block_operation", "require_deviation"],
-            },
+            ProfileReviewPolicy(
+                operation="apply_transaction",
+                stages=(ProfileReviewStage(stage="technical", role="technical"),),
+                require_preparer_independence=False,
+            ),
         ),
     )
-    effective = ProfileCompiler().compile((profile,), ())
+    effective = EffectiveModelCompiler().compile((profile,), ())
     profile_operation = SemanticOperation(
         OperationType.UPDATE_PROFILE_BINDING,
         f"canonical/profiles/{profile_revision_uid}.json",
@@ -329,7 +313,7 @@ def bootstrap_repository(
             actor_uid,
             delegation_uid,
             (profile_operation,),
-            effective.effective_model_hash,
+            effective.model_hash,
             "bootstrap-test-profile",
         )
     )
@@ -337,18 +321,26 @@ def bootstrap_repository(
         "schema_version": "1.0",
         "resource_type": "configuration_snapshot",
         "configuration_uid": configuration_uid,
-        "git_commit": repository.current_commit(),
+        "base_commit": repository.current_commit(),
         "revision_uids": [],
         "relation_revision_uids": [],
         "profile_revision_uids": [profile_revision_uid],
         "active_deviation_revision_uids": [],
         "variant": "test-harness",
         "valid_at": None,
-        "effective_model_hash": effective.effective_model_hash,
+        "effective_model_hash": effective.model_hash,
         "closure_status": "complete",
         "closure_reasons": [],
         "created_at": "2026-08-05T00:00:00Z",
     }
+    configuration["state_anchor"] = configuration_state_anchor(
+        revision_uids=(),
+        relation_revision_uids=(),
+        profile_revision_uids=(profile_revision_uid,),
+        active_deviation_revision_uids=(),
+        effective_model_hash=effective.model_hash,
+        variant="test-harness",
+    )
     repository.apply(
         _plain_transaction(
             repository,
@@ -363,7 +355,7 @@ def bootstrap_repository(
                     configuration,
                 ),
             ),
-            effective.effective_model_hash,
+            effective.model_hash,
             "bootstrap-test-configuration",
         )
     )
@@ -376,7 +368,7 @@ def bootstrap_repository(
         workspace_uid,
         configuration_uid,
         profile_revision_uid,
-        effective.effective_model_hash,
+        effective.model_hash,
     )
 
 

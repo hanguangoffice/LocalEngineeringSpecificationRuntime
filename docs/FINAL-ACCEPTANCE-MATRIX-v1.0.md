@@ -1,6 +1,6 @@
 # Design Baseline v1.0 acceptance evidence
 
-Runtime integration candidate `1.0.0rc3` implements the local, single-repository, single-user
+Runtime integration candidate `1.0.0rc4` implements the local, single-repository, single-user
 scope. This matrix records internal evidence for external review; it is not a claim of
 independent certification or final `runtime-v1.0.0` release qualification.
 
@@ -16,7 +16,7 @@ independent certification or final `runtime-v1.0.0` release qualification.
 | H. Operations/Security | Persistent local tasks, bundle backup/empty restore, dry-run migration/GC, encrypted private keys, one-shot broker, loopback token/cookie/CSRF/Origin/Host controls. | Gate 6, 7 |
 | I. Adapters/Release | Capability-filtered MCP/CLI, real LocalRuntime Web adapter, full mutation UX, security tests, and a real Edit-to-Baseline Playwright flow. External re-review remains the RC-to-final release boundary. | Gate 6, 7 |
 
-Mandatory internal gates are: baseline Manifest 81/81, 49 construction schemas and
+Mandatory internal gates are: baseline Manifest 81/81, 48 active construction schemas and
 examples, deterministic serialization, pytest, Ruff, strict mypy, HTTP/Playwright,
 fixed small performance data, and exact wheel/sdist verification. Medium and large
 performance measurements follow `docs/performance/README.md`. Claude Code and P3

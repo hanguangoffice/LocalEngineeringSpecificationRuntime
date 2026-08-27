@@ -66,7 +66,6 @@ SCHEMA_CATALOG: tuple[str, ...] = (
     "mapping-pack.schema.json",
     "merge-conflict.schema.json",
     "normative-profile.schema.json",
-    "profile.schema.json",
     "provenance.schema.json",
     "relation-assertion.schema.json",
     "relation-identity.schema.json",
