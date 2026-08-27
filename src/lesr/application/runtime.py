@@ -6,6 +6,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -35,7 +36,12 @@ from lesr.application.contracts import (
     ErrorCategory,
     WriteEnvelope,
 )
-from lesr.domain.approval import SignedApproval, TrustedActor, verify_approval
+from lesr.domain.approval import (
+    SignedApproval,
+    TrustedActor,
+    verify_approval,
+    verify_bound_approval,
+)
 from lesr.domain.catalog import CAPABILITIES
 from lesr.domain.evaluation import (
     ConstraintEnvironment,
@@ -44,11 +50,16 @@ from lesr.domain.evaluation import (
     GraphNode,
     GraphRelation,
     GraphSnapshot,
+    Quantity,
     RuleOperator,
+    RuntimeValue,
+    RuntimeValueKind,
     SemanticEvaluator,
-    TruthValue,
+    UnitDefinition,
+    UnitRegistry,
     ValidationTarget,
     analyze_impact,
+    decode_runtime_value,
     evaluate_constraint,
     evaluate_path,
     plan_context,
@@ -82,6 +93,7 @@ from lesr.domain.model import (
 )
 from lesr.domain.review import (
     ApprovalRevocation,
+    BaselineManifest,
     BaselinePreparation,
     CommentResolution,
     ConditionSatisfaction,
@@ -96,13 +108,11 @@ from lesr.domain.rules import (
     EnforcementEffect,
     EvaluationEnvironment,
     FieldSymbol,
-    Quantity,
     RuleCompiler,
     RuleDefinition,
     RuleOutcome,
-    UnitDefinition,
-    UnitRegistry,
     ValueCell,
+    detect_direct_conflict,
     evaluate_rule,
 )
 from lesr.domain.semantic import (
@@ -114,6 +124,7 @@ from lesr.domain.semantic import (
     RelationAssertion,
     Revision,
     SemanticField,
+    governance_subject_hash,
     semantic_hash,
     uuid7_candidate,
 )
@@ -889,7 +900,10 @@ class LocalRuntimeService:
                 impact_report_hash=impact.report_hash,
                 validation_hash=str(validation["validation_hash"]),
                 finding_hashes=tuple(str(item) for item in validation["finding_hashes"]),
-                comment_hashes=(),
+                governance_finding_uids=tuple(
+                    str(item)
+                    for item in validation["operation_decision"]["governance_finding_uids"]
+                ),
                 review_policy=policy,
                 effective_model_hash=submission.workspace.effective_model_hash,
                 prepared_by_actor_uid=request.actor,
@@ -988,6 +1002,10 @@ class LocalRuntimeService:
                 satisfactions,
                 revocations,
                 now=self._evaluation_time(request.operation),
+                findings=tuple(
+                    ValidationFinding.model_validate(item)
+                    for item in self.review_evidence[package_uid]["validation"]["findings"]
+                ),
             )
 
             if not decision.allowed:
@@ -1077,7 +1095,7 @@ class LocalRuntimeService:
             package_uid = str(request.operation["package_uid"])
             package = self.reviews[package_uid]
             comment = ReviewComment.model_validate(
-                dict(request.operation["comment"]) | {"package_hash": package.subject_hash}
+                dict(request.operation["comment"]) | {"package_hash": package.package_hash}
             )
             if not request.dry_run:
                 self.review_records.setdefault(request.workspace_uid, []).append(
@@ -1204,7 +1222,10 @@ class LocalRuntimeService:
                 impact_report_hash=impact.report_hash,
                 validation_hash=str(validation["validation_hash"]),
                 finding_hashes=tuple(str(item) for item in validation["finding_hashes"]),
-                comment_hashes=(),
+                governance_finding_uids=tuple(
+                    str(item)
+                    for item in validation["operation_decision"]["governance_finding_uids"]
+                ),
                 review_policy=policy,
                 effective_model_hash=str(configuration["effective_model_hash"]),
                 prepared_by_actor_uid=request.actor,
@@ -1288,35 +1309,29 @@ class LocalRuntimeService:
                 (),
                 (),
                 now=self._evaluation_time(request.operation),
+                findings=tuple(
+                    ValidationFinding.model_validate(item)
+                    for item in evidence["validation"]["findings"]
+                ),
             )
             if not decision.allowed:
                 raise ApprovalError("; ".join(decision.reasons))
             self.repository._verify_review_evidence(package, evidence)
             configuration = self._configuration(preparation.configuration_uid)
-            manifest: dict[str, Any] = {
-                "schema_version": "1.0",
-                "resource_type": "baseline_manifest",
-                "baseline_uid": uuid7_candidate(),
-                "git_commit": preparation.state_commit,
-                "revision_uids": list(configuration.get("revision_uids", ())),
-                "relation_revision_uids": list(
+            manifest = BaselineManifest(
+                state_commit=preparation.state_commit,
+                configuration_uid=preparation.configuration_uid,
+                exact_revision_uids=tuple(configuration.get("revision_uids", ())),
+                exact_relation_revision_uids=tuple(
                     configuration.get("relation_revision_uids", ())
                 ),
-                "profile_revision_uids": list(
-                    configuration.get("profile_revision_uids", ())
-                ),
-                "configuration_uid": preparation.configuration_uid,
-                "effective_model_hash": package.effective_model_hash,
-                "deviation_revision_uids": list(
+                effective_model_hash=package.effective_model_hash,
+                deviation_revision_uids=tuple(
                     configuration.get("active_deviation_revision_uids", ())
                 ),
-                "external_references": [],
-                "evidence_revision_uids": [],
-                "created_at": self._evaluation_time(request.operation)
-                .isoformat()
-                .replace("+00:00", "Z"),
-            }
-            manifest["manifest_hash"] = semantic_hash(manifest)
+                review_package_hash=package.package_hash,
+                created_at=self._evaluation_time(request.operation),
+            ).model_dump(mode="json")
             operations = [
                 SemanticOperation(
                     OperationType.CREATE_BASELINE,
@@ -1911,7 +1926,7 @@ class LocalRuntimeService:
             schemas = SchemaCatalog()
             schemas.validate("configuration.schema.json", configuration)
             schemas.validate("approval-attestation.schema.json", approval)
-            if configuration["git_commit"] != self.base:
+            if configuration["base_commit"] != self.base:
                 raise ValueError("initial configuration must pin the exact Canonical base")
             model = self._effective_model_from_configuration_value(configuration)
             if model.model_hash != configuration["effective_model_hash"]:
@@ -2418,11 +2433,13 @@ class LocalRuntimeService:
 
         return ConfigurationSnapshot(
             parent_configuration_uid=current.configuration_uid,
-            git_commit=submission.workspace.base_commit,
+            base_commit=submission.workspace.base_commit,
             revision_uids=tuple(sorted(selected_revisions.values())),
             relation_revision_uids=tuple(sorted(selected_relations.values())),
             profile_revision_uids=current.profile_revision_uids,
             active_deviation_revision_uids=current.active_deviation_revision_uids,
+            active_exception_revision_uids=current.active_exception_revision_uids,
+            conflict_resolution_uids=current.conflict_resolution_uids,
             variant=current.variant,
             valid_at=current.valid_at,
             effective_model_hash=current.effective_model_hash,
@@ -2477,6 +2494,8 @@ class LocalRuntimeService:
                 )
             else:
                 compiled_rules.append((rule, compiled.ast))
+
+        conflicted_rule_uids = self._conflicted_rule_uids(configuration, compiled_rules)
 
         observations: list[ValidationObservation] = []
         findings: list[ValidationFinding] = []
@@ -2547,13 +2566,23 @@ class LocalRuntimeService:
                 if transition_operations and revision.object_uid in evaluator.nodes
                 else None
             )
-            fields = {
+            applicability_fields = {
                 self._rule_path(field.path): ValueCell.present(
                     self._quantity(field.value) or field.value
                 )
                 for field in revision.fields
             }
+            constraint_fields = tuple(
+                (
+                    self._rule_path(field.path),
+                    decode_runtime_value(field.value),
+                )
+                for field in revision.fields
+            )
             active_deviations = self._active_deviation_rules(
+                configuration, revision, compiled_rules, evaluation_time
+            )
+            active_exceptions = self._active_exception_rules(
                 configuration, revision, compiled_rules, evaluation_time
             )
             for rule, ast in compiled_rules:
@@ -2576,72 +2605,47 @@ class LocalRuntimeService:
                     )
                     for predicate in predicates
                 }
+                base_constraint_environment = ConstraintEnvironment(
+                    target_uid=revision.object_uid,
+                    fields=constraint_fields,
+                    relation_counts=tuple(sorted(relation_counts.items())),
+                    evidence_kinds=tuple(sorted(evidence_kinds)),
+                    lifecycle_transition=transition,
+                    human_attestations=tuple(sorted(attestations)),
+                )
+
                 evaluated = evaluate_rule(
                     ast,
                     EvaluationEnvironment(
                         target_kind=revision.kind,
-                        fields=fields,
+                        fields=applicability_fields,
                         relation_counts=relation_counts,
                         relation_values=relation_values,
                         operation="apply_transaction",
                         active_deviation_rule_uids=frozenset(active_deviations),
+                        active_exception_rule_uids=active_exceptions,
+                        conflicted_rule_uids=conflicted_rule_uids,
                         evidence_kinds=frozenset(evidence_kinds),
                         lifecycle_transition=transition,
                         human_attestations=frozenset(attestations),
                     ),
-                    units,
+                    partial(
+                        self._evaluate_target_constraint,
+                        evaluator,
+                        revision.object_uid,
+                        base_constraint_environment,
+                        units,
+                    ),
                 )
-                semantic_results = []
-                for expression in ast.constraints:
-                    aggregate_values = self._aggregate_values(
-                        evaluator, revision.object_uid, expression
-                    )
-                    semantic_results.append(
-                        evaluate_constraint(
-                            evaluator,
-                            expression,
-                            ConstraintEnvironment(
-                                target_uid=revision.object_uid,
-                                fields=tuple(
-                                    (self._rule_path(item.path), item.value)
-                                    for item in revision.fields
-                                ),
-                                aggregate_values=aggregate_values,
-                                evidence_kinds=tuple(sorted(evidence_kinds)),
-                                lifecycle_transition=transition,
-                                human_attestations=tuple(sorted(attestations)),
-                            ),
-                        )
-                    )
-                if evaluated.outcome not in {
-                    RuleOutcome.NOT_APPLICABLE,
-                    RuleOutcome.INDETERMINATE,
-                    RuleOutcome.SUPPRESSED_BY_DEVIATION,
-                }:
-                    truths = {item.truth for item in semantic_results}
-                    if TruthValue.FALSE in truths:
-                        evaluated = evaluated.__class__(
-                            RuleOutcome.FAIL,
-                            evaluated.applicability,
-                            evaluated.constraint,
-                            evaluated.enforcement,
-                        )
-                    elif TruthValue.INDETERMINATE in truths:
-                        evaluated = evaluated.__class__(
-                            RuleOutcome.INDETERMINATE,
-                            evaluated.applicability,
-                            evaluated.constraint,
-                            evaluated.enforcement,
-                        )
                 observation_uid = self._stable_uuid7(
                     f"{run_uid}:{rule.rule_revision_uid}:{revision.revision_uid}:observation",
                     evaluation_time,
                 )
-                explanation: Any = [item.explanation for item in semantic_results] or [
-                    evaluated.constraint.reason
+                explanation: Any = (
+                    [item.reason for item in evaluated.constraint.children]
                     if evaluated.constraint is not None
-                    else evaluated.applicability.reason
-                ]
+                    else [evaluated.applicability.reason]
+                )
                 observations.append(
                     ValidationObservation(
                         observation_uid=observation_uid,
@@ -2857,6 +2861,26 @@ class LocalRuntimeService:
             ) in generic_targets:
                 if target_type is not ast.target_type or target_kind != ast.target_kind:
                     continue
+                generic_constraint_environment = ConstraintEnvironment(
+                    target_uid=target_uid,
+                    fields=tuple(
+                        (
+                            path,
+                            decode_runtime_value(
+                                cast_value.value,
+                                kind_hint=(
+                                    None
+                                    if cast_value.state.value == "value"
+                                    else RuntimeValueKind(cast_value.state.value)
+                                ),
+                            ),
+                        )
+                        for path, cast_value in fields.items()
+                    ),
+                    evidence_kinds=tuple(sorted(generic_evidence_kinds)),
+                    lifecycle_transition=transition,
+                    human_attestations=tuple(sorted(generic_attestations)),
+                )
                 evaluated = evaluate_rule(
                     ast,
                     EvaluationEnvironment(
@@ -2867,8 +2891,15 @@ class LocalRuntimeService:
                         evidence_kinds=generic_evidence_kinds,
                         lifecycle_transition=transition,
                         human_attestations=generic_attestations,
+                        conflicted_rule_uids=conflicted_rule_uids,
                     ),
-                    units,
+                    partial(
+                        self._evaluate_target_constraint,
+                        evaluator,
+                        target_uid,
+                        generic_constraint_environment,
+                        units,
+                    ),
                 )
                 observation_uid = self._stable_uuid7(
                     f"{run_uid}:{rule.rule_revision_uid}:{target_uid}:observation",
@@ -3166,12 +3197,23 @@ class LocalRuntimeService:
             for value in self.documents
             if value.get("resource_type") == "revision"
         }
-        approval_records = {
-            str(value["record_uid"])
+        approvals = {
+            str(value["approval_uid"]): SignedApproval.model_validate(value)
             for value in self.documents
-            if value.get("resource_type") == "immutable_record"
-            and value.get("record_type") in {"approval", "deviation_approval"}
+            if value.get("resource_type") == "approval_attestation"
         }
+        trust_by_key = {
+            str(value["key_uid"]): TrustedActor.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "trusted_actor"
+        }
+        revoked = frozenset(
+            str(value["approval_uid"])
+            for value in self.documents
+            if value.get("resource_type") == "approval_revocation"
+            and datetime.fromisoformat(str(value["revoked_at"])) <= evaluation_time
+        )
+        effective_model_hash = str(configuration["effective_model_hash"])
         active: dict[str, str] = {}
         for deviation_uid in configuration.get("active_deviation_revision_uids", ()):
             value = revisions.get(str(deviation_uid))
@@ -3182,8 +3224,10 @@ class LocalRuntimeService:
                 for item in value.get("fields", ())
                 if isinstance(item, dict) and isinstance(item.get("path"), str)
             }
-            if str(fields.get("/approval_record_uid", "")) not in approval_records:
-                raise ValueError(f"active deviation lacks an approval record: {deviation_uid}")
+            approval_uid = str(fields.get("/approval_uid", ""))
+            approval = approvals.get(approval_uid)
+            if approval is None:
+                raise ValueError(f"active deviation lacks a signed approval: {deviation_uid}")
             valid_until = fields.get("/valid_until")
             if not isinstance(valid_until, str):
                 raise TypeError(f"active deviation lacks expiration: {deviation_uid}")
@@ -3205,8 +3249,157 @@ class LocalRuntimeService:
                 raise ValueError(
                     f"deviation does not reference an effective relaxable Rule: {deviation_uid}"
                 )
+            rule, _ = selected
+            trust = trust_by_key.get(approval.key_uid)
+            if trust is None:
+                raise ValueError(f"deviation approval trust is unavailable: {deviation_uid}")
+            subject_hash = governance_subject_hash(Revision.model_validate(value))
+            expected_scope: dict[str, object] = {
+                "deviation_revision_uid": str(deviation_uid),
+                "deviation_hash": subject_hash,
+                "rule_revision_uid": rule_revision_uid,
+                "subject_uid": str(fields["/subject_uid"]),
+            }
+            verify_bound_approval(
+                approval,
+                trust,
+                package_hash=subject_hash,
+                effective_model_hash=effective_model_hash,
+                approval_type="deviation",
+                scope=expected_scope,
+                allowed_roles=frozenset(rule.deviation_policy.required_approval_roles),
+                revoked_approval_uids=revoked,
+                now=evaluation_time,
+            )
             active[selected[0].rule_uid] = str(deviation_uid)
         return active
+
+    def _active_exception_rules(
+        self,
+        configuration: dict[str, Any],
+        revision: Revision,
+        compiled_rules: list[tuple[RuleDefinition, Any]],
+        evaluation_time: datetime,
+    ) -> frozenset[str]:
+        """Resolve only cryptographically approved, exact-subject Rule exceptions."""
+
+        rules_by_revision = {
+            rule.rule_revision_uid: rule for rule, _ in compiled_rules
+        }
+        revisions = {
+            str(value["revision_uid"]): value
+            for value in self.documents
+            if value.get("resource_type") == "revision"
+        }
+        approvals = {
+            str(value["approval_uid"]): SignedApproval.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "approval_attestation"
+        }
+        trust_by_key = {
+            str(value["key_uid"]): TrustedActor.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "trusted_actor"
+        }
+        revoked = frozenset(
+            str(value["approval_uid"])
+            for value in self.documents
+            if value.get("resource_type") == "approval_revocation"
+            and datetime.fromisoformat(str(value["revoked_at"])) <= evaluation_time
+        )
+        active: set[str] = set()
+        for exception_uid in configuration.get("active_exception_revision_uids", ()):
+            value = revisions.get(str(exception_uid))
+            if value is None or value.get("kind") != "exception":
+                raise ValueError(f"active exception is unavailable: {exception_uid}")
+            fields = {
+                str(item["path"]): item.get("value")
+                for item in value.get("fields", ())
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+            if str(fields.get("/subject_uid", "")) not in {
+                revision.object_uid,
+                revision.revision_uid,
+            }:
+                continue
+            rule_revision_uid = str(fields.get("/rule_revision_uid", ""))
+            rule = rules_by_revision.get(rule_revision_uid)
+            if rule is None:
+                raise ValueError(
+                    f"exception does not reference an effective Rule: {exception_uid}"
+                )
+            policy = rule.exception_policy
+            if not isinstance(policy, dict) or not bool(policy.get("allowed", False)):
+                raise ValueError(f"Rule does not allow exceptions: {rule_revision_uid}")
+            valid_until = fields.get("/valid_until")
+            if not isinstance(valid_until, str) or datetime.fromisoformat(valid_until) <= evaluation_time:
+                raise ValueError(f"active exception is expired: {exception_uid}")
+            approval = approvals.get(str(fields.get("/approval_uid", "")))
+            if approval is None:
+                raise ValueError(f"active exception lacks a signed approval: {exception_uid}")
+            trust = trust_by_key.get(approval.key_uid)
+            if trust is None:
+                raise ValueError(f"exception approval trust is unavailable: {exception_uid}")
+            subject_hash = governance_subject_hash(Revision.model_validate(value))
+            expected_scope: dict[str, object] = {
+                "exception_revision_uid": str(exception_uid),
+                "exception_hash": subject_hash,
+                "rule_revision_uid": rule_revision_uid,
+                "subject_uid": str(fields["/subject_uid"]),
+            }
+            raw_roles = policy.get("required_approval_roles", [])
+            if not isinstance(raw_roles, list):
+                raise TypeError("exception approval roles must be a list")
+            roles = frozenset(str(item) for item in raw_roles)
+            verify_bound_approval(
+                approval,
+                trust,
+                package_hash=subject_hash,
+                effective_model_hash=str(configuration["effective_model_hash"]),
+                approval_type="exception",
+                scope=expected_scope,
+                allowed_roles=roles,
+                revoked_approval_uids=revoked,
+                now=evaluation_time,
+            )
+            active.add(rule.rule_uid)
+        return frozenset(active)
+
+    def _conflicted_rule_uids(
+        self,
+        configuration: dict[str, Any],
+        compiled_rules: list[tuple[RuleDefinition, Any]],
+    ) -> frozenset[str]:
+        """Fail closed on normative Rule conflicts unless an exact resolution is selected."""
+
+        selected_resolution_uids = {
+            str(item) for item in configuration.get("conflict_resolution_uids", ())
+        }
+        resolutions: set[frozenset[str]] = set()
+        for value in self.documents:
+            if (
+                value.get("resource_type") != "immutable_record"
+                or value.get("record_type") != "rule_conflict_resolution"
+                or str(value.get("record_uid")) not in selected_resolution_uids
+            ):
+                continue
+            record = ImmutableRecord.model_validate(value)
+            left = record.field_value("/left_rule_revision_uid")
+            right = record.field_value("/right_rule_revision_uid")
+            if isinstance(left, str) and isinstance(right, str):
+                resolutions.add(frozenset((left, right)))
+        conflicted: set[str] = set()
+        for index, (left_rule, left_ast) in enumerate(compiled_rules):
+            for right_rule, right_ast in compiled_rules[index + 1 :]:
+                if not detect_direct_conflict(left_ast, right_ast):
+                    continue
+                pair = frozenset(
+                    (left_rule.rule_revision_uid, right_rule.rule_revision_uid)
+                )
+                if pair in resolutions:
+                    continue
+                conflicted.update((left_rule.rule_uid, right_rule.rule_uid))
+        return frozenset(conflicted)
 
     def _relation_values(
         self,
@@ -3253,7 +3446,7 @@ class LocalRuntimeService:
         evaluator: SemanticEvaluator,
         object_uid: str,
         expression: ConstraintExpression,
-    ) -> tuple[str | bool | None, ...]:
+    ) -> tuple[RuntimeValue, ...]:
         aggregate_operators = {
             RuleOperator.AGGREGATE_COUNT,
             RuleOperator.AGGREGATE_SUM,
@@ -3283,12 +3476,14 @@ class LocalRuntimeService:
         else:
             targets = ()
         if expression.operator is RuleOperator.AGGREGATE_COUNT:
-            return tuple("1" for _ in targets)
-        values: list[str | bool | None] = []
+            return tuple(decode_runtime_value("1") for _ in targets)
+        values: list[RuntimeValue] = []
         for target_uid in targets:
             node = evaluator.nodes.get(target_uid)
             if node is None or expression.field_path is None:
-                values.append(None)
+                values.append(
+                    decode_runtime_value(None, kind_hint=RuntimeValueKind.UNKNOWN)
+                )
                 continue
             value = next(
                 (
@@ -3299,14 +3494,37 @@ class LocalRuntimeService:
                 None,
             )
             if isinstance(value, bool):
-                values.append(value)
+                values.append(decode_runtime_value(value))
             elif isinstance(value, (int, str)):
-                values.append(str(value))
-            elif (quantity := self._quantity(value)) is not None:
-                values.append(str(quantity.value))
+                values.append(decode_runtime_value(str(value)))
+            elif self._quantity(value) is not None:
+                values.append(decode_runtime_value(value))
             else:
-                values.append(None)
+                values.append(
+                    decode_runtime_value(None, kind_hint=RuntimeValueKind.UNKNOWN)
+                )
         return tuple(values)
+
+    def _evaluate_target_constraint(
+        self,
+        evaluator: SemanticEvaluator,
+        target_uid: str,
+        environment: ConstraintEnvironment,
+        units: UnitRegistry,
+        expression: ConstraintExpression,
+    ) -> Any:
+        return evaluate_constraint(
+            evaluator,
+            expression,
+            environment.model_copy(
+                update={
+                    "aggregate_values": self._aggregate_values(
+                        evaluator, target_uid, expression
+                    )
+                }
+            ),
+            units,
+        )
 
     @staticmethod
     def _rule_path(path: str) -> str:
@@ -3660,6 +3878,14 @@ class LocalRuntimeService:
             deviation_revision_uids=tuple(
                 str(item)
                 for item in configuration.get("active_deviation_revision_uids", ())
+            ),
+            exception_revision_uids=tuple(
+                str(item)
+                for item in configuration.get("active_exception_revision_uids", ())
+            ),
+            conflict_resolution_uids=tuple(
+                str(item)
+                for item in configuration.get("conflict_resolution_uids", ())
             ),
         )
         if model.conflicts:

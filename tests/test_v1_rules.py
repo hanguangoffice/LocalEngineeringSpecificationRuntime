@@ -4,6 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from lesr.adapters.schemas import SchemaCatalog
+from lesr.domain.evaluation import Quantity, UnitDefinition, UnitRegistry
 from lesr.domain.rules import (
     AllOf,
     AnyOf,
@@ -22,7 +23,6 @@ from lesr.domain.rules import (
     KindIs,
     NormativeModality,
     Not,
-    Quantity,
     QuantityMaximum,
     RelationMinimum,
     RuleCompiler,
@@ -30,12 +30,10 @@ from lesr.domain.rules import (
     RuleFixtureDefinition,
     RuleOutcome,
     RuleSourceText,
-    UnitDefinition,
-    UnitRegistry,
     ValueCell,
     ValueState,
     detect_direct_conflict,
-    evaluate_rule,
+    evaluate_fixture_rule,
     project_to_rego,
     project_to_shacl,
 )
@@ -280,7 +278,7 @@ def test_external_evaluation_kind_is_preserved_and_requires_evidence() -> None:
     )
     assert result.passed and result.ast is not None
     assert result.ast.evaluation.kind == "external_tool"
-    without_evidence = evaluate_rule(result.ast, environment(), UNITS)
+    without_evidence = evaluate_fixture_rule(result.ast, environment(), UNITS)
     assert without_evidence.outcome is RuleOutcome.NOT_EVALUATED
     incomplete = definition.model_copy(update={"fixtures": definition.fixtures[:1]})
     assert not RuleCompiler({"safety_level": str}, UNITS).compile(incomplete).passed

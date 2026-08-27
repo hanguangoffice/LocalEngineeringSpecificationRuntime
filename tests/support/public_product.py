@@ -18,7 +18,7 @@ from lesr.domain.model import (
     ProfileReviewPolicy,
     ProfileReviewStage,
 )
-from lesr.domain.semantic import CoreResourceClass, document_hash
+from lesr.domain.semantic import CoreResourceClass, configuration_state_anchor, document_hash
 from tests.test_v1_rules import source
 
 
@@ -190,7 +190,7 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
         "schema_version": "1.0",
         "resource_type": "configuration_snapshot",
         "configuration_uid": configuration_uid,
-        "git_commit": domain.base,
+        "base_commit": domain.base,
         "revision_uids": [],
         "relation_revision_uids": [],
         "profile_revision_uids": [profile.profile_revision_uid],
@@ -202,6 +202,14 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
         "closure_reasons": [],
         "created_at": "2026-08-05T00:00:00Z",
     }
+    configuration["state_anchor"] = configuration_state_anchor(
+        revision_uids=(),
+        relation_revision_uids=(),
+        profile_revision_uids=(profile.profile_revision_uid,),
+        active_deviation_revision_uids=(),
+        effective_model_hash=model.model_hash,
+        variant="public-product",
+    )
     package_hash, model_hash, scope = domain.initial_configuration_binding(
         domain.base, configuration
     )

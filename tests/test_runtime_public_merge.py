@@ -127,7 +127,6 @@ def test_public_review_records_keep_package_immutable_and_survive_restart(tmp_pa
         impact_report_hash="sha256:impact",
         validation_hash="sha256:validation",
         finding_hashes=(),
-        comment_hashes=(),
         review_policy=ReviewPolicy(
             stages=(StageQuorum(stage="apply", role="technical", minimum_count=1),)
         ),

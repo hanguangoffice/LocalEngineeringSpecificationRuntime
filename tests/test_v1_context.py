@@ -37,7 +37,7 @@ def revisions() -> tuple[RevisionDescriptor, ...]:
 def configuration() -> ConfigurationDefinition:
     return ConfigurationDefinition(
         configuration_uid="CFG-1",
-        git_commit="a" * 40,
+        base_commit="a" * 40,
         memberships=(
             ConfigurationMembership("REQ", "REQ@2"),
             ConfigurationMembership("DES", "DES@1"),
