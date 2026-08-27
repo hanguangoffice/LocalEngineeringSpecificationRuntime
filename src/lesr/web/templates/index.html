@@ -1,116 +1,142 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>LESR / Engineering Authority Console</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23d9ff43'/%3E%3Ctext x='10' y='23' font-family='serif' font-weight='700' font-size='20'%3EL%3C/text%3E%3C/svg%3E">
+  <title>LESR · 工程规范工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f4d3a'/%3E%3Ctext x='10' y='23' font-family='serif' font-weight='700' font-size='20' fill='%23f7f3e8'%3EL%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/lesr.css">
 </head>
 <body>
-  <div class="noise" aria-hidden="true"></div>
+  <div class="paper-grain" aria-hidden="true"></div>
   <header class="masthead">
-    <a class="wordmark" href="#overview" data-panel-link="overview" aria-label="LESR overview">
-      <span class="mark">L</span><span><b>LESR</b><small>ENGINEERING AUTHORITY / LOCAL</small></span>
+    <a class="wordmark" href="#overview" data-panel-link="overview" aria-label="返回工作台">
+      <span class="mark">L</span><span><b>LESR</b><small>工程规范工作台</small></span>
     </a>
-    <div class="authority-line">
-      <span class="authority-lamp" aria-hidden="true"></span>
-      <span id="authority-state">AUTHORITY CHECKING</span>
-      <code>{{ short_commit }}</code>
-    </div>
-    <button class="lock" id="lock-button" type="button" aria-label="LOCK SESSION">LOCK / 15:00</button>
+    <div class="project-heading"><small>当前工程</small><strong id="project-name">正在读取…</strong></div>
+    <div class="session-state"><i></i><span id="authority-state">正在连接</span></div>
+    <button class="lock" id="lock-button" type="button" aria-label="锁定会话">锁定</button>
   </header>
 
   <div class="app-shell">
-    <nav class="rail" aria-label="Runtime sections">
-      <div class="rail-index">RUNTIME <b>1.0</b></div>
-      <button class="nav-item active" data-panel="overview"><span>01</span><b>Authority</b></button>
-      <button class="nav-item" data-panel="explore"><span>02</span><b>Explore</b></button>
-      <button class="nav-item" data-panel="context"><span>03</span><b>Context</b></button>
-      <button class="nav-item" data-panel="workspace"><span>04</span><b>Working Copy</b></button>
-      <button class="nav-item" data-panel="review"><span>05</span><b>Governance</b></button>
-      <button class="nav-item" data-panel="baseline"><span>06</span><b>Baseline</b></button>
-      <button class="nav-item" data-panel="tasks"><span>07</span><b>Tasks</b></button>
-      <button class="nav-item" data-panel="maintenance"><span>08</span><b>Maintenance</b></button>
-      <div class="rail-note"><i></i> LOOPBACK ONLY<br>NO HIDDEN CURRENT<br>NO NETWORK RESOLUTION</div>
+    <nav class="rail" aria-label="主要功能">
+      <p class="rail-label">工作</p>
+      <button class="nav-item active" data-panel="overview"><i>⌂</i><b>工作台</b></button>
+      <button class="nav-item" data-panel="explore"><i>⌕</i><b>查找规范</b></button>
+      <button class="nav-item" data-panel="context"><i>◎</i><b>相关资料</b></button>
+      <button class="nav-item" data-panel="workspace"><i>＋</i><b>发起变更</b></button>
+      <button class="nav-item" data-panel="review"><i>✓</i><b>审阅与批准</b></button>
+      <button class="nav-item" data-panel="baseline"><i>◇</i><b>发布基线</b></button>
+      <p class="rail-label rail-label-secondary">系统</p>
+      <button class="nav-item" data-panel="tasks"><i>↻</i><b>后台任务</b></button>
+      <button class="nav-item" data-panel="maintenance"><i>⌁</i><b>维护</b></button>
+      <button class="nav-item audit-link" data-panel="audit"><i>⋯</i><b>审计详情</b></button>
+      <div class="rail-note"><i></i><span>数据仅保存在本机</span></div>
     </nav>
 
     <main>
-      <section class="panel active" id="overview" data-panel-index="01">
-        <div class="eyebrow"><span>01</span> CANONICAL AUTHORITY</div>
-        <div class="hero-grid">
-          <div>
-            <p class="kicker">LOCAL ENGINEERING SPECIFICATION RUNTIME</p>
-            <h1 aria-label="Engineering state, made accountable.">Make every engineering<br><em>decision inspectable.</em></h1>
-            <p class="lede">One configuration. One effective model. One immutable graph snapshot. One atomic Git authority point.</p>
+      <section class="panel active" id="overview">
+        <div class="panel-heading">
+          <p class="eyebrow">今日工作</p>
+          <h1>处理工程内容，<br><em>不需要理解系统标识。</em></h1>
+          <p class="lede">查找规范、说明变更、查看影响，再由合适的人批准。版本、标识和校验凭据由 LESR 自动处理。</p>
+        </div>
+        <div class="welcome-grid">
+          <article class="current-config-card">
+            <small>当前选择</small><strong id="overview-configuration">尚未选择配置</strong>
+            <p id="overview-configuration-note">进入“发起变更”选择本次工作的工程配置。</p>
+            <button type="button" data-go="workspace">开始一次变更 <span>→</span></button>
+          </article>
+          <div class="status-grid" id="health-grid">
+            <article class="metric"><i class="status-dot"></i><div><small>工程状态</small><strong id="health-canonical">读取中</strong></div></article>
+            <article class="metric"><i class="status-dot"></i><div><small>资料索引</small><strong id="health-projection">读取中</strong></div></article>
+            <article class="metric"><i class="status-dot"></i><div><small>规范版本</small><strong id="health-manifest">读取中</strong></div></article>
+            <article class="metric"><i class="status-dot accent"></i><div><small>未完成变更</small><strong id="health-workspaces">0</strong></div></article>
           </div>
-          <aside class="state-plate" aria-label="Authority state">
-            <span class="plate-label">CURRENT AUTHORITY</span>
-            <strong id="plate-authority">CHECKING</strong>
-            <code>{{ canonical_commit }}</code>
-            <div class="plate-axis"><i></i><span>DETERMINISTIC / OFFLINE</span></div>
-          </aside>
         </div>
-        <div class="status-grid" id="health-grid">
-          <article class="metric" data-signal="canonical"><small>CANONICAL REF</small><strong id="health-canonical">—</strong><p>Authoritative Git state</p></article>
-          <article class="metric" data-signal="projection"><small>PROJECTION</small><strong id="health-projection">—</strong><p>Disposable, reconstructable</p></article>
-          <article class="metric" data-signal="manifest"><small>CONTRACT</small><strong id="health-manifest">—</strong><p>Repository Manifest</p></article>
-          <article class="metric metric-accent" data-signal="work"><small>OPEN WORK</small><strong id="health-workspaces">0</strong><p>Isolated Workspaces</p></article>
+        <div class="quick-actions" aria-label="常用操作">
+          <button type="button" data-go="explore"><span>01</span><b>查找一条规范</b><small>按 Human Key 或关键词搜索</small></button>
+          <button type="button" data-go="workspace"><span>02</span><b>说明一次变更</b><small>系统自动建立工作副本</small></button>
+          <button type="button" data-go="review"><span>03</span><b>处理待批准事项</b><small>聚焦范围、影响和理由</small></button>
         </div>
-        <div class="semantic-flow" aria-label="Governed semantic transaction">
+        <div class="semantic-flow" aria-label="变更流程">
           <div class="flow-track" id="flow-track"></div>
-          <div class="flow-step active" data-flow="0"><i>01</i><b>RESOLVE</b><span>Exact state</span></div>
-          <div class="flow-step" data-flow="1"><i>02</i><b>CONTEXT</b><span>Mandatory set</span></div>
-          <div class="flow-step" data-flow="2"><i>03</i><b>EDIT</b><span>Working copy</span></div>
-          <div class="flow-step" data-flow="3"><i>04</i><b>VALIDATE</b><span>Operation decision</span></div>
-          <div class="flow-step" data-flow="4"><i>05</i><b>REVIEW</b><span>Human quorum</span></div>
-          <div class="flow-step" data-flow="5"><i>06</i><b>APPLY</b><span>Atomic ref</span></div>
+          <div class="flow-step active" data-flow="0"><i>1</i><b>说明变更</b><span>写清楚改什么、为什么</span></div>
+          <div class="flow-step" data-flow="1"><i>2</i><b>系统校验</b><span>检查规则与影响</span></div>
+          <div class="flow-step" data-flow="2"><i>3</i><b>人工批准</b><span>确认范围与理由</span></div>
+          <div class="flow-step" data-flow="3"><i>4</i><b>保存版本</b><span>安全写入工程</span></div>
         </div>
       </section>
 
-      <section class="panel" id="explore" data-panel-index="02">
-        <div class="eyebrow"><span>02</span> RESOLUTION / GRAPH</div><h2>Resolve without guessing.</h2>
-        <p class="section-copy">Every result identifies an exact resource. Graph focus never changes the Canonical State.</p>
-        <form class="command-form" id="query-form"><label>Structured query<input name="text" placeholder="Human Key, UID, title" autocomplete="off"></label><button aria-label="QUERY">RUN QUERY <i>↗</i></button></form>
-        <div class="explore-grid"><div class="result-list" id="query-results"><div class="empty-line">No query executed.</div></div><div class="graph-stage" id="graph-stage"><div class="graph-ring ring-a"></div><div class="graph-ring ring-b"></div><div class="graph-node node-a"></div><div class="graph-node node-b"></div><div class="graph-core" id="graph-core"><small>CONFIGURATION</small><b>BOUND</b><small>GRAPH</small></div><p>SELECT A RESULT / INSPECT EXACT REVISION</p></div></div>
-      </section>
-
-      <section class="panel" id="context" data-panel-index="03">
-        <div class="eyebrow"><span>03</span> CONTEXT CONTRACT</div><h2>Mandatory first.<br>Similarity second.</h2>
-        <div class="two-column"><form class="stack-form framed" id="context-form"><label>Configuration UID<input name="configuration_uid" required></label><label>Target UID<input name="target_uid" required></label><label>Evaluation time / UTC<input name="evaluation_time" placeholder="2026-08-10T00:00:00Z" required></label><label>Task type<select name="task_type"><option>requirement_change</option><option>test_design</option><option>deviation_review</option><option>can_analysis</option><option>mqtt_change</option></select></label><button>BUILD MANIFEST <i>↗</i></button></form><div class="contract-legend"><p><i class="legend-mandatory"></i><b>MANDATORY</b><span>Relation, rule, operation and policy derived.</span></p><p><i class="legend-support"></i><b>SUPPORTING</b><span>FTS may assist, never promote.</span></p><p><i class="legend-unknown"></i><b>UNKNOWN</b><span>Incompleteness remains explicit.</span></p></div></div>
-        <pre class="output" id="context-output">No Context Manifest built.</pre>
-      </section>
-
-      <section class="panel" id="workspace" data-panel-index="04">
-        <div class="eyebrow"><span>04</span> CANDIDATE STATE</div><h2>Edit freely.<br>Submit immutably.</h2>
-        <div class="workbench">
-          <form class="stack-form framed" id="workspace-open-form" data-stage="1"><h3><span>01</span> OPEN</h3><label>Canonical base<input name="expected_base" value="{{ canonical_commit }}" required></label><label>Configuration UID<input name="configuration_uid" required></label><label>Actor UID<input name="actor" required></label><label>Delegation UID<input name="delegation_uid" required></label><button>OPEN ISOLATED WORKSPACE</button></form>
-          <form class="stack-form framed" id="workspace-edit-form" data-stage="2"><h3><span>02</span> EDIT</h3><label>Human Key<input name="human_key" required></label><label>Kind<input name="kind" required></label><label>Statement / body<textarea name="statement" required></textarea></label><label>Object UID / optional<input name="object_uid"></label><button>CREATE WORKING COPY</button></form>
-          <form class="stack-form framed" id="workspace-submit-form" data-stage="3"><h3><span>03</span> FREEZE</h3><label>Evaluation time<input name="evaluation_time" placeholder="2026-08-10T00:00:00Z" required></label><label>Impact depth<input name="maximum_depth" type="number" min="1" max="16" value="3"></label><button>FREEZE CANDIDATE</button></form>
+      <section class="panel" id="explore">
+        <div class="panel-heading compact"><p class="eyebrow">查找规范</p><h2>按 Human Key 或关键词查找</h2><p class="section-copy">优先显示 Human Key、类型和正文摘要。技术标识只记录在审计详情中。</p></div>
+        <form class="command-form" id="query-form"><label>Human Key 或关键词<input name="text" placeholder="例如 REQ-SW-0142、CAN、超时" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
+        <div class="explore-grid">
+          <div class="result-list" id="query-results"><div class="empty-state">输入编号或关键词开始查找。</div></div>
+          <div class="relationship-stage" id="graph-stage"><div class="relation-orbit orbit-a"></div><div class="relation-orbit orbit-b"></div><div class="relation-node node-a"></div><div class="relation-node node-b"></div><div class="relation-focus" id="graph-core"><small>当前选择</small><b>尚未选择</b><span>关系概览</span></div><p>选择左侧结果后，在这里查看它与需求、设计和测试的关系。</p></div>
         </div>
-        <div class="checkpoint-strip"><span>WORKSPACE</span><code id="workspace-uid">not open</code><span>STATE</span><b id="workspace-state">IDLE</b><i id="workspace-progress"></i></div>
-        <div class="decision-strip" id="decision-strip"><span>OPERATION DECISION</span><strong>NOT EVALUATED</strong><small>No unresolved enforcement blockers may cross Apply.</small></div>
-        <pre class="output" id="workspace-output">Open a Workspace from an exact base. Every edit is checkpointed to its Workspace ref.</pre>
       </section>
 
-      <section class="panel" id="review" data-panel-index="05">
-        <div class="eyebrow"><span>05</span> HUMAN GOVERNANCE</div><h2>The machine prepares.<br><em>The human authorizes.</em></h2>
-        <div class="review-grid"><article><small>PACKAGE HASH</small><code id="sign-package">Not selected</code></article><article><small>EFFECTIVE MODEL</small><code id="sign-model">Not selected</code></article><article><small>CANDIDATE SCOPE</small><code id="sign-scope">Not selected</code></article><article><small>ROLE / EXPIRY</small><code id="sign-role">Not selected</code></article></div>
-        <form id="sign-form" class="sign-zone"><div class="sign-seal" aria-hidden="true"><span>HUMAN</span><b>Ed25519</b><small>ONE-SHOT BROKER</small></div><div class="sign-fields"><input name="package_uid" placeholder="Workspace Review Package UID" required><input name="actor_uid" placeholder="Reviewer Actor UID" required><input name="key_uid" placeholder="Trusted Key UID" required><input name="role" placeholder="Profile-required role" required><label class="human-check"><input type="checkbox" name="human_confirm" required> I inspected Package, Model, Scope, role, conditions and expiry.</label><button>SIGN THROUGH ONE-SHOT BROKER</button></div></form>
-        <button class="primary-action" id="apply-candidate" type="button">ATOMIC APPLY CANDIDATE <i>→</i></button>
-        <pre class="output" id="sign-output">Signer is locked.</pre>
+      <section class="panel" id="context">
+        <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理完成任务所需的资料</h2><p class="section-copy">输入目标的 Human Key，系统会自动解析版本和关系。结果按“必须阅读、建议参考、仍有缺口”呈现。</p></div>
+        <div class="two-column">
+          <form class="stack-form framed" id="context-form"><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>目标 Human Key<input name="target_key" placeholder="例如 REQ-SW-0142" required></label><label>这次要做什么<select name="task_type"><option value="requirement_change">修改需求</option><option value="test_design">设计测试</option><option value="deviation_review">审阅偏离</option><option value="can_analysis">分析 CAN 接口</option><option value="mqtt_change">修改 MQTT 设计</option></select></label><button>整理相关资料</button></form>
+          <div class="plain-legend"><article><i class="mandatory"></i><div><b>必须阅读</b><p>由规则、关系和本次操作直接决定。</p></div></article><article><i class="supporting"></i><div><b>建议参考</b><p>可能有帮助，但不会替代必读内容。</p></div></article><article><i class="unknown"></i><div><b>仍有缺口</b><p>缺少关系或配置时会明确告诉你。</p></div></article></div>
+        </div>
+        <div class="human-output" id="context-output"><p>尚未整理相关资料。</p></div>
       </section>
 
-      <section class="panel" id="baseline" data-panel-index="06">
-        <div class="eyebrow"><span>06</span> FROZEN CONFIGURATION</div><h2>Freeze the state.<br>Then name it.</h2>
-        <div class="workbench baseline-workbench"><form class="stack-form framed" id="baseline-prepare-form"><h3><span>01</span> PREPARE</h3><label>Configuration UID<input name="configuration_uid" required></label><label>Evaluation time<input name="evaluation_time" required></label><button>VALIDATE FROZEN STATE</button></form><form class="stack-form framed" id="baseline-apply-form"><h3><span>02</span> APPROVE / APPLY</h3><label>Review Package UID<input name="review_package_uid" required></label><label>Tag name / optional<input name="tag_name" placeholder="baseline/project-a/1.0"></label><label>Evaluation time<input name="evaluation_time" required></label><button>ATOMIC BASELINE APPLY</button></form><aside class="baseline-rule"><b>MANIFEST ≠ TAG</b><p>The Manifest is authoritative. The Git tag is reconstructable publication metadata.</p><span>STATE COMMIT → MANIFEST COMMIT → TAG</span></aside></div>
-        <pre class="output" id="baseline-output">No Baseline prepared.</pre>
+      <section class="panel" id="workspace">
+        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>发起一项工程变更</h2><p class="section-copy">内部版本、工作区编号和授权信息会从所选配置与本机身份自动取得。</p></div>
+        <div class="workspace-layout">
+          <div class="workbench">
+            <form class="stack-form framed" id="workspace-open-form" data-stage="1"><h3><span>1</span> 选择工作范围</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>以谁的身份工作<select name="actor" data-actor-select required></select></label><button>开始编辑</button></form>
+            <form class="stack-form framed" id="workspace-edit-form" data-stage="2"><h3><span>2</span> 描述变更</h3><label>Human Key<input name="human_key" placeholder="例如 DES-SW-0208" required></label><label>内容类型<select name="kind" required><option value="software_requirement">软件需求</option><option value="software_design">软件设计</option><option value="test_case">测试用例</option><option value="can_signal">CAN 信号</option></select></label><label>正文或说明<textarea name="statement" placeholder="写下工程内容本身" required></textarea></label><label>变更理由<textarea name="change_reason" placeholder="为什么需要这次变更？批准人会看到这段话。" required></textarea></label><button>保存变更内容</button></form>
+            <form class="stack-form framed" id="workspace-submit-form" data-stage="3"><h3><span>3</span> 检查并送审</h3><div class="scope-preview" id="workspace-scope"><small>变更范围</small><strong>尚未填写</strong><p>保存内容后，系统将在这里汇总。</p></div><button>校验并提交审阅</button></form>
+          </div>
+          <aside class="workspace-status-card"><small>本次变更</small><strong id="workspace-state">尚未开始</strong><p id="workspace-guidance">先选择配置和本机身份。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
+        </div>
+        <div class="decision-strip" id="decision-strip"><span>系统校验</span><strong>等待变更内容</strong><small>送审后显示是否可批准，以及需要处理的问题。</small></div>
+        <div class="human-output" id="workspace-output"><p>这里会显示操作结果，不展示内部计算字段。</p></div>
       </section>
 
-      <section class="panel" id="tasks" data-panel-index="07"><div class="eyebrow"><span>07</span> PERSISTENT TASKS</div><h2>Long work survives interruption.</h2><p class="section-copy">Deep Trace, full validation, backup and migration live outside Canonical Git until a completed result is anchored.</p><button class="secondary-action" id="refresh-tasks">REFRESH QUEUE</button><div class="task-list" id="task-results"><div class="empty-line">Queue not loaded.</div></div></section>
+      <section class="panel" id="review">
+        <div class="panel-heading compact"><p class="eyebrow">审阅与批准</p><h2>核对范围、理由和校验结论</h2><p class="section-copy">LESR 会验证签名与权限，但不会让这些技术细节干扰人的判断。</p></div>
+        <div class="review-grid">
+          <article class="review-reason"><small>为什么要批准</small><strong id="review-reason">尚无待审阅事项</strong></article>
+          <article><small>变更范围</small><div id="sign-scope" class="scope-list"><span>尚未选择</span></div></article>
+          <article><small>系统校验</small><strong id="review-validation">尚未校验</strong><p id="review-findings">提交变更后显示结果。</p></article>
+          <article><small>批准要求</small><strong id="sign-role">尚未选择</strong><p>批准会在 15 分钟后失效。</p></article>
+        </div>
+        <form id="sign-form" class="sign-zone">
+          <div class="sign-intro"><span>人工决定</span><b>确认批准</b><p>签名只在本机短暂使用，完成后立即退出。</p></div>
+          <div class="sign-fields"><input type="hidden" name="package_uid"><label>批准人<select name="reviewer" data-reviewer-select required></select></label><label>本次角色<select name="role" required><option value="">等待审阅要求</option></select></label><label class="human-check"><input type="checkbox" name="human_confirm" required><span>我已阅读变更范围、批准理由、校验结果和附加条件，并确认由我本人批准。</span></label><button>确认批准并签名</button></div>
+        </form>
+        <div class="approval-result" id="sign-output"><i></i><span>尚未签名。</span></div>
+        <button class="primary-action" id="apply-candidate" type="button" disabled>将已批准变更写入工程 <i>→</i></button>
+      </section>
 
-      <section class="panel" id="maintenance" data-panel-index="08"><div class="eyebrow"><span>08</span> LOCAL OPERATIONS</div><h2>Recoverability is<br>a product feature.</h2><div class="maintenance-grid"><article><span>01</span><b>BACKUP</b><p>Git Bundle + Manifest + SHA-256.</p></article><article><span>02</span><b>RESTORE</b><p>Empty destination, complete verification.</p></article><article><span>03</span><b>MIGRATE</b><p>Forward-only, backup ref before mutation.</p></article><article><span>04</span><b>WORKSPACE GC</b><p>Dry-run; referenced state retained; no implicit prune.</p><button id="gc-plan">PLAN GC</button></article></div><pre class="output" id="maintenance-output">No operation planned.</pre></section>
+      <section class="panel" id="baseline">
+        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>发布已批准的工程基线</h2><p class="section-copy">选择配置、完成系统检查和人工批准。内部提交关系由系统维护。</p></div>
+        <div class="baseline-layout">
+          <form class="stack-form framed" id="baseline-prepare-form"><h3><span>1</span> 选择要发布的配置</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><button>检查是否可以发布</button></form>
+          <form class="stack-form framed" id="baseline-apply-form"><h3><span>2</span> 命名并发布</h3><input type="hidden" name="review_package_uid"><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><p class="form-note">准备完成后，请到“审阅与批准”确认，再返回这里发布。</p><button>发布已批准基线</button></form>
+          <aside class="baseline-note"><span>发布结果</span><strong id="baseline-state">尚未准备</strong><p>基线保留精确的工程状态；用于分享的版本名称可以重新生成。</p></aside>
+        </div>
+        <div class="human-output" id="baseline-output"><p>尚未准备基线。</p></div>
+      </section>
+
+      <section class="panel" id="tasks"><div class="panel-heading compact"><p class="eyebrow">后台任务</p><h2>查看耗时任务的处理进度</h2><p class="section-copy">完整校验、深度追踪和备份会在后台继续，不会阻塞日常编辑。</p></div><button class="secondary-action" id="refresh-tasks">刷新任务</button><div class="task-list" id="task-results"><div class="empty-state">尚未读取任务。</div></div></section>
+
+      <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>本机工程维护</h2><p class="section-copy">普通工程工作不需要进入这里。维护操作默认先给出计划，不直接删除或改写内容。</p></div><div class="maintenance-grid"><article><span>备份</span><b>保存工程副本</b><p>生成可恢复的完整包。</p></article><article><span>恢复</span><b>恢复到空目录</b><p>验证完整后再启用。</p></article><article><span>升级</span><b>前向迁移</b><p>先备份，再显示变更报告。</p></article><article><span>清理</span><b>检查可清理内容</b><p>仅生成计划，不自动删除。</p><button id="gc-plan">生成清理计划</button></article></div><div class="human-output" id="maintenance-output"><p>尚未执行维护检查。</p></div></section>
+
+      <section class="panel audit-panel" id="audit">
+        <div class="panel-heading compact"><p class="eyebrow">审计详情</p><h2>技术记录与故障排查</h2><p class="section-copy">这里集中保存 Commit、UID、Hash、Delegation 和原始返回值。它们不会出现在日常工作页面。</p></div>
+        <div class="audit-banner"><strong>技术信息</strong><p>除非正在审计或排查问题，否则无需阅读或复制这些内容。</p></div>
+        <div class="audit-facts"><article><small>Canonical Commit</small><code id="audit-commit">{{ canonical_commit }}</code></article><article><small>Runtime Contract</small><code>1.0</code></article><article><small>Session</small><code>loopback / local</code></article></div>
+        <pre class="audit-output" id="audit-output">尚无本次会话的技术记录。</pre>
+      </section>
     </main>
   </div>
 
