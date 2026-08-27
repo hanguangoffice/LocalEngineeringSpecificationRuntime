@@ -6,5 +6,8 @@ is closed in the production path; the recommended product scenarios are represen
 Web suites. Detailed decisions and retained limits are recorded in
 [`gates/GATE-9-SEMANTIC-AUTHORITY.md`](gates/GATE-9-SEMANTIC-AUTHORITY.md).
 
-RC4 remains a release candidate for external review. It does not claim external certification
-or stable `runtime-v1.0.0` release status.
+The subsequent internal release closure added public successor-Configuration and standalone
+governance-approval paths, public Workspace-to-Apply tests for finding attestations and
+Deviation suppression, and signed conflict-resolution enforcement. With the full repository
+and distribution gates passing, these changes qualify the stable `runtime-v1.0.0` release.
+This is an internal engineering qualification, not a claim of external certification.

@@ -10,7 +10,13 @@ import pytest
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
-from lesr.domain.evaluation import GraphNode, GraphRelation, GraphSnapshot, SemanticEvaluator
+from lesr.domain.evaluation import (
+    GraphNode,
+    GraphRelation,
+    GraphSnapshot,
+    SemanticEvaluator,
+    ValidationTarget,
+)
 from lesr.domain.governance import ValidationFinding
 from lesr.domain.model import (
     CompositionMode,
@@ -410,7 +416,12 @@ def test_product_validation_uses_units_in_the_single_evaluator(
     assert validation["outcome"] == expected
 
 
-def test_product_validation_accepts_a_valid_two_hop_graph_path() -> None:
+@pytest.mark.parametrize(
+    ("include_second_hop", "expected"), ((True, "pass"), (False, "fail"))
+)
+def test_product_validation_evaluates_the_actual_two_hop_graph_path(
+    include_second_hop: bool, expected: str
+) -> None:
     now = datetime.now(UTC)
     base_rule = source()
     fixture_values = []
@@ -553,12 +564,13 @@ def test_product_validation_accepts_a_valid_two_hop_graph_path() -> None:
         provenance_kind=ProvenanceKind.ASSERTED,
         created_at=now,
     )
+    candidate_relations = (first, second) if include_second_hop else (first,)
     candidate = CandidateRevisionSet(
         workspace_uid=UIDS[52],
         checkpoint_uid=UIDS[53],
         effective_model_hash=model.model_hash,
         revisions=(requirement,),
-        relation_revisions=(first, second),
+        relation_revisions=candidate_relations,
         lifecycle_records=(),
     )
     workspace = Workspace(
@@ -592,7 +604,7 @@ def test_product_validation_accepts_a_valid_two_hop_graph_path() -> None:
                 lifecycle_state="active",
                 source="candidate",
             )
-            for item in (first, second)
+            for item in candidate_relations
         ),
         candidate_overlay_hash=candidate.candidate_hash,
     )
@@ -613,10 +625,13 @@ def test_product_validation_accepts_a_valid_two_hop_graph_path() -> None:
         SimpleNamespace(workspace=workspace, candidate=candidate),
         SemanticEvaluator(snapshot, (first_type, second_type)),
     )
-    assert validation["outcome"] == "pass"
+    assert validation["outcome"] == expected
 
 
-def test_normative_conflict_is_indeterminate_until_exact_resolution_selected() -> None:
+def test_normative_conflict_is_indeterminate_until_human_resolution_selected(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
     left, left_ast = _compiled_rule()
     right = left.model_copy(
         update={"rule_uid": UIDS[58], "rule_revision_uid": UIDS[59]}
@@ -630,7 +645,7 @@ def test_normative_conflict_is_indeterminate_until_exact_resolution_selected() -
     service = LocalRuntimeService.__new__(LocalRuntimeService)
     service.documents = []
     compiled = [(left, left_ast), (right, right_ast)]
-    conflicted = service._conflicted_rule_uids({}, compiled)
+    conflicted = service._conflicted_rule_uids({}, compiled, now)
     assert conflicted == frozenset((left.rule_uid, right.rule_uid))
 
     resolution = ImmutableRecord(
@@ -648,9 +663,40 @@ def test_normative_conflict_is_indeterminate_until_exact_resolution_selected() -
             ),
         ),
     )
+    model_hash = semantic_hash({"effective_model": "conflict-test"})
+    selected = {
+        "conflict_resolution_uids": [resolution.record_uid],
+        "effective_model_hash": model_hash,
+    }
     service.documents = [resolution.model_dump(mode="json")]
+    assert service._conflicted_rule_uids(selected, compiled, now) == frozenset(
+        (left.rule_uid, right.rule_uid)
+    )
+    store = ApprovalKeyStore(tmp_path / "conflict-keys", password="conflict-password")
+    trust = store.generate(UIDS[61], "Conflict Authority", ("technical",))
+    scope: dict[str, object] = {
+        "resolution_record_uid": resolution.record_uid,
+        "resolution_hash": resolution.content_hash,
+        "left_rule_revision_uid": left.rule_revision_uid,
+        "right_rule_revision_uid": right.rule_revision_uid,
+    }
+    approval = store.sign(
+        trust,
+        "technical",
+        ApprovalPayload(
+            package_hash=resolution.content_hash,
+            effective_model_hash=model_hash,
+            scope=scope,
+            approval_type="rule_conflict_resolution",
+        ),
+    )
+    service.documents = [
+        resolution.model_dump(mode="json"),
+        trust.model_dump(mode="json"),
+        approval.model_dump(mode="json"),
+    ]
     assert service._conflicted_rule_uids(
-        {"conflict_resolution_uids": [resolution.record_uid]}, compiled
+        selected, compiled, now + timedelta(minutes=1)
     ) == frozenset()
 
 
@@ -749,3 +795,219 @@ def test_baseline_domain_model_round_trips_the_canonical_schema() -> None:
     value = manifest.model_dump(mode="json")
     SchemaCatalog().validate("baseline-manifest.schema.json", value)
     assert BaselineManifest.model_validate(value) == manifest
+
+
+@pytest.mark.parametrize(
+    ("target_binding", "expected"),
+    ((BindingMode.PINNED, "pass"), (BindingMode.LOGICAL, "fail")),
+)
+def test_product_validation_uses_typed_constraints_for_relation_targets(
+    target_binding: BindingMode, expected: str
+) -> None:
+    now = datetime.now(UTC)
+    base = source()
+    rule_uid = UIDS[71]
+
+    def fixture_environment(
+        *,
+        kind: str = "verified_by",
+        binding: str | None = "pinned",
+        state: str = "value",
+        exception: bool = False,
+        deviation: bool = False,
+        conflict: bool = False,
+        schema_version: int = 1,
+    ) -> dict[str, object]:
+        return {
+            "target_type": "relation",
+            "target_kind": kind,
+            "fields": {"target_binding": {"state": state, "value": binding}},
+            "relation_counts": {},
+            "operation": "apply_transaction",
+            "active_exception_rule_uids": [rule_uid] if exception else [],
+            "active_deviation_rule_uids": [rule_uid] if deviation else [],
+            "conflicted_rule_uids": [rule_uid] if conflict else [],
+            "schema_version": schema_version,
+        }
+
+    fixture_values = (
+        ("positive", fixture_environment(), "pass"),
+        ("negative", fixture_environment(binding="logical"), "fail"),
+        ("not_applicable", fixture_environment(kind="other"), "not_applicable"),
+        (
+            "indeterminate",
+            fixture_environment(binding=None, state="unknown"),
+            "indeterminate",
+        ),
+        ("exception", fixture_environment(exception=True), "not_applicable"),
+        (
+            "deviation",
+            fixture_environment(binding="logical", deviation=True),
+            "suppressed_by_deviation",
+        ),
+        ("conflict", fixture_environment(conflict=True), "indeterminate"),
+        ("migration", fixture_environment(schema_version=2), "pass"),
+    )
+    rule = RuleDefinition.model_validate(
+        base.model_dump(mode="json", exclude={"content_hash"})
+        | {
+            "rule_uid": rule_uid,
+            "rule_revision_uid": UIDS[72],
+            "target_type": ValidationTarget.RELATION.value,
+            "target_selector": {"op": "kind_is", "kind": "verified_by"},
+            "applicability": {
+                "op": "all_of",
+                "items": [
+                    {"op": "kind_is", "kind": "verified_by"},
+                    {"op": "field_known", "path": "target_binding"},
+                ],
+            },
+            "constraints": [
+                {
+                    "op": "field_enum",
+                    "field_path": "target_binding",
+                    "expected": ["pinned"],
+                }
+            ],
+            "fixtures": [
+                {
+                    "fixture_uid": UIDS[index],
+                    "kind": kind,
+                    "environment": environment,
+                    "expected_outcome": outcome,
+                }
+                for index, (kind, environment, outcome) in enumerate(fixture_values, 1)
+            ],
+        }
+    )
+    requirement_kind = KindDefinitionRevision(
+        revision_uid=UIDS[73],
+        name="software_requirement",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+    )
+    test_kind = KindDefinitionRevision(
+        revision_uid=UIDS[74],
+        name="test_case",
+        core_class=CoreResourceClass.GOVERNED_OBJECT,
+    )
+    relation_type = RelationTypeRevision(
+        revision_uid=UIDS[75],
+        predicate="verified_by",
+        core_role=CoreRelationRole.VERIFIES,
+        source_kind_or_facet=("software_requirement",),
+        target_kind_or_facet=("test_case",),
+        allowed_bindings=(BindingMode.PINNED, BindingMode.LOGICAL),
+        default_binding=BindingMode.PINNED,
+        workflow_revision_uid=UIDS[76],
+    )
+    definitions = (requirement_kind, test_kind, relation_type)
+    profile = NormativeProfileRevision(
+        profile_revision_uid=UIDS[77],
+        layer=ProfileLayer.PROJECT,
+        authority=100,
+        contributions=tuple(
+            ProfileContribution(
+                mode=CompositionMode.EXTEND,
+                definition_revision_uid=item.revision_uid,
+            )
+            for item in definitions
+        ),
+        rule_revision_uids=(rule.rule_revision_uid,),
+    )
+    model = EffectiveModelCompiler().compile((profile,), definitions)
+    requirement = Revision(
+        revision_uid=UIDS[10],
+        object_uid=UIDS[11],
+        revision_number=1,
+        human_key="REQ-RELATION-TARGET",
+        kind="software_requirement",
+        provenance_origin=ProvenanceKind.AUTHORED,
+        created_at=now,
+    )
+    test_case = Revision(
+        revision_uid=UIDS[12],
+        object_uid=UIDS[13],
+        revision_number=1,
+        human_key="TEST-RELATION-TARGET",
+        kind="test_case",
+        provenance_origin=ProvenanceKind.AUTHORED,
+        created_at=now,
+    )
+    relation = RelationAssertion(
+        assertion_uid=UIDS[14],
+        relation_revision_uid=UIDS[15],
+        relation_type_revision_uid=relation_type.revision_uid,
+        predicate="verified_by",
+        core_role=CoreRelationRole.VERIFIES,
+        source=RelationEndpoint(
+            binding=BindingMode.PINNED,
+            object_uid=requirement.object_uid,
+            revision_uid=requirement.revision_uid,
+        ),
+        target=RelationEndpoint(
+            binding=target_binding,
+            object_uid=test_case.object_uid,
+            revision_uid=(
+                test_case.revision_uid if target_binding is BindingMode.PINNED else None
+            ),
+        ),
+        scope="project",
+        provenance_kind=ProvenanceKind.ASSERTED,
+        created_at=now,
+    )
+    candidate = CandidateRevisionSet(
+        workspace_uid=UIDS[16],
+        checkpoint_uid=UIDS[17],
+        effective_model_hash=model.model_hash,
+        revisions=(requirement, test_case),
+        relation_revisions=(relation,),
+        lifecycle_records=(),
+    )
+    workspace = Workspace(
+        workspace_uid=candidate.workspace_uid,
+        base_commit="a" * 40,
+        configuration_uid=UIDS[18],
+        effective_model_hash=model.model_hash,
+        delegation_uid=UIDS[19],
+        actor_uid=UIDS[20],
+        created_at=now,
+    )
+    snapshot = GraphSnapshot(
+        configuration_uid=workspace.configuration_uid,
+        canonical_commit=workspace.base_commit,
+        effective_model_hash=model.model_hash,
+        workspace_uid=workspace.workspace_uid,
+        checkpoint_uid=candidate.checkpoint_uid,
+        evaluation_time=now,
+        nodes=tuple(
+            GraphNode(revision=item, lifecycle_state="draft", source="candidate")
+            for item in (requirement, test_case)
+        ),
+        relations=(
+            GraphRelation(
+                assertion=relation,
+                relation_type_revision_uid=relation_type.revision_uid,
+                lifecycle_state="active",
+                source="candidate",
+            ),
+        ),
+        candidate_overlay_hash=candidate.candidate_hash,
+    )
+    service = LocalRuntimeService.__new__(LocalRuntimeService)
+    service.documents = [
+        {
+            "resource_type": "configuration_snapshot",
+            "configuration_uid": workspace.configuration_uid,
+            "profile_revision_uids": [profile.profile_revision_uid],
+            "active_deviation_revision_uids": [],
+            "effective_model_hash": model.model_hash,
+        },
+        profile.model_dump(mode="json"),
+        *(item.model_dump(mode="json") for item in definitions),
+        rule.model_dump(mode="json"),
+    ]
+    validation = service._validate_submission(
+        SimpleNamespace(workspace=workspace, candidate=candidate),
+        SemanticEvaluator(snapshot, (relation_type,)),
+    )
+    assert validation["outcome"] == expected

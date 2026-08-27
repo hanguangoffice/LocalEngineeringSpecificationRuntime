@@ -896,6 +896,27 @@ class GitCanonicalRepository:
             for item in transaction.operations
             if item.payload.get("resource_type") not in metadata_types
         )
+        payload_types = {
+            str(item.payload.get("resource_type")) for item in transaction.operations
+        }
+        if not state_operations:
+            if (
+                payload_types <= {"approval_attestation", "provenance_record"}
+                and sum(
+                    item.payload.get("resource_type") == "approval_attestation"
+                    for item in transaction.operations
+                )
+                == 1
+                and sum(
+                    item.payload.get("resource_type") == "provenance_record"
+                    for item in transaction.operations
+                )
+                == 1
+            ):
+                return
+            raise ApprovalError(
+                "metadata-only transaction must contain one approval and its provenance"
+            )
         if not configurations:
             allowed = {
                 "trusted_actor",
@@ -911,6 +932,52 @@ class GitCanonicalRepository:
             if any(item.payload.get("resource_type") not in allowed for item in state_operations):
                 raise ApprovalError(
                     "engineering content cannot be applied before initial governance configuration"
+                )
+            return
+        if (
+            len(state_operations) == 1
+            and state_operations[0].operation_type is OperationType.CREATE_CONFIGURATION
+        ):
+            snapshot = state_operations[0].payload
+            signed = tuple(
+                SignedApproval.model_validate(item.payload)
+                for item in transaction.operations
+                if item.payload.get("resource_type") == "approval_attestation"
+            )
+            raw_supporting_hashes = (
+                signed[0].scope.get("supporting_approval_hashes", ())
+                if len(signed) == 1
+                else ()
+            )
+            if not isinstance(raw_supporting_hashes, (list, tuple)):
+                raise ApprovalError("supporting approval hashes must be a sequence")
+            expected_scope = {
+                "base_commit": current,
+                "configuration_uid": snapshot.get("configuration_uid"),
+                "configuration_hash": semantic_hash(snapshot),
+                "supporting_approval_hashes": sorted(
+                    str(item) for item in raw_supporting_hashes
+                )
+            }
+            canonical_approval_hashes = {
+                semantic_hash(item)
+                for item in current_documents
+                if item.get("resource_type") == "approval_attestation"
+            }
+            if (
+                len(signed) != 1
+                or signed[0].approval_type != "technical"
+                or signed[0].scope != expected_scope
+                or signed[0].package_hash
+                != semantic_hash({"configuration": expected_scope})
+                or set(expected_scope["supporting_approval_hashes"])
+                - canonical_approval_hashes
+                or snapshot.get("parent_configuration_uid") not in configurations
+                or snapshot.get("effective_model_hash")
+                != transaction.effective_model_hash
+            ):
+                raise ApprovalError(
+                    "successor Configuration is not exactly bound to canonical governance"
                 )
             return
         packages = [
@@ -2036,7 +2103,7 @@ class GitCanonicalRepository:
             "performed_by_actor_uid": transaction.actor,
             "on_behalf_of_actor_uid": None,
             "tool_uids": [],
-            "tool_identity": "lesr-runtime/1.0.0rc4",
+            "tool_identity": "lesr-runtime/1.0.0",
             "delegation_uid": transaction.delegation_uid,
             "used_uids": sorted(
                 {

@@ -170,6 +170,26 @@ class LESRDomainPort(Protocol):
         idempotency_key: str,
     ) -> DomainResult: ...
 
+    def create_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+        supporting_approvals: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult: ...
+
+    def plan_configuration(self, configuration: dict[str, Any]) -> DomainResult: ...
+
+    def record_governance_approval(
+        self,
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult: ...
+
     def apply_transaction(self, request: WriteEnvelope) -> DomainResult: ...
 
     def start_task(self, task_type: str, request: dict[str, Any]) -> DomainResult: ...

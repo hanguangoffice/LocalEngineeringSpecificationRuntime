@@ -7,6 +7,7 @@ from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload, TrustedActor
 from lesr.domain.model import (
     CompositionMode,
+    DefinitionRevision,
     EffectiveModelCompiler,
     FacetDefinitionRevision,
     FieldDefinition,
@@ -18,6 +19,7 @@ from lesr.domain.model import (
     ProfileReviewPolicy,
     ProfileReviewStage,
 )
+from lesr.domain.rules import RuleDefinition
 from lesr.domain.semantic import CoreResourceClass, configuration_state_anchor, document_hash
 from tests.test_v1_rules import source
 
@@ -34,7 +36,13 @@ class PublicProduct:
     signer_password: str
 
 
-def bootstrap_public_product(root: Path) -> PublicProduct:
+def bootstrap_public_product(
+    root: Path,
+    *,
+    rule: RuleDefinition | None = None,
+    extra_definitions: tuple[DefinitionRevision, ...] = (),
+    actor_roles: tuple[str, ...] = ("technical",),
+) -> PublicProduct:
     project = root / "project"
     domain = LocalRuntimeService(project)
     actor_uid = "018f0000-0000-7000-8000-000000000901"
@@ -43,8 +51,8 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
     configuration_uid = "018f0000-0000-7000-8000-000000000904"
     signer_password = "public-product-ci-password"
     store = ApprovalKeyStore(root / "keys", password=signer_password)
-    trust = store.generate(actor_uid, "Root owner", ("technical",))
-    rule = source()
+    trust = store.generate(actor_uid, "Root owner", actor_roles)
+    rule = rule or source()
     requirement_facet = FacetDefinitionRevision(
         revision_uid="018f0000-0000-7000-8000-000000000110",
         facet_uid="018f0000-0000-7000-8000-000000000111",
@@ -83,6 +91,7 @@ def bootstrap_public_product(root: Path) -> PublicProduct:
         design_facet,
         requirement_kind,
         design_kind,
+        *extra_definitions,
     )
     profile = NormativeProfileRevision(
         profile_revision_uid="018f0000-0000-7000-8000-000000000104",

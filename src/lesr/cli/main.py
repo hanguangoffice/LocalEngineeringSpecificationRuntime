@@ -227,6 +227,86 @@ def plan_initial_configuration(project: Path, configuration_record: Path) -> Non
     )
 
 
+@app.command("configuration-create")
+def create_configuration(
+    project: Path,
+    configuration_record: Path,
+    approval_record: Path,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+    supporting_approval: list[Path] | None = None,
+) -> None:
+    """Create an immutable successor Configuration with bound governance approvals."""
+
+    emit(
+        LocalRuntimeService(project)
+        .create_configuration(
+            read_object(configuration_record),
+            read_object(approval_record),
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+            tuple(read_object(path) for path in (supporting_approval or [])),
+        )
+        .payload()
+    )
+
+
+@app.command("configuration-create-plan")
+def plan_configuration(
+    project: Path,
+    configuration_record: Path,
+    supporting_approval: list[Path] | None = None,
+) -> None:
+    """Build the exact approval payload for a successor Configuration."""
+
+    domain = LocalRuntimeService(project)
+    planned = domain.plan_configuration(read_object(configuration_record))
+    if not planned.ok:
+        emit(planned.payload())
+        return
+    configuration = planned.value
+    assert configuration is not None
+    approvals = tuple(read_object(path) for path in (supporting_approval or []))
+    package_hash, model_hash, scope = domain.configuration_binding(
+        domain.base, configuration, approvals
+    )
+    emit(
+        {
+            "configuration": configuration,
+            "approval_payload": ApprovalPayload(
+                package_hash=package_hash,
+                effective_model_hash=model_hash,
+                scope=scope,
+                approval_type="technical",
+            ).model_dump(mode="json"),
+        }
+    )
+
+
+@app.command("governance-approval-record")
+def record_governance_approval(
+    project: Path,
+    approval_record: Path,
+    actor_uid: str,
+    delegation_uid: str,
+    idempotency_key: str,
+) -> None:
+    """Persist a signed Deviation, Exception or Rule-conflict approval."""
+
+    emit(
+        LocalRuntimeService(project)
+        .record_governance_approval(
+            read_object(approval_record),
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+        )
+        .payload()
+    )
+
+
 @app.command()
 def resolve(project: Path, identifier: str) -> None:
     emit(LocalRuntimeService(project).resolve(identifier).payload())
