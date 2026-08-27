@@ -11,6 +11,7 @@ from lesr.adapters.signer import sign_once
 from lesr.adapters.web import LocalWebRuntime
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.semantic import semantic_hash
+from tests.support.public_product import bootstrap_public_product
 
 
 def unlocked(tmp_path: Path) -> tuple[LocalWebRuntime, TestClient, str]:
@@ -68,12 +69,40 @@ def test_ui_covers_product_workflow_and_uses_no_remote_assets(tmp_path: Path) ->
         "baseline",
         "tasks",
         "maintenance",
+        "audit",
     ):
         assert f'id="{panel}"' in page
+    ordinary_page = page.split('<section class="panel audit-panel"', maxsplit=1)[0]
+    assert "Configuration UID" not in ordinary_page
+    assert "Delegation UID" not in ordinary_page
+    assert "Canonical Commit" not in ordinary_page
+    assert "package_hash" not in ordinary_page
     assert 'src="http' not in page.casefold()
     assert 'href="http' not in page.casefold()
     assert client.get("/static/lesr.css").status_code == 200
     assert client.get("/static/lesr.js").status_code == 200
+
+
+def test_session_context_resolves_human_names_from_internal_identity(
+    tmp_path: Path,
+) -> None:
+    product = bootstrap_public_product(tmp_path)
+    runtime = LocalWebRuntime(
+        product.domain.project,
+        launch_token="session-context-token",
+        signer_key_root=tmp_path / "keys",
+        signer_password=product.signer_password,
+    )
+    client = TestClient(runtime.app)
+    unlocked_response = client.get(
+        "/unlock?token=session-context-token", follow_redirects=False
+    )
+    assert unlocked_response.status_code == 303
+    context = client.get("/api/session-context").json()
+    assert context["configurations"][0]["name"] == "public-product"
+    assert context["actors"][0]["display_name"] == "Root owner"
+    assert context["actors"][0]["delegation_uid"] == product.delegation_uid
+    assert context["audit"]["canonical_commit"] == product.domain.base
 
 
 def test_web_signing_refuses_caller_authored_package(tmp_path: Path) -> None:

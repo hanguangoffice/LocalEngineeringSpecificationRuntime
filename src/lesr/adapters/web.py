@@ -208,6 +208,11 @@ class LocalWebRuntime:
                 "capabilities": [item.model_dump(mode="json") for item in CAPABILITIES],
             }
 
+        @app.get("/api/session-context")
+        async def session_context(request: Request) -> dict[str, Any]:
+            self._session(request)
+            return self._session_context()
+
         @app.get("/api/query")
         async def query(request: Request, text: str = "") -> dict[str, Any]:
             self._session(request)
@@ -220,11 +225,36 @@ class LocalWebRuntime:
             package = self._review_package(package_uid)
             if package is None:
                 raise HTTPException(status_code=404, detail="Canonical Review Package not found")
+            scope_items = self._human_scope(
+                tuple(package.get("candidate_scope", ())),
+                workspace_uid=str(package.get("workspace_uid", "")),
+            )
+            evidence = getattr(self.domain, "review_evidence", {}).get(package_uid, {})
+            validation = evidence.get("validation", {}) if isinstance(evidence, dict) else {}
+            decision = (
+                validation.get("operation_decision", {})
+                if isinstance(validation, dict)
+                else {}
+            )
+            finding_count = len(validation.get("findings", ())) if isinstance(validation, dict) else 0
+            blocking_count = (
+                len(decision.get("blocking_finding_uids", ()))
+                if isinstance(decision, dict)
+                else 0
+            )
             return {
                 "package_uid": package_uid,
                 "package_hash": package.get("package_hash"),
                 "effective_model_hash": package.get("effective_model_hash"),
                 "candidate_scope": package.get("candidate_scope", []),
+                "scope_items": scope_items,
+                "change_count": len(scope_items),
+                "finding_count": finding_count,
+                "blocking_count": blocking_count,
+                "approval_reason": (
+                    f"批准 {len(scope_items)} 项工程变更；"
+                    f"校验发现 {finding_count} 项，阻断项 {blocking_count} 项。"
+                ),
                 "stages": package.get("review_policy", {}).get("stages", []),
                 "conditions": package.get("approval_conditions", []),
                 "signature_expiry_minutes": 15,
@@ -436,6 +466,152 @@ class LocalWebRuntime:
             return GitCanonicalRepository(self.project).current_commit()
         except RuntimeError:
             return "uninitialized"
+
+    def _session_context(self) -> dict[str, Any]:
+        repository = GitCanonicalRepository(self.project)
+        commit = repository.current_commit()
+        documents = tuple(value for _, value in repository.documents(commit))
+        configurations = sorted(
+            (
+                value
+                for value in documents
+                if value.get("resource_type") == "configuration_snapshot"
+            ),
+            key=lambda value: (
+                str(value.get("created_at", "")),
+                str(value.get("configuration_uid", "")),
+            ),
+            reverse=True,
+        )
+        delegations = tuple(
+            value
+            for value in documents
+            if value.get("resource_type") == "delegation_grant"
+            and not value.get("stop_conditions")
+        )
+        actors: list[dict[str, Any]] = []
+        for value in documents:
+            if value.get("resource_type") != "trusted_actor" or value.get(
+                "revoked_by_record_uid"
+            ):
+                continue
+            actor_uid = str(value.get("actor_uid", ""))
+            delegation = next(
+                (
+                    item
+                    for item in delegations
+                    if item.get("principal_uid") == actor_uid
+                ),
+                None,
+            )
+            actors.append(
+                {
+                    "display_name": value.get("display_name") or "本机用户",
+                    "roles": value.get("roles", []),
+                    "actor_uid": actor_uid,
+                    "key_uid": value.get("key_uid"),
+                    "delegation_uid": (
+                        delegation.get("delegation_uid") if delegation is not None else None
+                    ),
+                }
+            )
+        return {
+            "project_name": self.project.name,
+            "configurations": [
+                {
+                    "name": self._configuration_name(value, index),
+                    "configuration_uid": value.get("configuration_uid"),
+                    "closure_status": value.get("closure_status", "unknown"),
+                    "change_count": len(value.get("revision_uids", ())),
+                    "variant": value.get("variant"),
+                }
+                for index, value in enumerate(configurations, 1)
+            ],
+            "actors": sorted(actors, key=lambda item: str(item["display_name"]).casefold()),
+            "audit": {
+                "canonical_commit": commit,
+                "repository_format": "1.0",
+                "runtime_contract": RUNTIME_CONTRACT_VERSION,
+                "capability_count": len(CAPABILITIES),
+            },
+        }
+
+    @staticmethod
+    def _configuration_name(value: dict[str, Any], index: int) -> str:
+        variant = value.get("variant")
+        if isinstance(variant, str) and variant.strip():
+            return variant.strip()
+        created = str(value.get("created_at", ""))[:10]
+        if created:
+            return f"工程配置 · {created}"
+        return f"工程配置 {index}"
+
+    def _human_scope(
+        self, scope: tuple[object, ...], *, workspace_uid: str
+    ) -> list[dict[str, str]]:
+        documents = tuple(
+            value for _, value in GitCanonicalRepository(self.project).documents()
+        )
+        canonical_revisions = tuple(
+            value for value in documents if value.get("resource_type") == "revision"
+        )
+        submission = getattr(self.domain, "submissions", {}).get(workspace_uid)
+        candidate_revisions = (
+            tuple(
+                revision.model_dump(mode="json")
+                for revision in submission.candidate.revisions
+            )
+            if submission is not None
+            else ()
+        )
+        revisions = sorted(
+            (*candidate_revisions, *canonical_revisions),
+            key=lambda value: int(value.get("revision_number", 0)),
+            reverse=True,
+        )
+        configurations = tuple(
+            value
+            for value in documents
+            if value.get("resource_type") == "configuration_snapshot"
+        )
+        result: list[dict[str, str]] = []
+        for raw_uid in scope:
+            uid = str(raw_uid)
+            revision = next(
+                (
+                    value
+                    for value in revisions
+                    if value.get("object_uid") == uid or value.get("revision_uid") == uid
+                ),
+                None,
+            )
+            configuration = next(
+                (
+                    value
+                    for value in configurations
+                    if value.get("configuration_uid") == uid
+                ),
+                None,
+            )
+            result.append(
+                {
+                    "human_key": (
+                        str(revision.get("human_key"))
+                        if revision is not None
+                        else self._configuration_name(configuration, 1)
+                        if configuration is not None
+                        else "工程内容"
+                    ),
+                    "kind": (
+                        str(revision.get("kind", "工程对象"))
+                        if revision is not None
+                        else "configuration_snapshot"
+                        if configuration is not None
+                        else "工程对象"
+                    ),
+                }
+            )
+        return result
 
     def _signing_resources(
         self, package_uid: str, actor_uid: str, key_uid: str

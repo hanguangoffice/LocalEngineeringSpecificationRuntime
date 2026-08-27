@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.0
+# LESR Runtime 1.0.1
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -40,7 +40,34 @@ Manifest, all construction schemas, deterministic serialization, the fixed small
 performance dataset, HTTP/Playwright UI flow, and isolated wheel/sdist installation.
 The medium and large performance protocols are fixed in `docs/performance/README.md`.
 
-## Product entry points
+## 普通用户：从网页开始
+
+在已经初始化并配置好本机身份的 LESR 工程中运行：
+
+```powershell
+lesr web PROJECT
+```
+
+如果是在源码工程内使用，则运行：
+
+```powershell
+.venv\Scripts\python.exe -m lesr.cli.main web PROJECT
+```
+
+终端会显示一个一次性本机地址。复制到浏览器打开后，日常工作只需要：
+
+1. 用 Human Key 或关键词查找工程内容；
+2. 按名称选择工程配置和本机身份；
+3. 填写 Human Key、内容和变更理由，提交系统校验；
+4. 批准人阅读变更范围、批准理由和校验结论后签名；
+5. 将已批准变更写入工程，必要时再发布基线。
+
+Commit、UID、Hash、Delegation UID 和原始协议返回不会出现在普通流程中。
+只有审计或故障排查时才需要打开左侧的“审计详情”。页面使用更大的正文字号，
+GSAP 动效只表达页面切换、流程推进、状态改变和确认反馈；系统偏好减少动态效果时，
+所有状态仍会直接显示。
+
+## Advanced product entry points
 
 ```powershell
 lesr init PROJECT
