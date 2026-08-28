@@ -54,6 +54,18 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
             expect(page.locator("#overview")).not_to_contain_text(
                 repository.current_commit()
             )
+            page.locator('button[data-panel="intake"]').click()
+            intake = page.locator("#intake-form")
+            intake.get_by_label("工程名称（可选）").fill("gpu-lab-manager")
+            intake.get_by_label("你的需求").fill(
+                "创建一个 Windows 11 本地 AI 工具，检测 NVIDIA GPU 和显存，"
+                "提供 PyTorch 模拟测试。未经确认不得全局安装软件。"
+            )
+            intake.get_by_role("button", name="分析需求并选择模板").click()
+            expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
+            expect(page.locator("#intake-requirements .intake-requirement")).to_have_count(1)
+            expect(page.locator("#intake")).not_to_contain_text("sha256:")
+            expect(page.locator("#intake")).not_to_contain_text("59dc772b")
             page.locator('button[data-panel="explore"]').click()
             page.get_by_label("Human Key 或关键词").fill("no-synthetic-result")
             page.get_by_role("button", name="搜索").click()
@@ -103,6 +115,77 @@ def test_local_ui_honors_reduced_motion_without_hiding_state(tmp_path: Path) -> 
             expect(page.locator(".flow-step")).to_have_count(4)
             page.locator('button[data-panel="workspace"]').click()
             expect(page.locator("#workspace")).to_be_visible()
+            browser.close()
+    finally:
+        server.should_exit = True
+        thread.join(10)
+
+
+@pytest.mark.playwright
+def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path) -> None:
+    project = tmp_path / "zero-spec-project"
+    GitCanonicalRepository(project).initialize()
+    runtime = LocalWebRuntime(
+        project,
+        launch_token="zero-spec-token",
+        signer_key_root=tmp_path / "keys",
+        signer_password="zero-spec-test-password",
+    )
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(runtime.app, host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert server.started
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                channel="msedge" if os.name == "nt" else None
+            )
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.goto(f"http://127.0.0.1:{port}/unlock?token=zero-spec-token")
+            page.wait_for_load_state("networkidle")
+            page.locator('button[data-panel="intake"]').click()
+            form = page.locator("#intake-form")
+            form.get_by_label("工程名称（可选）").fill("gpu-lab-manager")
+            form.get_by_label("你的需求").fill(
+                "创建一个 Windows 11 本地 AI 工具。\n"
+                "- 检测 NVIDIA GPU 和显存；\n"
+                "- 提供模拟 nvidia-smi 的自动测试；\n"
+                "- 未经确认不得全局安装软件或修改 PATH。"
+            )
+            form.get_by_role("button", name="分析需求并选择模板").click()
+            expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
+            expect(page.locator("#intake-count")).to_have_text("4 项")
+            page.screenshot(path=str(tmp_path / "zero-spec-intake.png"), full_page=True)
+            accept = page.locator("#intake-accept-form")
+            accept.get_by_role("checkbox").check()
+            accept.get_by_role("button", name="采用推荐边界并建立工程草案").click()
+            expect(page.locator("#workspace-output")).to_contain_text(
+                "建立可编辑草案", timeout=60_000
+            )
+            page.locator("#workspace-submit-form").get_by_role(
+                "button", name="校验并提交审阅"
+            ).click()
+            expect(page.locator("#review-reason")).to_have_text(
+                "从自然语言需求建立初始工程规格", timeout=60_000
+            )
+            sign = page.locator("#sign-form")
+            sign.get_by_role("checkbox").check()
+            sign.get_by_role("button", name="确认批准并签名").click()
+            expect(page.locator("#sign-output")).to_contain_text("批准已完成")
+            page.get_by_role("button", name="将已批准变更写入工程").click()
+            expect(page.locator("#sign-output")).to_contain_text(
+                "已安全写入工程", timeout=60_000
+            )
+            canonical = tuple(item for _, item in runtime.domain.repository.documents())
+            assert len([item for item in canonical if item.get("resource_type") == "revision"]) == 4
             browser.close()
     finally:
         server.should_exit = True

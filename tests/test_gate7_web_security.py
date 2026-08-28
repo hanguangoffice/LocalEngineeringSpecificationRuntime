@@ -62,6 +62,7 @@ def test_ui_covers_product_workflow_and_uses_no_remote_assets(tmp_path: Path) ->
     page = client.get("/").text
     for panel in (
         "overview",
+        "intake",
         "explore",
         "context",
         "workspace",

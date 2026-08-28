@@ -78,7 +78,7 @@ h1 em { color: var(--green); font-style: normal; }
 .metric .status-dot.accent { background: var(--amber); }
 .metric small { display: block; color: var(--muted); font-size: 14px; }
 .metric strong { display: block; margin-top: 6px; font: 650 18px var(--serif); }
-.quick-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 26px; }
+.quick-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 26px; }
 .quick-actions button { display: grid; grid-template-columns: 44px 1fr; gap: 4px 12px; min-height: 112px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); background: transparent; text-align: left; }
 .quick-actions button:hover { border-color: #86a895; background: var(--surface); box-shadow: 0 12px 26px rgb(42 54 47 / 7%); }
 .quick-actions span { grid-row: 1 / 3; color: var(--amber); font: 650 20px var(--serif); }
@@ -106,6 +106,41 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .framed h3 span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--amber); font: 14px var(--sans); }
 .command-form { display: grid; grid-template-columns: minmax(260px, 1fr) auto; align-items: end; gap: 10px; max-width: 850px; margin-bottom: 24px; }
 .command-form button { min-width: 108px; }
+
+.intake-layout { display: grid; grid-template-columns: minmax(440px, 1.25fr) minmax(300px, .75fr); gap: 18px; }
+.intake-form textarea { min-height: 290px; }
+.intake-promise { padding: 28px; border-radius: 16px; color: #e8eee9; background: var(--ink-deep); }
+.intake-promise > span { color: #e3aa7e; font-size: 14px; font-weight: 700; letter-spacing: .05em; }
+.intake-promise ul { display: grid; gap: 18px; margin: 28px 0; padding: 0; list-style: none; }
+.intake-promise li { position: relative; padding-left: 27px; font: 16px/1.55 var(--serif); }
+.intake-promise li::before { content: "✓"; position: absolute; left: 0; color: #7bc29d; font-family: var(--sans); }
+.intake-promise small { display: block; padding-top: 20px; border-top: 1px solid #365247; color: #9eb0a7; font-size: 14px; line-height: 1.6; }
+.intake-result { margin-top: 22px; }
+.intake-summary { display: grid; grid-template-columns: 1.35fr .65fr .65fr; gap: 12px; margin-bottom: 16px; }
+.intake-summary article { min-height: 128px; padding: 21px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.intake-summary article:first-child { color: white; background: var(--green); border-color: var(--green); }
+.intake-summary small { display: block; color: var(--muted); font-size: 14px; }
+.intake-summary article:first-child small, .intake-summary article:first-child p { color: #d6e5dd; }
+.intake-summary strong { display: block; margin-top: 12px; font: 650 20px/1.35 var(--serif); }
+.intake-summary p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.intake-details { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; }
+.intake-details > section { padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.intake-details h3 { margin: 0 0 17px; font: 650 19px var(--serif); }
+.intake-requirements { display: grid; gap: 8px; max-height: 410px; overflow: auto; padding-right: 4px; }
+.intake-requirement { display: grid; grid-template-columns: 86px 1fr; gap: 12px; align-items: start; padding: 13px; border-radius: 10px; background: var(--paper-soft); }
+.intake-requirement b { color: var(--green); font-size: 14px; }
+.intake-requirement p { margin: 0; color: #44594f; font-size: 15px; line-height: 1.55; }
+.intake-reasons { display: grid; gap: 10px; }
+.intake-reasons p { margin: 0; padding-left: 18px; color: var(--muted); font-size: 15px; line-height: 1.55; position: relative; }
+.intake-reasons p::before { content: "•"; position: absolute; left: 2px; color: var(--amber); }
+.intake-question { margin-top: 20px; padding: 17px; border-left: 4px solid var(--amber); border-radius: 8px; background: var(--amber-soft); }
+.intake-question:empty { display: none; }
+.intake-question b { display: block; font: 650 16px var(--serif); }
+.intake-question p { margin: 8px 0 0; color: #6b5748; font-size: 14px; line-height: 1.55; }
+.intake-accept { display: grid; grid-template-columns: minmax(220px, .45fr) minmax(360px, 1fr) auto; align-items: end; gap: 16px; margin-top: 14px; padding: 22px; border-radius: 14px; color: white; background: var(--ink); }
+.intake-accept label { color: #d9e2dd; }
+.intake-accept .human-check { grid-column: auto; align-self: center; font-size: 14px; }
+.intake-accept button { min-width: 220px; color: var(--ink); background: #e7b283; }
 
 .explore-grid { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(430px, 1.1fr); gap: 22px; }
 .result-list { display: grid; align-content: start; gap: 10px; }
@@ -228,6 +263,9 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
   .baseline-layout { grid-template-columns: 1fr 1fr; }
   .baseline-note { grid-column: 1 / -1; }
   .maintenance-grid { grid-template-columns: repeat(2, 1fr); }
+  .quick-actions { grid-template-columns: repeat(2, 1fr); }
+  .intake-accept { grid-template-columns: 1fr 1.5fr; }
+  .intake-accept button { grid-column: 1 / -1; }
 }
 @media (max-width: 880px) {
   .masthead { grid-template-columns: 1fr auto; height: 72px; padding: 0 18px; }
@@ -241,7 +279,7 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
   .panel { min-height: auto; padding: 38px 22px 58px; }
   .quick-actions, .workbench, .baseline-layout { grid-template-columns: 1fr; }
   .workbench > :last-child, .baseline-note { grid-column: auto; }
-  .explore-grid, .two-column { grid-template-columns: 1fr; }
+  .explore-grid, .two-column, .intake-layout, .intake-details { grid-template-columns: 1fr; }
   .relationship-stage { min-height: 340px; }
   .sign-zone { grid-template-columns: 1fr; }
   .sign-intro { min-height: 130px; border-right: 0; border-bottom: 1px solid #365247; }
@@ -250,9 +288,10 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 @media (max-width: 600px) {
   html { font-size: 16px; }
   .wordmark small { display: none; }
-  .status-grid, .quick-actions, .review-grid, .maintenance-grid, .summary-grid { grid-template-columns: 1fr; }
+  .status-grid, .quick-actions, .review-grid, .maintenance-grid, .summary-grid, .intake-summary, .intake-accept { grid-template-columns: 1fr; }
   .command-form, .sign-fields, .decision-strip { grid-template-columns: 1fr; }
   .human-check, .sign-fields button { grid-column: auto; }
+  .intake-accept button { grid-column: auto; }
   .semantic-flow { grid-template-columns: repeat(2, 1fr); row-gap: 20px; }
   .semantic-flow::before, .flow-track { display: none; }
 }

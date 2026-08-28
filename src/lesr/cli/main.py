@@ -27,6 +27,7 @@ from lesr.domain.approval import (
 )
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import uuid7_candidate
+from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService
 
 app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
 context_app = typer.Typer(no_args_is_help=True)
@@ -38,6 +39,7 @@ projection_app = typer.Typer(no_args_is_help=True)
 reconcile_app = typer.Typer(no_args_is_help=True)
 mcp_app = typer.Typer(no_args_is_help=True)
 task_app = typer.Typer(no_args_is_help=True)
+intake_app = typer.Typer(no_args_is_help=True)
 app.add_typer(context_app, name="context")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(approval_app, name="approval")
@@ -47,6 +49,7 @@ app.add_typer(projection_app, name="projection")
 app.add_typer(reconcile_app, name="reconcile")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(task_app, name="task")
+app.add_typer(intake_app, name="intake")
 
 
 def emit(value: Any) -> None:
@@ -58,6 +61,34 @@ def read_object(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise typer.BadParameter(f"expected a JSON object: {path}")
     return value
+
+
+@intake_app.command("analyze")
+def analyze_intake(
+    source: Path,
+    project_name: str | None = None,
+    known_repository: str | None = None,
+) -> None:
+    """Select verified templates and map a UTF-8 natural-language request."""
+
+    emit(
+        IntakeService()
+        .analyze(
+            IntakeRequest(
+                description=source.read_text(encoding="utf-8"),
+                project_name=project_name,
+                known_repository=known_repository,
+            )
+        )
+        .model_dump(mode="json")
+    )
+
+
+@intake_app.command("verify-sources")
+def verify_intake_sources() -> None:
+    """Verify byte-exact vendored template snapshots."""
+
+    emit(IntakeCatalog().verify_vendored_sources())
 
 
 @app.command("capabilities")

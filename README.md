@@ -1,4 +1,4 @@
-# LESR Runtime 1.0.1
+# LESR Runtime 1.1.0
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -42,7 +42,7 @@ The medium and large performance protocols are fixed in `docs/performance/README
 
 ## 普通用户：从网页开始
 
-在已经初始化并配置好本机身份的 LESR 工程中运行：
+在 LESR 工程中运行（空工程也可以）：
 
 ```powershell
 lesr web PROJECT
@@ -54,7 +54,9 @@ lesr web PROJECT
 .venv\Scripts\python.exe -m lesr.cli.main web PROJECT
 ```
 
-终端会显示一个一次性本机地址。复制到浏览器打开后，日常工作只需要：
+终端会显示一个一次性本机地址。复制到浏览器打开后，如果手头只有一段自然语言需求，进入“从需求开始”直接粘贴原文。LESR 会从固定、已验证的 GitHub Spec Kit 与 arc42 上游快照中选择合适结构，保留用户原句，一次最多询问一个实质决定。明确确认后，空工程会自动获得受保护的本机身份、最小配置和可编辑 Workspace；这一接入步骤不会安装软件、下载模型、修改 PATH、删除内容或直接发布 Revision。
+
+已有规范的日常工作只需要：
 
 1. 用 Human Key 或关键词查找工程内容；
 2. 按名称选择工程配置和本机身份；
@@ -66,6 +68,9 @@ Commit、UID、Hash、Delegation UID 和原始协议返回不会出现在普通�
 只有审计或故障排查时才需要打开左侧的“审计详情”。页面使用更大的正文字号，
 GSAP 动效只表达页面切换、流程推进、状态改变和确认反馈；系统偏好减少动态效果时，
 所有状态仍会直接显示。
+
+模板来源、精确提交、许可证和 `grill-me` 行为选取记录见
+[`docs/zero-spec-intake-sources.md`](docs/zero-spec-intake-sources.md)。
 
 ## Advanced product entry points
 
@@ -79,6 +84,8 @@ lesr configuration-create-plan PROJECT CONFIGURATION.json --supporting-approval 
 lesr governance-approval-record PROJECT GOVERNANCE_APPROVAL.json ACTOR_UID DELEGATION_UID KEY
 lesr configuration-create PROJECT CONFIGURATION.json APPROVAL.json ACTOR_UID DELEGATION_UID KEY --supporting-approval GOVERNANCE_APPROVAL.json
 lesr capabilities
+lesr intake analyze REQUEST.txt --project-name PROJECT_NAME
+lesr intake verify-sources
 lesr resolve PROJECT IDENTIFIER
 lesr inspect PROJECT UID
 lesr query PROJECT --kind software_requirement --text reconnect
