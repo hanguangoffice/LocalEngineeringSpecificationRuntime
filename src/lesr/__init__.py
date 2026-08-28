@@ -8,7 +8,7 @@ from lesr.domain.semantic import (
     Revision,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __design_baseline__ = "1.0"
 __all__ = [
     "ConfigurationSnapshot",

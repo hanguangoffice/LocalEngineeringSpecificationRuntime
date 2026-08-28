@@ -1,4 +1,4 @@
-# LESR Runtime 1.1.0
+# LESR Runtime 1.2.0
 
 Local Engineering Specification Runtime (LESR) is a local, single-user semantic
 runtime for governed engineering specifications. Git commit trees are the authority;
@@ -54,13 +54,13 @@ lesr web PROJECT
 .venv\Scripts\python.exe -m lesr.cli.main web PROJECT
 ```
 
-终端会显示一个一次性本机地址。复制到浏览器打开后，如果手头只有一段自然语言需求，进入“从需求开始”直接粘贴原文。LESR 会从固定、已验证的 GitHub Spec Kit 与 arc42 上游快照中选择合适结构，保留用户原句，一次最多询问一个实质决定。明确确认后，空工程会自动获得受保护的本机身份、最小配置和可编辑 Workspace；这一接入步骤不会安装软件、下载模型、修改 PATH、删除内容或直接发布 Revision。
+终端会显示一个本机地址。复制到浏览器打开后，进入“从需求开始”：可以直接粘贴自然语言需求，也可以导入自己的 Markdown 或 PDF 规范文件。LESR 会选择合适的 GitHub Spec Kit 与 arc42 结构，按用途整理工程内容并建立可编辑草案。运行策略、本机身份和初始配置在后台完成；只有会改变产品范围或预期结果、且无法从已有内容判断的选择才会交给用户。
 
 已有规范的日常工作只需要：
 
 1. 用 Human Key 或关键词查找工程内容；
 2. 按名称选择工程配置和本机身份；
-3. 填写 Human Key、内容和变更理由，提交系统校验；
+3. 填写 Human Key、内容和变更理由，检查影响与问题；
 4. 批准人阅读变更范围、批准理由和校验结论后签名；
 5. 将已批准变更写入工程，必要时再发布基线。
 

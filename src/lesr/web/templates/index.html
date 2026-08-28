@@ -39,76 +39,81 @@
     <main>
       <section class="panel active" id="overview">
         <div class="panel-heading">
-          <p class="eyebrow">今日工作</p>
-          <h1>处理工程内容，<br><em>不需要理解系统标识。</em></h1>
-          <p class="lede">查找规范、说明变更、查看影响，再由合适的人批准。版本、标识和校验凭据由 LESR 自动处理。</p>
+          <p class="eyebrow">工程工作台</p>
+          <h1>让需求、变更与批准<br><em>始终对得上。</em></h1>
+          <p class="lede">从一段需求或现有规范开始，整理工程内容、查看影响，并完成审阅。</p>
         </div>
-        <div class="welcome-grid">
-          <article class="current-config-card">
-            <small>当前选择</small><strong id="overview-configuration">尚未选择配置</strong>
-            <p id="overview-configuration-note">进入“发起变更”选择本次工作的工程配置。</p>
-            <button type="button" data-go="intake">粘贴需求，自动整理 <span>→</span></button>
+        <div class="overview-focus">
+          <article class="priority-work">
+            <small>开始</small>
+            <h2 id="overview-priority-title">建立工程规范</h2>
+            <p id="overview-priority-note">描述新需求，或导入已有的 Markdown、PDF 规范文件。</p>
+            <div class="priority-actions">
+              <button class="priority-primary" type="button" data-go="intake" data-intake-mode="write">描述需求</button>
+              <button class="priority-secondary" type="button" data-go="intake" data-intake-mode="import">导入现有规范</button>
+            </div>
           </article>
-          <div class="status-grid" id="health-grid">
-            <article class="metric"><i class="status-dot"></i><div><small>工程状态</small><strong id="health-canonical">读取中</strong></div></article>
-            <article class="metric"><i class="status-dot"></i><div><small>资料索引</small><strong id="health-projection">读取中</strong></div></article>
-            <article class="metric"><i class="status-dot"></i><div><small>规范版本</small><strong id="health-manifest">读取中</strong></div></article>
-            <article class="metric"><i class="status-dot accent"></i><div><small>未完成变更</small><strong id="health-workspaces">0</strong></div></article>
-          </div>
+          <aside class="project-glance" aria-label="当前工程概览">
+            <p>当前工程</p>
+            <dl>
+              <div><dt>配置</dt><dd id="overview-configuration">尚未选择配置</dd></div>
+              <div><dt>待处理变更</dt><dd id="health-workspaces">0</dd></div>
+              <div><dt>工程状态</dt><dd id="health-canonical">读取中</dd></div>
+              <div><dt>资料索引</dt><dd id="health-projection">读取中</dd></div>
+            </dl>
+            <span id="overview-configuration-note">尚未建立工程配置。</span>
+            <span id="health-manifest" hidden>读取中</span>
+          </aside>
         </div>
-        <div class="quick-actions" aria-label="常用操作">
-          <button type="button" data-go="intake"><span>01</span><b>只有一段需求</b><small>系统选择模板并整理缺口</small></button>
-          <button type="button" data-go="explore"><span>02</span><b>查找一条规范</b><small>按 Human Key 或关键词搜索</small></button>
-          <button type="button" data-go="workspace"><span>03</span><b>说明一次变更</b><small>系统自动建立工作副本</small></button>
-          <button type="button" data-go="review"><span>04</span><b>处理待批准事项</b><small>聚焦范围、影响和理由</small></button>
-        </div>
-        <div class="semantic-flow" aria-label="变更流程">
-          <div class="flow-track" id="flow-track"></div>
-          <div class="flow-step active" data-flow="0"><i>1</i><b>说明变更</b><span>写清楚改什么、为什么</span></div>
-          <div class="flow-step" data-flow="1"><i>2</i><b>系统校验</b><span>检查规则与影响</span></div>
-          <div class="flow-step" data-flow="2"><i>3</i><b>人工批准</b><span>确认范围与理由</span></div>
-          <div class="flow-step" data-flow="3"><i>4</i><b>保存版本</b><span>安全写入工程</span></div>
-        </div>
+        <nav class="overview-actions" aria-label="其他工作">
+          <p>其他工作</p>
+          <button type="button" data-go="explore"><b>查找规范</b><span>按 Human Key 或关键词定位内容</span></button>
+          <button type="button" data-go="workspace"><b>发起变更</b><span>说明修改内容与原因</span></button>
+          <button type="button" data-go="review"><b>审阅与批准</b><span>查看变更范围、影响和理由</span></button>
+        </nav>
       </section>
 
       <section class="panel" id="intake">
         <div class="panel-heading compact">
-          <p class="eyebrow">没有规范也可以开始</p>
-          <h2>把现有需求直接交给 LESR</h2>
-          <p class="section-copy">系统会先读取需求与已知工程位置，自动选择经过核对的公开模板，保留原话并整理成工程条目。只有会改变安全、授权或许可证边界的问题才会询问你。</p>
+          <p class="eyebrow">创建工程规范</p>
+          <h2>从你已有的内容开始</h2>
+          <p class="section-copy">粘贴需求，或导入 Markdown、PDF 规范文件。</p>
         </div>
-        <div class="intake-layout">
-          <form class="stack-form framed intake-form" id="intake-form">
+        <div class="intake-composer">
+          <div class="intake-tabs" role="tablist" aria-label="输入方式">
+            <button class="active" type="button" role="tab" aria-selected="true" data-intake-tab="write">描述需求</button>
+            <button type="button" role="tab" aria-selected="false" data-intake-tab="import">导入规范文件</button>
+          </div>
+          <form class="stack-form intake-form" id="intake-form" data-intake-view="write">
             <label>工程名称（可选）<input name="project_name" placeholder="例如 gpu-lab-manager" autocomplete="off"></label>
             <label>已有工程位置（可选）<input name="known_repository" placeholder="例如 D:\Proj\gpu-lab-manager" autocomplete="off"></label>
-            <label>你的需求<textarea name="description" minlength="20" placeholder="直接粘贴原始需求，不需要先改写成规范格式。" required></textarea></label>
-            <button>分析需求并选择模板</button>
+            <label>你的需求<textarea name="description" minlength="20" placeholder="直接粘贴现有需求。" required></textarea></label>
+            <button>整理工程内容</button>
           </form>
-          <aside class="intake-promise">
-            <span>系统负责</span>
-            <ul>
-              <li>识别工程类型并选择模板</li>
-              <li>保留原始表述，不擅自补写需求</li>
-              <li>能自行调查的事实不询问用户</li>
-              <li>一次只处理一个真正重要的缺口</li>
-            </ul>
-            <small>模板来源、版本和比对记录保存在审计资料中。</small>
-          </aside>
+          <form class="stack-form intake-form" id="intake-import-form" data-intake-view="import" hidden>
+            <label>规范文件<input type="file" name="spec_file" accept=".md,.markdown,.pdf,text/markdown,application/pdf" required></label>
+            <div class="intake-inline-fields">
+              <label>工程名称（可选）<input name="project_name" placeholder="例如 gpu-lab-manager" autocomplete="off"></label>
+              <label>已有工程位置（可选）<input name="known_repository" placeholder="例如 D:\Proj\gpu-lab-manager" autocomplete="off"></label>
+            </div>
+            <button>读取规范文件</button>
+          </form>
         </div>
         <div class="intake-result" id="intake-result" hidden>
-          <div class="intake-summary">
-            <article><small>已匹配方案</small><strong id="intake-pack">—</strong><p id="intake-pack-summary"></p></article>
-            <article><small>整理结果</small><strong id="intake-count">0 项</strong><p>Human Key 由系统自动分配。</p></article>
-            <article><small>需要你决定</small><strong id="intake-question-count">0 项</strong><p>只显示当前最重要的一项。</p></article>
-          </div>
-          <div class="intake-details">
-            <section><h3>整理出的工程内容</h3><div class="intake-requirements" id="intake-requirements"></div></section>
-            <section><h3>模板选择依据</h3><div class="intake-reasons" id="intake-reasons"></div><div class="intake-question" id="intake-question"></div></section>
-          </div>
+          <header class="intake-result-heading">
+            <div><small>可编辑草案</small><h3>已整理 <strong id="intake-count">0 项</strong> 工程内容</h3></div>
+            <div class="intake-template"><small>采用</small><strong id="intake-pack">—</strong><span id="intake-pack-summary"></span></div>
+          </header>
+          <span id="intake-question-count" hidden>0 项</span>
+          <div class="intake-question" id="intake-question" hidden></div>
+          <section class="intake-outline">
+            <div class="intake-outline-heading"><h3>工程内容</h3><span>按用途分组</span></div>
+            <div class="intake-requirements" id="intake-requirements"></div>
+          </section>
+          <details class="intake-source-details"><summary>模板与来源</summary><div class="intake-reasons" id="intake-reasons"></div></details>
           <form class="intake-accept" id="intake-accept-form">
-            <label>本机批准人名称<input name="display_name" value="本机工程所有者" required></label>
-            <label class="human-check"><input type="checkbox" name="human_confirm" required><span>我确认由 LESR 建立本机身份（如果尚未建立）和可编辑的工程草案。此操作不会安装软件、下载模型、修改 PATH 或删除现有内容。</span></label>
-            <button>采用推荐边界并建立工程草案</button>
+            <p>内容建立后可继续编辑，再提交审阅。</p>
+            <button>建立工程草案</button>
           </form>
         </div>
       </section>
@@ -123,7 +128,7 @@
       </section>
 
       <section class="panel" id="context">
-        <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理完成任务所需的资料</h2><p class="section-copy">输入目标的 Human Key，系统会自动解析版本和关系。结果按“必须阅读、建议参考、仍有缺口”呈现。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理完成任务所需的资料</h2><p class="section-copy">输入目标的 Human Key，查看必须阅读、建议参考和仍有缺口的内容。</p></div>
         <div class="two-column">
           <form class="stack-form framed" id="context-form"><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>目标 Human Key<input name="target_key" placeholder="例如 REQ-SW-0142" required></label><label>这次要做什么<select name="task_type"><option value="requirement_change">修改需求</option><option value="test_design">设计测试</option><option value="deviation_review">审阅偏离</option><option value="can_analysis">分析 CAN 接口</option><option value="mqtt_change">修改 MQTT 设计</option></select></label><button>整理相关资料</button></form>
           <div class="plain-legend"><article><i class="mandatory"></i><div><b>必须阅读</b><p>由规则、关系和本次操作直接决定。</p></div></article><article><i class="supporting"></i><div><b>建议参考</b><p>可能有帮助，但不会替代必读内容。</p></div></article><article><i class="unknown"></i><div><b>仍有缺口</b><p>缺少关系或配置时会明确告诉你。</p></div></article></div>
@@ -132,7 +137,7 @@
       </section>
 
       <section class="panel" id="workspace">
-        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>发起一项工程变更</h2><p class="section-copy">内部版本、工作区编号和授权信息会从所选配置与本机身份自动取得。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>发起一项工程变更</h2><p class="section-copy">选择工程配置，说明要修改的内容和原因。</p></div>
         <div class="workspace-layout">
           <div class="workbench">
             <form class="stack-form framed" id="workspace-open-form" data-stage="1"><h3><span>1</span> 选择工作范围</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>以谁的身份工作<select name="actor" data-actor-select required></select></label><button>开始编辑</button></form>
@@ -142,7 +147,7 @@
           <aside class="workspace-status-card"><small>本次变更</small><strong id="workspace-state">尚未开始</strong><p id="workspace-guidance">先选择配置和本机身份。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
         </div>
         <div class="decision-strip" id="decision-strip"><span>系统校验</span><strong>等待变更内容</strong><small>送审后显示是否可批准，以及需要处理的问题。</small></div>
-        <div class="human-output" id="workspace-output"><p>这里会显示操作结果，不展示内部计算字段。</p></div>
+        <div class="human-output" id="workspace-output"><p>尚未发起变更。</p></div>
       </section>
 
       <section class="panel" id="review">
@@ -162,7 +167,7 @@
       </section>
 
       <section class="panel" id="baseline">
-        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>发布已批准的工程基线</h2><p class="section-copy">选择配置、完成系统检查和人工批准。内部提交关系由系统维护。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>发布已批准的工程基线</h2><p class="section-copy">选择工程配置和基线名称，完成审阅后发布。</p></div>
         <div class="baseline-layout">
           <form class="stack-form framed" id="baseline-prepare-form"><h3><span>1</span> 选择要发布的配置</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><button>检查是否可以发布</button></form>
           <form class="stack-form framed" id="baseline-apply-form"><h3><span>2</span> 命名并发布</h3><input type="hidden" name="review_package_uid"><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><p class="form-note">准备完成后，请到“审阅与批准”确认，再返回这里发布。</p><button>发布已批准基线</button></form>

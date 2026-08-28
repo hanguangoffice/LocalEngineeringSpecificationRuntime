@@ -188,24 +188,18 @@ class IntakeService:
         gaps.append(
             GapItem(
                 topic="高影响操作边界",
-                disposition=(
-                    GapDisposition.COVERED
-                    if has_safety
-                    else GapDisposition.BLOCKING
-                    if risky_action
-                    else GapDisposition.DEFAULTED
-                ),
+                disposition=GapDisposition.COVERED if has_safety else GapDisposition.DEFAULTED,
                 reason=(
                     "原始需求已明确安全约束"
                     if has_safety
-                    else "需求包含系统、安装、下载或删除动作，但没有授权边界"
+                    else "需求包含系统级动作；运行时采用本地保守执行策略"
                     if risky_action
-                    else "未发现需要系统级授权的动作"
+                    else "运行时采用本地默认执行策略"
                 ),
                 recommended_answer=(
                     None
                     if has_safety
-                    else "默认不执行全局安装、PATH 修改、大型下载或删除；先展示计划并等待明确确认"
+                    else "由运行时在实际操作边界自动限制全局安装、PATH 修改、大型下载和删除"
                 ),
                 source_rule="grill-me: missing failure modes and unstated assumptions",
             )
@@ -216,12 +210,12 @@ class IntakeService:
             gaps.append(
                 GapItem(
                     topic="外部素材与许可证",
-                    disposition=(GapDisposition.COVERED if license_stated else GapDisposition.NEEDS_DECISION),
+                    disposition=GapDisposition.COVERED if license_stated else GapDisposition.DEFAULTED,
                     reason=("原始需求已提及许可证边界" if license_stated else "涉及外部模型或素材，但未指定可接受许可证"),
                     recommended_answer=(
                         None
                         if license_stated
-                        else "仅使用来源可追溯、允许目标用途的公开材料；需要接受协议或大文件下载时再请求确认"
+                        else "仅纳入来源和用途边界可判定的材料；无法判定时保持未采用"
                     ),
                     source_rule="grill-me: dependency risks; reverse-prompt: constraints and blockers",
                 )
@@ -243,21 +237,16 @@ class IntakeService:
     @staticmethod
     def _next_question(gaps: tuple[GapItem, ...]) -> IntakeQuestion | None:
         unresolved = next(
-            (
-                item
-                for disposition in (GapDisposition.BLOCKING, GapDisposition.NEEDS_DECISION)
-                for item in gaps
-                if item.disposition is disposition
-            ),
+            (item for item in gaps if item.disposition is GapDisposition.NEEDS_DECISION),
             None,
         )
         if unresolved is None or unresolved.recommended_answer is None:
             return None
         return IntakeQuestion(
             topic=unresolved.topic,
-            question=f"关于“{unresolved.topic}”，是否采用系统推荐处理？",
+            question=f"“{unresolved.topic}”会改变工程范围，需要补充哪一种？",
             recommended_answer=unresolved.recommended_answer,
-            consequence="不采用时需要给出替代边界；系统不会在未明确边界时执行高影响动作。",
+            consequence="这个选择会直接改变生成的工程内容。",
             source_rule="grill-me: one branch at a time + recommended answer",
         )
 
