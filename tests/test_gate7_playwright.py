@@ -39,6 +39,8 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
                 channel="msedge" if os.name == "nt" else None
             )
             page = browser.new_page(viewport={"width": 1440, "height": 960})
+            page_errors: list[str] = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}/unlock?token=playwright-token")
             expect(page.locator("#overview h1")).to_be_visible()
             assert page.evaluate("window.__LESR_MOTION__.engine") == "GSAP"
@@ -88,10 +90,23 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
             page.get_by_label("Human Key 或关键词").fill("no-synthetic-result")
             page.get_by_role("button", name="搜索").click()
             page.get_by_text("没有找到匹配内容。").wait_for()
+            expect(page.locator("#query-result-count")).to_have_text("没有匹配内容")
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "explore-empty.png"), full_page=True)
+            for panel_name in ("context", "tasks", "maintenance"):
+                page.locator(f'button[data-panel="{panel_name}"]').click()
+                expect(page.locator(f"#{panel_name}")).to_be_visible()
+                page.wait_for_timeout(650)
+                page.screenshot(
+                    path=str(tmp_path / f"{panel_name}-empty.png"), full_page=True
+                )
             page.locator('button[data-panel="audit"]').click()
             expect(page.locator("#audit-commit")).to_have_text(
                 repository.current_commit()
             )
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "audit-collapsed.png"), full_page=True)
+            assert not page_errors
             page.get_by_role("button", name="锁定会话").click()
             page.get_by_role("heading", name="LESR is locked").wait_for()
             browser.close()
@@ -134,6 +149,28 @@ def test_local_ui_honors_reduced_motion_without_hiding_state(tmp_path: Path) -> 
             page.screenshot(path=str(tmp_path / "narrow-overview.png"), full_page=True)
             page.locator('button[data-panel="workspace"]').click()
             expect(page.locator("#workspace")).to_be_visible()
+            for panel_name in (
+                "explore",
+                "context",
+                "review",
+                "baseline",
+                "tasks",
+                "maintenance",
+                "audit",
+            ):
+                page.locator(f'button[data-panel="{panel_name}"]').click()
+                expect(page.locator(f"#{panel_name}")).to_be_visible()
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth + 1"
+                )
+            page.set_viewport_size({"width": 390, "height": 844})
+            for panel_name in ("explore", "context", "review", "baseline"):
+                page.locator(f'button[data-panel="{panel_name}"]').click()
+                expect(page.locator(f"#{panel_name}")).to_be_visible()
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth + 1"
+                )
+            page.screenshot(path=str(tmp_path / "narrow-task-page.png"), full_page=True)
             browser.close()
     finally:
         server.should_exit = True
@@ -269,6 +306,8 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
             )
             expect(page.locator("#sign-scope")).to_contain_text("DES-WEB-1")
             expect(page.locator("#review")).not_to_contain_text("sha256:")
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "review-populated.png"), full_page=True)
             candidate_package_uid = page.locator(
                 '#sign-form [name="package_uid"]'
             ).input_value()
@@ -285,7 +324,7 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
             baseline_prepare = page.locator("#baseline-prepare-form")
             result_configuration_uid = baseline_prepare.get_by_label("工程配置").input_value()
             assert result_configuration_uid != product.configuration_uid
-            baseline_prepare.get_by_role("button", name="检查是否可以发布").click()
+            baseline_prepare.get_by_role("button", name="检查并送审").click()
             page.locator("#sign-form").wait_for()
             page.wait_for_function(
                 "previous => document.querySelector('#sign-form [name=package_uid]').value !== previous",
@@ -296,6 +335,8 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
                 "返回“发布基线”", timeout=60_000
             )
             page.locator('button[data-panel="baseline"]').click()
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "baseline-approved.png"), full_page=True)
             baseline_apply = page.locator("#baseline-apply-form")
             baseline_apply.get_by_label("版本名称（可选）").fill("设计冻结 1.0")
             baseline_apply.get_by_role("button", name="发布已批准基线").click()
