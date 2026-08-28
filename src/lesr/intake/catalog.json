@@ -1,0 +1,128 @@
+{
+  "sources": [
+    {
+      "source_uid": "github-spec-kit-2026-08-28",
+      "display_name": "GitHub Spec Kit",
+      "repository": "https://github.com/github/spec-kit",
+      "commit": "59dc772b47b5d765ee8a920c3ccfd6dbac5bd1ec",
+      "license": "MIT",
+      "usage": "vendored_template",
+      "notes": "Exact upstream files are distributed with the runtime and verified before use.",
+      "files": [
+        {"path": "spec-kit/templates/spec-template.md", "bytes": 4556, "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"},
+        {"path": "spec-kit/templates/plan-template.md", "bytes": 3770, "sha256": "dfba43da2b2a207ff8c177a0fba03af074fd45e261696b4b64172041fad2e992"},
+        {"path": "spec-kit/templates/tasks-template.md", "bytes": 9182, "sha256": "1e448e9153462e8c5b5a55231a54c756d870a82950d4dd9425a2bf5b7008a0d9"},
+        {"path": "spec-kit/presets/lean/README.md", "bytes": 1441, "sha256": "7f7291892edc0fadcc18a027c7bc06ff6767ce08f21039876cd7f455be200536"},
+        {"path": "spec-kit/presets/lean/commands/speckit.specify.md", "bytes": 618, "sha256": "9d68997ce418cc3293f66f946681bed0a33328c64a05757c0554ded19eec0ce2"},
+        {"path": "spec-kit/LICENSE", "bytes": 1060, "sha256": "2510b446bc1f0cf9702453075d20cd88631e20e5642658edb7325d9c1eb534f7"}
+      ]
+    },
+    {
+      "source_uid": "arc42-zh-2026-07-07",
+      "display_name": "arc42 中文模板",
+      "repository": "https://github.com/arc42/arc42-template",
+      "commit": "8dff0d9b1f9640684df8c3bbcdc2ee45f989ca0f",
+      "license": "CC-BY-SA-4.0",
+      "usage": "vendored_template",
+      "notes": "Unmodified Chinese AsciiDoc source; arc42 attribution and ShareAlike terms apply to template adaptations, not user content.",
+      "files": [
+        {"path": "arc42-template/ZH/arc42-template.adoc", "bytes": 1592, "sha256": "e5ea43061d474c6ee8276c13e1678c6cf1dd2c60542f7f9c676b4aec5cc43011"},
+        {"path": "arc42-template/ZH/adoc/01_introduction_and_goals.adoc", "bytes": 2657, "sha256": "6706d76f2b37879f3507b44cf1d4356cca97f49976b6b740643c0b034ae03011"},
+        {"path": "arc42-template/ZH/adoc/02_architecture_constraints.adoc", "bytes": 838, "sha256": "a6722707cfe292bf5623a0214c9a116fddf5ffcf7500c354e02a6be7c59cf8c6"},
+        {"path": "arc42-template/ZH/adoc/03_context_and_scope.adoc", "bytes": 2193, "sha256": "e3be826852b17afaf6475b4a36c70bd4bae3853a3abc62f87dd87a7ae756f33f"},
+        {"path": "arc42-template/ZH/adoc/04_solution_strategy.adoc", "bytes": 932, "sha256": "0586bc0bad3a257b281f2ca606f20f45315c4d50ff7fc9d9bb21a518ecccf950"},
+        {"path": "arc42-template/ZH/adoc/05_building_block_view.adoc", "bytes": 5403, "sha256": "680ecc1a8e46624ae47ab7434b8de93d5f0c43888e50af045bfe85228b3a1cbb"},
+        {"path": "arc42-template/ZH/adoc/06_runtime_view.adoc", "bytes": 1408, "sha256": "1f8643806fb8770e19571b93c2432e1c9b4df2847367f8bd3830894ae3cb08b1"},
+        {"path": "arc42-template/ZH/adoc/07_deployment_view.adoc", "bytes": 2741, "sha256": "6a80cf505efe4f4df3e6e7128240428f1f6d8bdfbf81c1e38a748588f74e9cc9"},
+        {"path": "arc42-template/ZH/adoc/08_concepts.adoc", "bytes": 1680, "sha256": "a6c5be2afd01e69698a72f560983c2f2356cd751a9647fcd70a68866b19b59ef"},
+        {"path": "arc42-template/ZH/adoc/09_architecture_decisions.adoc", "bytes": 1110, "sha256": "f6af688fe86dd7b001dfeb6616aeb3d1d254b82f3481eeab09d3cb45e1abd35d"},
+        {"path": "arc42-template/ZH/adoc/10_quality_requirements.adoc", "bytes": 3807, "sha256": "43dd764419ebbe543d6c8ed88b98f64e4ccc6318dd12ea6dc7c1c7d60a486894"},
+        {"path": "arc42-template/ZH/adoc/11_technical_risks.adoc", "bytes": 783, "sha256": "f57070b4f1b63c8301123055a2a6ba3db24d3142f3023cb2bdaa5594d2e8844f"},
+        {"path": "arc42-template/ZH/adoc/12_glossary.adoc", "bytes": 802, "sha256": "6e065d8941f6b7150895950092d23a57b5fdaedfc081414d7cbcfe5c5f9de558"},
+        {"path": "arc42-template/LICENSE.txt", "bytes": 993, "sha256": "947c706959e8b60cddc640fbb3c34d242fb435ca99777e01c3cfd65784d2ba4d"}
+      ]
+    },
+    {
+      "source_uid": "grill-me-stevegsax-2026-04-07",
+      "display_name": "grill-me archived method reference",
+      "repository": "https://github.com/stevegsax/grill-me",
+      "commit": "a383d37b36d221f1d635ac7567d04ca5a565facb",
+      "license": "reference-only: no repository license",
+      "usage": "method_reference",
+      "notes": "No source prose is distributed. Only independently implemented behavior is traced in docs/zero-spec-intake-sources.md.",
+      "files": [
+        {"path": "grill-me-stevegsax/SKILL.md", "bytes": 13854, "sha256": "0a54e4e5bbee4359feafc288c0bf67818c54729cb0ea2d5f69cce7d51d66589d"}
+      ]
+    },
+    {
+      "source_uid": "grill-me-matt-riley-2026-08-05",
+      "display_name": "grill-me and reverse-prompt method reference",
+      "repository": "https://github.com/matt-riley/agent-skills",
+      "commit": "b4cbef10b4f7e84210d1e4f9d696d25ac74699be",
+      "license": "GPL-3.0",
+      "usage": "method_reference",
+      "notes": "No GPL source prose or code is distributed. Selected interaction behavior is independently implemented and traced.",
+      "files": [
+        {"path": "agent-skills/skills/grill-me/SKILL.md", "bytes": 6113, "sha256": "73cdeb5f05c677e154defeeebfe7504e64161d31fe7742e999644b42a3d304e0"},
+        {"path": "agent-skills/skills/grill-me/references/interrogation-patterns.md", "bytes": 866, "sha256": "008e89e1c3eb78313645ef37ad251aadbd0d7a87eff8d8648121072fabc75a10"},
+        {"path": "agent-skills/skills/reverse-prompt/SKILL.md", "bytes": 6316, "sha256": "ed475a07c9645e716a6320278351d8443fe1416bcde97eeb937805e68ddc06c8"}
+      ]
+    }
+  ],
+  "packs": [
+    {
+      "pack_uid": "local-ai-runtime",
+      "display_name": "本地 AI 与 GPU 工程",
+      "summary": "Spec Kit 的需求与验收骨架，加上 arc42 的运行时、部署、质量和风险视图。",
+      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
+      "signals": ["nvidia", "cuda", "gpu", "rtx", "显存", "本地模型", "pytorch", "数字人", "tts", "live2d", "ai"],
+      "priority": 90,
+      "architecture_depth": "full"
+    },
+    {
+      "pack_uid": "embedded-engineering",
+      "display_name": "嵌入式与软硬件协同",
+      "summary": "Spec Kit 的可测试需求，加上 arc42 的系统边界、运行时和部署视图。",
+      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
+      "signals": ["embedded", "firmware", "mcu", "can", "ecu", "嵌入式", "固件", "硬件", "实时"],
+      "priority": 80,
+      "architecture_depth": "full"
+    },
+    {
+      "pack_uid": "api-integration",
+      "display_name": "服务、API 与系统集成",
+      "summary": "Spec Kit 的用户场景与验收要求，加上 arc42 的上下文、接口和运行时视图。",
+      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
+      "signals": ["api", "service", "服务", "接口", "mqtt", "消息", "webhook", "integration", "集成"],
+      "priority": 70,
+      "architecture_depth": "full"
+    },
+    {
+      "pack_uid": "platform-runtime",
+      "display_name": "平台、运行时与插件系统",
+      "summary": "Spec Kit 的交付规格，加上 arc42 的构建块、运行时、部署和架构决策。",
+      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
+      "signals": ["platform", "runtime", "plugin", "adapter", "平台", "运行时", "插件", "适配器", "框架"],
+      "priority": 60,
+      "architecture_depth": "full"
+    },
+    {
+      "pack_uid": "small-delivery-lean",
+      "display_name": "小工具、脚本与快速原型",
+      "summary": "严格采用 Spec Kit Lean 的 specify → plan → tasks → implement 最小流程。",
+      "source_uids": ["github-spec-kit-2026-08-28"],
+      "signals": ["script", "cli", "poc", "prototype", "脚本", "小工具", "原型", "一次性"],
+      "priority": 40,
+      "architecture_depth": "lean"
+    },
+    {
+      "pack_uid": "software-standard",
+      "display_name": "通用软件产品与功能",
+      "summary": "采用 GitHub Spec Kit 的标准需求、计划和任务模板。",
+      "source_uids": ["github-spec-kit-2026-08-28"],
+      "signals": [],
+      "priority": 1,
+      "architecture_depth": "standard"
+    }
+  ]
+}

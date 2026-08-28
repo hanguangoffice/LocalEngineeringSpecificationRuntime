@@ -23,6 +23,7 @@
     <nav class="rail" aria-label="主要功能">
       <p class="rail-label">工作</p>
       <button class="nav-item active" data-panel="overview"><i>⌂</i><b>工作台</b></button>
+      <button class="nav-item" data-panel="intake"><i>✦</i><b>从需求开始</b></button>
       <button class="nav-item" data-panel="explore"><i>⌕</i><b>查找规范</b></button>
       <button class="nav-item" data-panel="context"><i>◎</i><b>相关资料</b></button>
       <button class="nav-item" data-panel="workspace"><i>＋</i><b>发起变更</b></button>
@@ -46,7 +47,7 @@
           <article class="current-config-card">
             <small>当前选择</small><strong id="overview-configuration">尚未选择配置</strong>
             <p id="overview-configuration-note">进入“发起变更”选择本次工作的工程配置。</p>
-            <button type="button" data-go="workspace">开始一次变更 <span>→</span></button>
+            <button type="button" data-go="intake">粘贴需求，自动整理 <span>→</span></button>
           </article>
           <div class="status-grid" id="health-grid">
             <article class="metric"><i class="status-dot"></i><div><small>工程状态</small><strong id="health-canonical">读取中</strong></div></article>
@@ -56,9 +57,10 @@
           </div>
         </div>
         <div class="quick-actions" aria-label="常用操作">
-          <button type="button" data-go="explore"><span>01</span><b>查找一条规范</b><small>按 Human Key 或关键词搜索</small></button>
-          <button type="button" data-go="workspace"><span>02</span><b>说明一次变更</b><small>系统自动建立工作副本</small></button>
-          <button type="button" data-go="review"><span>03</span><b>处理待批准事项</b><small>聚焦范围、影响和理由</small></button>
+          <button type="button" data-go="intake"><span>01</span><b>只有一段需求</b><small>系统选择模板并整理缺口</small></button>
+          <button type="button" data-go="explore"><span>02</span><b>查找一条规范</b><small>按 Human Key 或关键词搜索</small></button>
+          <button type="button" data-go="workspace"><span>03</span><b>说明一次变更</b><small>系统自动建立工作副本</small></button>
+          <button type="button" data-go="review"><span>04</span><b>处理待批准事项</b><small>聚焦范围、影响和理由</small></button>
         </div>
         <div class="semantic-flow" aria-label="变更流程">
           <div class="flow-track" id="flow-track"></div>
@@ -66,6 +68,48 @@
           <div class="flow-step" data-flow="1"><i>2</i><b>系统校验</b><span>检查规则与影响</span></div>
           <div class="flow-step" data-flow="2"><i>3</i><b>人工批准</b><span>确认范围与理由</span></div>
           <div class="flow-step" data-flow="3"><i>4</i><b>保存版本</b><span>安全写入工程</span></div>
+        </div>
+      </section>
+
+      <section class="panel" id="intake">
+        <div class="panel-heading compact">
+          <p class="eyebrow">没有规范也可以开始</p>
+          <h2>把现有需求直接交给 LESR</h2>
+          <p class="section-copy">系统会先读取需求与已知工程位置，自动选择经过核对的公开模板，保留原话并整理成工程条目。只有会改变安全、授权或许可证边界的问题才会询问你。</p>
+        </div>
+        <div class="intake-layout">
+          <form class="stack-form framed intake-form" id="intake-form">
+            <label>工程名称（可选）<input name="project_name" placeholder="例如 gpu-lab-manager" autocomplete="off"></label>
+            <label>已有工程位置（可选）<input name="known_repository" placeholder="例如 D:\Proj\gpu-lab-manager" autocomplete="off"></label>
+            <label>你的需求<textarea name="description" minlength="20" placeholder="直接粘贴原始需求，不需要先改写成规范格式。" required></textarea></label>
+            <button>分析需求并选择模板</button>
+          </form>
+          <aside class="intake-promise">
+            <span>系统负责</span>
+            <ul>
+              <li>识别工程类型并选择模板</li>
+              <li>保留原始表述，不擅自补写需求</li>
+              <li>能自行调查的事实不询问用户</li>
+              <li>一次只处理一个真正重要的缺口</li>
+            </ul>
+            <small>模板来源、版本和比对记录保存在审计资料中。</small>
+          </aside>
+        </div>
+        <div class="intake-result" id="intake-result" hidden>
+          <div class="intake-summary">
+            <article><small>已匹配方案</small><strong id="intake-pack">—</strong><p id="intake-pack-summary"></p></article>
+            <article><small>整理结果</small><strong id="intake-count">0 项</strong><p>Human Key 由系统自动分配。</p></article>
+            <article><small>需要你决定</small><strong id="intake-question-count">0 项</strong><p>只显示当前最重要的一项。</p></article>
+          </div>
+          <div class="intake-details">
+            <section><h3>整理出的工程内容</h3><div class="intake-requirements" id="intake-requirements"></div></section>
+            <section><h3>模板选择依据</h3><div class="intake-reasons" id="intake-reasons"></div><div class="intake-question" id="intake-question"></div></section>
+          </div>
+          <form class="intake-accept" id="intake-accept-form">
+            <label>本机批准人名称<input name="display_name" value="本机工程所有者" required></label>
+            <label class="human-check"><input type="checkbox" name="human_confirm" required><span>我确认由 LESR 建立本机身份（如果尚未建立）和可编辑的工程草案。此操作不会安装软件、下载模型、修改 PATH 或删除现有内容。</span></label>
+            <button>采用推荐边界并建立工程草案</button>
+          </form>
         </div>
       </section>
 

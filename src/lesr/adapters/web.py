@@ -24,6 +24,11 @@ from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalPayload, TrustedActor
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
+from lesr.domain.semantic import SemanticField, uuid7_candidate
+from lesr.domain.workspace import WorkingCopy
+from lesr.intake.bootstrap import IntakeBootstrapper
+from lesr.intake.models import IntakeRequest
+from lesr.intake.service import IntakeService
 
 SESSION_COOKIE = "lesr_session"
 SESSION_IDLE = timedelta(minutes=15)
@@ -48,6 +53,12 @@ class SignRequest(BaseModel):
     key_uid: str = Field(min_length=1)
     role: str = Field(min_length=1)
     human_confirm: bool
+
+
+class IntakeAcceptRequest(IntakeRequest):
+    display_name: str = Field(default="本机工程所有者", min_length=1, max_length=120)
+    human_confirm: bool
+    accept_recommended: bool = True
 
 
 class WebWriteRequest(BaseModel):
@@ -212,6 +223,29 @@ class LocalWebRuntime:
         async def session_context(request: Request) -> dict[str, Any]:
             self._session(request)
             return self._session_context()
+
+        @app.get("/api/intake/templates")
+        async def intake_templates(request: Request) -> dict[str, Any]:
+            self._session(request)
+            service = IntakeService()
+            return {"templates": service.templates()}
+
+        @app.post("/api/intake/analyze")
+        async def intake_analyze(request: Request, value: IntakeRequest) -> dict[str, Any]:
+            self._mutation_session(request)
+            return IntakeService().analyze(value).model_dump(mode="json")
+
+        @app.post("/api/intake/accept")
+        async def intake_accept(
+            request: Request, value: IntakeAcceptRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            if not value.human_confirm:
+                raise HTTPException(
+                    status_code=403,
+                    detail="建立本机身份和工程草案需要明确人工确认",
+                )
+            return self._accept_intake(value)
 
         @app.get("/api/query")
         async def query(request: Request, text: str = "") -> dict[str, Any]:
@@ -535,6 +569,97 @@ class LocalWebRuntime:
                 "capability_count": len(CAPABILITIES),
             },
         }
+
+    def _accept_intake(self, value: IntakeAcceptRequest) -> dict[str, Any]:
+        if not isinstance(self.domain, LocalRuntimeService):
+            raise HTTPException(status_code=404, detail="zero-spec intake is unavailable")
+        analysis = IntakeService().analyze(
+            IntakeRequest(
+                description=value.description,
+                project_name=value.project_name,
+                known_repository=value.known_repository,
+            )
+        )
+        if not analysis.can_continue_with_defaults and not value.accept_recommended:
+            raise HTTPException(
+                status_code=409,
+                detail="仍有高影响边界未决定；可以采用系统推荐值或先补充需求",
+            )
+        runtime = self.domain
+        try:
+            identity = IntakeBootstrapper(
+                runtime,
+                key_root=self.signer_key_root,
+                key_password=self.signer_password,
+            ).ensure(value.display_name)
+            workspace_uid = uuid7_candidate()
+            actor_uid = str(identity["actor_uid"])
+            delegation_uid = str(identity["delegation_uid"])
+            configuration_uid = str(identity["configuration_uid"])
+            opened = runtime.open_workspace(
+                WriteEnvelope(
+                    workspace_uid=workspace_uid,
+                    expected_base=runtime.base,
+                    idempotency_key=uuid7_candidate(),
+                    actor=actor_uid,
+                    delegation_uid=delegation_uid,
+                    dry_run=False,
+                    risk_class=RiskClass.MEDIUM,
+                    operation={
+                        "type": "open_workspace",
+                        "configuration_uid": configuration_uid,
+                    },
+                )
+            )
+            if not opened.ok:
+                assert opened.error is not None
+                raise RuntimeError(opened.error.message)
+            for requirement in analysis.requirements[:100]:
+                object_uid = uuid7_candidate()
+                working_copy = WorkingCopy(
+                    workspace_uid=workspace_uid,
+                    object_uid=object_uid,
+                    base_revision_uid=None,
+                    human_key=requirement.human_key,
+                    kind="software_requirement",
+                    effective_model_hash=runtime.workspaces[workspace_uid].effective_model_hash,
+                    delegation_uid=delegation_uid,
+                    draft_fields=(
+                        SemanticField(path="/statement", value=requirement.statement),
+                    ),
+                )
+                proposed = runtime.propose_operation(
+                    WriteEnvelope(
+                        workspace_uid=workspace_uid,
+                        expected_base=runtime.base,
+                        idempotency_key=uuid7_candidate(),
+                        actor=actor_uid,
+                        delegation_uid=delegation_uid,
+                        dry_run=False,
+                        risk_class=RiskClass.MEDIUM,
+                        operation={
+                            "operation_type": "create_object",
+                            "working_copy": working_copy.model_dump(mode="json"),
+                        },
+                    )
+                )
+                if not proposed.ok:
+                    assert proposed.error is not None
+                    raise RuntimeError(proposed.error.message)
+            return {
+                "workspace_uid": workspace_uid,
+                "base_commit": runtime.base,
+                "actor_uid": actor_uid,
+                "delegation_uid": delegation_uid,
+                "configuration_uid": configuration_uid,
+                "identity_created": bool(identity["created"]),
+                "selected_template": analysis.selected_pack.display_name,
+                "requirement_count": len(analysis.requirements),
+                "human_keys": [item.human_key for item in analysis.requirements],
+                "next_step": "review_draft",
+            }
+        except (KeyError, OSError, PermissionError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @staticmethod
     def _configuration_name(value: dict[str, Any], index: int) -> str:

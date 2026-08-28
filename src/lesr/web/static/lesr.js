@@ -4,6 +4,7 @@ const runtimeState = {
   workspaceUid: null, base: null, actor: null, delegationUid: null,
   configurationUid: null, packageUid: null, approval: null,
   reviewPurpose: null, flowIndex: 0, context: null,
+  intakeRequest: null,
   change: {humanKey: '', kind: '', statement: '', reason: ''}, audit: [],
 };
 
@@ -64,7 +65,7 @@ const motion = (() => {
     if (panelTimeline) panelTimeline.kill();
     if (!enabled) return;
     const content = panel.querySelectorAll(
-      '.section-copy, form, .explore-grid, .workspace-layout, .review-grid, .human-output, .maintenance-grid, .task-list, .audit-banner, .audit-facts, .audit-output'
+      '.section-copy, form, .intake-layout, .intake-result, .explore-grid, .workspace-layout, .review-grid, .human-output, .maintenance-grid, .task-list, .audit-banner, .audit-facts, .audit-output'
     );
     panelTimeline = gsap.timeline({defaults: {ease}})
       .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16})
@@ -269,6 +270,99 @@ async function health() {
     document.querySelectorAll('.metric').forEach((metric) => metric.classList.add('is-live'));
   } catch (error) { toast(error.message); }
 }
+
+const renderIntake = (value) => {
+  const result = document.querySelector('#intake-result');
+  result.hidden = false;
+  motion.stateChange('#intake-pack', value.selected_pack.display_name);
+  document.querySelector('#intake-pack-summary').textContent = value.selected_pack.summary;
+  motion.stateChange('#intake-count', `${value.requirements.length} 项`);
+  const unresolved = value.gaps.filter((gap) => ['blocking', 'needs_decision'].includes(gap.disposition));
+  motion.stateChange('#intake-question-count', `${unresolved.length} 项`);
+
+  const requirements = document.querySelector('#intake-requirements');
+  requirements.replaceChildren();
+  value.requirements.slice(0, 100).forEach((item) => {
+    const row = create('article', 'intake-requirement');
+    row.append(create('b', '', item.human_key), create('p', '', item.statement));
+    requirements.append(row);
+  });
+  const reasons = document.querySelector('#intake-reasons');
+  reasons.replaceChildren(...value.selection_reasons.map((reason) => create('p', '', reason)));
+  const question = document.querySelector('#intake-question');
+  question.replaceChildren();
+  if (value.next_question) {
+    question.append(
+      create('b', '', value.next_question.question),
+      create('p', '', `推荐：${value.next_question.recommended_answer}`),
+      create('p', '', value.next_question.consequence),
+    );
+  } else {
+    question.append(
+      create('b', '', '没有阻止建立草案的问题'),
+      create('p', '', '可确定内容已由系统整理；其余非阻断项采用模板中的保守默认值。'),
+    );
+  }
+  gsap.set(result, {y: 14, autoAlpha: 0});
+  motion.reveal(result);
+};
+
+document.querySelector('#intake-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.target));
+  runtimeState.intakeRequest = {
+    description: String(data.description || '').trim(),
+    project_name: String(data.project_name || '').trim() || null,
+    known_repository: String(data.known_repository || '').trim() || null,
+  };
+  try {
+    const value = await api('/api/intake/analyze', {
+      method: 'POST', body: JSON.stringify(runtimeState.intakeRequest),
+    });
+    renderIntake(value);
+    audit('自然语言需求已按固定上游模板整理', value);
+    toast('需求已整理，可以检查后建立工程草案。');
+  } catch (error) { toast(error.message); }
+});
+
+document.querySelector('#intake-accept-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!runtimeState.intakeRequest) return toast('请先分析需求。');
+  const data = Object.fromEntries(new FormData(event.target));
+  try {
+    const value = await api('/api/intake/accept', {
+      method: 'POST', body: JSON.stringify({
+        ...runtimeState.intakeRequest,
+        display_name: String(data.display_name || '本机工程所有者'),
+        human_confirm: data.human_confirm === 'on',
+        accept_recommended: true,
+      }),
+    });
+    runtimeState.workspaceUid = value.workspace_uid;
+    runtimeState.base = value.base_commit;
+    runtimeState.actor = value.actor_uid;
+    runtimeState.delegationUid = value.delegation_uid;
+    runtimeState.configurationUid = value.configuration_uid;
+    runtimeState.change.humanKey = value.requirement_count === 1
+      ? value.human_keys[0] : `初始规格（${value.requirement_count} 项）`;
+    runtimeState.change.kind = 'software_requirement';
+    runtimeState.change.reason = '从自然语言需求建立初始工程规格';
+    await loadSession();
+    runtimeState.actor = value.actor_uid;
+    runtimeState.delegationUid = value.delegation_uid;
+    runtimeState.configurationUid = value.configuration_uid;
+    const scope = document.querySelector('#workspace-scope');
+    scope.querySelector('strong').textContent = `${value.requirement_count} 项初始工程内容`;
+    scope.querySelector('p').textContent = value.human_keys.join('、');
+    document.querySelector('#workspace-output').replaceChildren(create('p', '',
+      `已采用“${value.selected_template}”建立可编辑草案。请检查内容，然后送审。`));
+    advanceWorkspace('草案已建立', '模板、身份、配置和 Human Key 已由系统处理。', .66);
+    motion.step(0);
+    audit('零规范需求已转入工程工作区', value);
+    selectPanel('workspace');
+    toast('工程草案已经建立。');
+  } catch (error) { toast(error.message); }
+});
 
 const statementOf = (item) => {
   const field = (item.fields || []).find((entry) => entry.path === '/statement');

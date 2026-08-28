@@ -1,3 +1,5 @@
 # The design baseline is an immutable byte-for-byte authority. Disable all Git
 # text normalization so Windows and Unix checkouts match MANIFEST.json.
 LESR_Solution_Design_Baseline_v1.0/** -text
+# Third-party intake templates are verified against upstream bytes.
+src/lesr/intake/upstream/** -text
