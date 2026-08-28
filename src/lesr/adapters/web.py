@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import secrets
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
@@ -18,7 +21,9 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import RequestResponseEndpoint
 
 from lesr.adapters.git import GitCanonicalRepository, IntegrityError
+from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore
+from lesr.adapters.pdf_import import preview_pdf
 from lesr.adapters.signer import sign_once
 from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
@@ -57,8 +62,13 @@ class SignRequest(BaseModel):
 
 class IntakeAcceptRequest(IntakeRequest):
     display_name: str = Field(default="本机工程所有者", min_length=1, max_length=120)
-    human_confirm: bool
-    accept_recommended: bool = True
+
+
+class IntakeFileRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=240)
+    content_base64: str = Field(min_length=1, max_length=14_000_000)
+    project_name: str | None = Field(default=None, max_length=120)
+    known_repository: str | None = Field(default=None, max_length=1024)
 
 
 class WebWriteRequest(BaseModel):
@@ -235,16 +245,18 @@ class LocalWebRuntime:
             self._mutation_session(request)
             return IntakeService().analyze(value).model_dump(mode="json")
 
+        @app.post("/api/intake/import-preview")
+        async def intake_import_preview(
+            request: Request, value: IntakeFileRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            return self._preview_intake_file(value)
+
         @app.post("/api/intake/accept")
         async def intake_accept(
             request: Request, value: IntakeAcceptRequest
         ) -> dict[str, Any]:
             self._mutation_session(request)
-            if not value.human_confirm:
-                raise HTTPException(
-                    status_code=403,
-                    detail="建立本机身份和工程草案需要明确人工确认",
-                )
             return self._accept_intake(value)
 
         @app.get("/api/query")
@@ -580,11 +592,6 @@ class LocalWebRuntime:
                 known_repository=value.known_repository,
             )
         )
-        if not analysis.can_continue_with_defaults and not value.accept_recommended:
-            raise HTTPException(
-                status_code=409,
-                detail="仍有高影响边界未决定；可以采用系统推荐值或先补充需求",
-            )
         runtime = self.domain
         try:
             identity = IntakeBootstrapper(
@@ -660,6 +667,82 @@ class LocalWebRuntime:
             }
         except (KeyError, OSError, PermissionError, RuntimeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    def _preview_intake_file(self, value: IntakeFileRequest) -> dict[str, Any]:
+        filename = Path(value.filename).name
+        suffix = Path(filename).suffix.casefold()
+        if suffix not in {".md", ".markdown", ".pdf"}:
+            raise HTTPException(status_code=415, detail="支持 Markdown 和 PDF 规范文件")
+        try:
+            raw = base64.b64decode(value.content_base64, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(status_code=400, detail="文件内容无法读取") from error
+        if not raw or len(raw) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="规范文件需小于 10 MiB")
+        try:
+            with tempfile.TemporaryDirectory(prefix="lesr-intake-") as temporary:
+                source = Path(temporary) / filename
+                source.write_bytes(raw)
+                if suffix == ".pdf":
+                    pdf_candidates = preview_pdf(
+                        source,
+                        namespace="imported",
+                        kind="software_requirement",
+                        rights_basis="user_provided",
+                        license_id="source_managed",
+                    )
+                    sections = tuple(
+                        (candidate.heading, self._candidate_statement(candidate.operations))
+                        for candidate in pdf_candidates
+                    )
+                else:
+                    markdown_candidates = preview_markdown(
+                        source,
+                        namespace="imported",
+                        kind="software_requirement",
+                        rights_basis="user_provided",
+                        license_id="source_managed",
+                    )
+                    sections = tuple(
+                        (candidate.heading, candidate.body)
+                        for candidate in markdown_candidates
+                    )
+                    if not sections:
+                        text = raw.decode("utf-8")
+                        sections = ((Path(filename).stem, text),)
+        except (UnicodeDecodeError, ValueError, PermissionError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        description = "\n\n".join(
+            f"# {heading}\n{body.strip()}" for heading, body in sections if body.strip()
+        )
+        if len(description.strip()) < 20:
+            raise HTTPException(status_code=422, detail="文件中没有足够的可读规范内容")
+        analysis = IntakeService().analyze(
+            IntakeRequest(
+                description=description,
+                project_name=value.project_name,
+                known_repository=value.known_repository,
+            )
+        )
+        return {
+            "analysis": analysis.model_dump(mode="json"),
+            "description": description,
+            "source": {"filename": filename, "section_count": len(sections)},
+        }
+
+    @staticmethod
+    def _candidate_statement(operations: tuple[dict[str, object], ...]) -> str:
+        for operation in operations:
+            resource = operation.get("resource")
+            if not isinstance(resource, dict):
+                continue
+            fields = resource.get("fields")
+            if not isinstance(fields, list):
+                continue
+            for field in fields:
+                if isinstance(field, dict) and field.get("path") == "/statement":
+                    return str(field.get("value", ""))
+        return ""
 
     @staticmethod
     def _configuration_name(value: dict[str, Any], index: int) -> str:

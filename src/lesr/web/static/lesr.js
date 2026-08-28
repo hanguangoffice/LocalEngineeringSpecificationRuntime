@@ -29,7 +29,7 @@ const motion = (() => {
   const ease = 'power3.out';
   media.add('(prefers-reduced-motion: reduce)', () => {
     enabled = false;
-    gsap.set('.panel.active, .metric, .flow-step', {clearProps: 'all'});
+    gsap.set('.panel.active, .priority-work, .project-glance', {clearProps: 'all'});
     return () => { enabled = true; };
   });
   const animate = (targets, vars) => {
@@ -54,10 +54,10 @@ const motion = (() => {
       .from('#overview .eyebrow, #overview h1, #overview .lede', {
         y: 18, autoAlpha: 0, duration: .48, stagger: .07,
       }, '-=.08')
-      .from('.current-config-card, .metric', {
+      .from('.priority-work, .project-glance', {
         y: 16, autoAlpha: 0, duration: .38, stagger: .045,
       }, '-=.25')
-      .from('.quick-actions button, .flow-step', {
+      .from('.overview-actions button', {
         y: 12, autoAlpha: 0, duration: .32, stagger: .035,
       }, '-=.18');
   };
@@ -65,7 +65,7 @@ const motion = (() => {
     if (panelTimeline) panelTimeline.kill();
     if (!enabled) return;
     const content = panel.querySelectorAll(
-      '.section-copy, form, .intake-layout, .intake-result, .explore-grid, .workspace-layout, .review-grid, .human-output, .maintenance-grid, .task-list, .audit-banner, .audit-facts, .audit-output'
+      '.section-copy, form, .intake-composer, .intake-result, .explore-grid, .workspace-layout, .review-grid, .human-output, .maintenance-grid, .task-list, .audit-banner, .audit-facts, .audit-output'
     );
     panelTimeline = gsap.timeline({defaults: {ease}})
       .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16})
@@ -76,17 +76,6 @@ const motion = (() => {
   };
   const step = (index) => {
     runtimeState.flowIndex = Math.max(runtimeState.flowIndex, index);
-    const steps = [...document.querySelectorAll('.flow-step')];
-    steps.forEach((element, position) => {
-      element.classList.toggle('active', position <= runtimeState.flowIndex);
-    });
-    const progress = runtimeState.flowIndex / Math.max(1, steps.length - 1);
-    animate('#flow-track', {scaleX: progress, duration: .55, ease: 'power2.inOut'});
-    if (steps[index] && enabled) {
-      gsap.fromTo(steps[index].querySelector('i'), {scale: .78}, {
-        scale: 1, duration: .42, ease: 'back.out(1.8)',
-      });
-    }
   };
   const stateChange = (selector, value, tone = 'normal') => {
     const element = document.querySelector(selector);
@@ -195,7 +184,22 @@ document.querySelectorAll('[data-panel-link]').forEach((link) => link.addEventLi
 }));
 document.querySelectorAll('[data-go]').forEach((button) => button.addEventListener('click', () => {
   selectPanel(button.dataset.go);
+  if (button.dataset.intakeMode) selectIntakeMode(button.dataset.intakeMode);
 }));
+
+const selectIntakeMode = (mode) => {
+  document.querySelectorAll('[data-intake-tab]').forEach((button) => {
+    const active = button.dataset.intakeTab === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('[data-intake-view]').forEach((view) => {
+    view.hidden = view.dataset.intakeView !== mode;
+  });
+};
+document.querySelectorAll('[data-intake-tab]').forEach((button) => {
+  button.addEventListener('click', () => selectIntakeMode(button.dataset.intakeTab));
+});
 
 const selectedOption = (selector) => {
   const select = document.querySelector(selector);
@@ -209,7 +213,7 @@ const syncConfiguration = (value) => {
   const visible = selectedOption('[data-configuration-select]');
   motion.stateChange('#overview-configuration', visible?.textContent || '尚未选择配置');
   document.querySelector('#overview-configuration-note').textContent = visible?.dataset.note
-    || '系统会在后台解析对应的精确版本。';
+    || '尚未建立工程配置。';
 };
 const populateSession = (value) => {
   runtimeState.context = value;
@@ -228,7 +232,7 @@ const populateSession = (value) => {
       option.value = configuration.configuration_uid;
       option.dataset.note = configuration.closure_status === 'complete'
         ? `配置完整，包含 ${configuration.change_count} 个已选工程版本。`
-        : '配置尚不完整，系统会在操作前明确提示缺口。';
+        : '配置尚不完整。';
       select.append(option);
     });
     select.addEventListener('change', () => syncConfiguration(select.value));
@@ -267,9 +271,21 @@ async function health() {
     motion.stateChange('#health-projection', value.projection === 'READY' ? '已就绪' : '可按需建立');
     motion.stateChange('#health-manifest', value.manifest.startsWith('1.0') ? '1.0' : '需要检查');
     motion.stateChange('#health-workspaces', String(value.open_workspaces));
-    document.querySelectorAll('.metric').forEach((metric) => metric.classList.add('is-live'));
+    if (value.open_workspaces > 0) {
+      motion.stateChange('#overview-priority-title', `继续处理 ${value.open_workspaces} 项变更`);
+      document.querySelector('#overview-priority-note').textContent = '查看未完成内容，继续编辑或送审。';
+      const primary = document.querySelector('.priority-primary');
+      primary.textContent = '继续处理';
+      primary.dataset.go = 'workspace';
+      delete primary.dataset.intakeMode;
+    }
   } catch (error) { toast(error.message); }
 }
+
+const INTAKE_CATEGORY_NAMES = {
+  goal: '目标', function: '功能', quality: '质量要求', constraint: '约束',
+  test: '测试与验收', deliverable: '交付内容', dependency: '外部依赖', safety: '操作约束',
+};
 
 const renderIntake = (value) => {
   const result = document.querySelector('#intake-result');
@@ -282,29 +298,47 @@ const renderIntake = (value) => {
 
   const requirements = document.querySelector('#intake-requirements');
   requirements.replaceChildren();
+  const groups = new Map();
   value.requirements.slice(0, 100).forEach((item) => {
-    const row = create('article', 'intake-requirement');
-    row.append(create('b', '', item.human_key), create('p', '', item.statement));
-    requirements.append(row);
+    if (!groups.has(item.category)) groups.set(item.category, []);
+    groups.get(item.category).push(item);
+  });
+  groups.forEach((items, category) => {
+    const group = create('section', 'intake-group');
+    const heading = create('header');
+    heading.append(
+      create('h4', '', INTAKE_CATEGORY_NAMES[category] || '工程内容'),
+      create('span', '', `${items.length} 项`),
+    );
+    group.append(heading);
+    items.forEach((item) => {
+      const row = create('article', 'intake-requirement');
+      row.append(create('b', '', item.human_key), create('p', '', item.statement));
+      group.append(row);
+    });
+    requirements.append(group);
   });
   const reasons = document.querySelector('#intake-reasons');
   reasons.replaceChildren(...value.selection_reasons.map((reason) => create('p', '', reason)));
   const question = document.querySelector('#intake-question');
   question.replaceChildren();
+  question.hidden = !value.next_question;
   if (value.next_question) {
     question.append(
       create('b', '', value.next_question.question),
       create('p', '', `推荐：${value.next_question.recommended_answer}`),
       create('p', '', value.next_question.consequence),
     );
-  } else {
-    question.append(
-      create('b', '', '没有阻止建立草案的问题'),
-      create('p', '', '可确定内容已由系统整理；其余非阻断项采用模板中的保守默认值。'),
-    );
   }
   gsap.set(result, {y: 14, autoAlpha: 0});
   motion.reveal(result);
+  requestAnimationFrame(() => {
+    const top = result.getBoundingClientRect().top + window.scrollY - 108;
+    window.scrollTo({
+      top: Math.max(0, top),
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  });
 };
 
 document.querySelector('#intake-form').addEventListener('submit', async (event) => {
@@ -321,21 +355,49 @@ document.querySelector('#intake-form').addEventListener('submit', async (event) 
     });
     renderIntake(value);
     audit('自然语言需求已按固定上游模板整理', value);
-    toast('需求已整理，可以检查后建立工程草案。');
+    toast('工程内容已整理。');
+  } catch (error) { toast(error.message); }
+});
+
+const fileAsBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error('文件读取失败。'));
+  reader.onload = () => resolve(String(reader.result).split(',', 2)[1] || '');
+  reader.readAsDataURL(file);
+});
+
+document.querySelector('#intake-import-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const data = new FormData(form);
+  const file = data.get('spec_file');
+  if (!(file instanceof File) || !file.name) return toast('请选择规范文件。');
+  try {
+    const value = await api('/api/intake/import-preview', {
+      method: 'POST', body: JSON.stringify({
+        filename: file.name,
+        content_base64: await fileAsBase64(file),
+        project_name: String(data.get('project_name') || '').trim() || null,
+        known_repository: String(data.get('known_repository') || '').trim() || null,
+      }),
+    });
+    runtimeState.intakeRequest = {
+      description: value.description,
+      project_name: String(data.get('project_name') || '').trim() || null,
+      known_repository: String(data.get('known_repository') || '').trim() || null,
+    };
+    renderIntake(value.analysis);
+    toast(`已读取 ${value.source.filename}。`);
   } catch (error) { toast(error.message); }
 });
 
 document.querySelector('#intake-accept-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!runtimeState.intakeRequest) return toast('请先分析需求。');
-  const data = Object.fromEntries(new FormData(event.target));
   try {
     const value = await api('/api/intake/accept', {
       method: 'POST', body: JSON.stringify({
         ...runtimeState.intakeRequest,
-        display_name: String(data.display_name || '本机工程所有者'),
-        human_confirm: data.human_confirm === 'on',
-        accept_recommended: true,
       }),
     });
     runtimeState.workspaceUid = value.workspace_uid;
@@ -356,7 +418,7 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     scope.querySelector('p').textContent = value.human_keys.join('、');
     document.querySelector('#workspace-output').replaceChildren(create('p', '',
       `已采用“${value.selected_template}”建立可编辑草案。请检查内容，然后送审。`));
-    advanceWorkspace('草案已建立', '模板、身份、配置和 Human Key 已由系统处理。', .66);
+    advanceWorkspace('草案已建立', `${value.requirement_count} 项内容可以继续编辑。`, .66);
     motion.step(0);
     audit('零规范需求已转入工程工作区', value);
     selectPanel('workspace');
@@ -420,7 +482,7 @@ const renderContext = (value, targetKey) => {
     card.append(create('small', '', label), create('strong', '', result)); grid.append(card);
   });
   output.append(grid, create('p', 'output-note', value.completeness === 'COMPLETE'
-    ? `已为 ${targetKey} 整理完成；系统标识保存在审计详情中。`
+    ? `已为 ${targetKey} 整理完成。`
     : `已为 ${targetKey} 整理现有资料，但仍有关系或配置缺口。`));
   motion.flash(output);
 };
@@ -478,7 +540,7 @@ document.querySelector('#workspace-open-form').addEventListener('submit', async 
   const data = Object.fromEntries(new FormData(event.target));
   const actorOption = selectedOption('#workspace-open-form [name="actor"]');
   if (!data.configuration_uid || !data.actor || !actorOption?.dataset.delegationUid) {
-    return toast('当前工程缺少可用配置或本机授权。');
+    return toast('当前工程尚未建立可用配置。');
   }
   runtimeState.workspaceUid = uid(); runtimeState.actor = String(data.actor);
   runtimeState.delegationUid = actorOption.dataset.delegationUid;
@@ -626,7 +688,7 @@ document.querySelector('#apply-candidate').addEventListener('click', async () =>
     runtimeState.base = value.result_commit; runtimeState.configurationUid = value.configuration_uid;
     runtimeState.approval = null; addResultConfiguration(value.configuration_uid);
     document.querySelector('#sign-output span').textContent
-      = `${runtimeState.change.humanKey} 已安全写入工程。`;
+      = `${runtimeState.change.humanKey} 已保存到工程。`;
     document.querySelector('#apply-candidate').disabled = true;
     motion.step(3); audit('批准的变更已写入工程', value);
     toast('变更已经写入工程。'); selectPanel('baseline');

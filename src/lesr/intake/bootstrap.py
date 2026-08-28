@@ -1,4 +1,4 @@
-"""Human-confirmed first-project bootstrap for zero-spec intake."""
+"""Automatic first-project bootstrap for requirement intake."""
 
 from __future__ import annotations
 

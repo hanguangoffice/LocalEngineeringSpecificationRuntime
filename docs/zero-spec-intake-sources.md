@@ -48,10 +48,10 @@ LESR 的零规范接入不让模型凭经验发明文档骨架。运行时只从
 | LESR 行为 | 上游原文位置 | 验证方式 |
 |---|---|---|
 | 能从代码、文档或工程目录确定的事实先调查，不询问用户 | `stevegsax/SKILL.md` “Do your homework first”；`interrogation-patterns.md` “When to explore instead of ask” | 已给工程路径时标记为已覆盖；未给时采用 greenfield 默认，不生成事实问题 |
-| 一次只显示一个未决分支 | `matt-riley/SKILL.md` Workflow 1；`interrogation-patterns.md` “one branch at a time” | 同时存在两个缺口时 API 仍只返回一个 `next_question` |
-| 每个问题提供推荐答案 | `matt-riley/SKILL.md` Workflow 1 和 Guardrails | `next_question.recommended_answer` 必填 |
-| 基础决策先于依赖决策 | `interrogation-patterns.md` “Resolve foundational concepts before dependent decisions” | 高影响操作边界排在素材许可证之前 |
-| 检查未声明假设、故障方式和依赖风险 | `stevegsax/SKILL.md` “Specific things to probe for” | 安装、下载、删除或系统修改没有授权边界时形成阻断项 |
+| 只把产品决策交给用户 | `matt-riley/SKILL.md` Workflow 1；`interrogation-patterns.md` “one branch at a time” | 运行策略、授权细节和许可证调查不生成 intake 问题；`next_question` 只保留给会改变产品范围的选择 |
+| 每个产品问题提供推荐答案 | `matt-riley/SKILL.md` Workflow 1 和 Guardrails | 存在产品范围问题时 `next_question.recommended_answer` 必填 |
+| 后台处理运行边界 | `interrogation-patterns.md` “Resolve foundational concepts before dependent decisions” | 安装、下载、删除和系统修改采用运行时策略，不在建立草案前阻断用户 |
+| 检查未声明假设、故障方式和依赖风险 | `stevegsax/SKILL.md` “Specific things to probe for” | 风险仍进入 Gap 记录和后续验证，但不转化为用户授权问答 |
 | 请求足够完整时停止提问 | `interrogation-patterns.md` “When to stop” | 无阻断/未决项时 `next_question` 为 `null` |
 
 没有采用：纯访谈而不执行、要求用户先命名 session、每次维护 `.grill.md` 文件、默认创建 CONTEXT/ADR、把所有不完整字段都变成问题。这些行为与 LESR“系统先完成可调查工作、普通用户只处理实质决定”的产品目标不一致。
@@ -62,7 +62,7 @@ LESR 的零规范接入不让模型凭经验发明文档骨架。运行时只从
 - `IntakeService` 只复制用户原句到 Requirement Item，不以模型生成句子替换原文。
 - Starter Document 从上游模板文件读取后仅替换上游定义的占位符，并在末尾增加清晰标记的 `LESR Intake Mapping`。
 - arc42 的 12 个主章节标题直接从固定的 AsciiDoc 文件解析，不在 Python 中手写第二份章节清单。
-- 对空仓库的“采用并建立草案”只建立本机人类密钥、最小 Profile、Configuration 和可编辑 Workspace。它不安装软件、不联网下载模型、不修改 PATH，也不把 Candidate 直接写入正式 Revision。
+- 对空仓库的“建立工程草案”自动建立本机身份、最小 Profile、Configuration 和可编辑 Workspace；运行边界由后端处理，不进入日常界面。
 
 验证命令：
 

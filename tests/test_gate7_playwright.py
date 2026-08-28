@@ -49,23 +49,41 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
             assert page.evaluate(
                 "parseFloat(getComputedStyle(document.querySelector('input')).fontSize)"
             ) >= 16
-            expect(page.locator(".flow-step").first).to_be_visible()
+            expect(page.locator(".priority-work")).to_be_visible()
             expect(page.locator("#overview")).not_to_contain_text("sha256:")
             expect(page.locator("#overview")).not_to_contain_text(
                 repository.current_commit()
             )
-            page.locator('button[data-panel="intake"]').click()
+            page.get_by_role("button", name="导入现有规范").click()
+            expect(page.locator("#intake-import-form")).to_be_visible()
+            page.get_by_role("tab", name="描述需求").click()
             intake = page.locator("#intake-form")
             intake.get_by_label("工程名称（可选）").fill("gpu-lab-manager")
             intake.get_by_label("你的需求").fill(
                 "创建一个 Windows 11 本地 AI 工具，检测 NVIDIA GPU 和显存，"
                 "提供 PyTorch 模拟测试。未经确认不得全局安装软件。"
             )
-            intake.get_by_role("button", name="分析需求并选择模板").click()
+            intake.get_by_role("button", name="整理工程内容").click()
             expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
             expect(page.locator("#intake-requirements .intake-requirement")).to_have_count(1)
             expect(page.locator("#intake")).not_to_contain_text("sha256:")
             expect(page.locator("#intake")).not_to_contain_text("59dc772b")
+            expect(page.locator("#intake")).not_to_contain_text("系统负责")
+            expect(page.locator("#intake")).not_to_contain_text("高影响操作边界")
+            page.get_by_role("tab", name="导入规范文件").click()
+            imported = page.locator("#intake-import-form")
+            imported.get_by_label("规范文件").set_input_files(
+                {
+                    "name": "custom-spec.md",
+                    "mimeType": "text/markdown",
+                    "buffer": (
+                        "# GPU 检测\n\n- 读取 NVIDIA GPU 型号和显存。\n\n"
+                        "# 测试\n\n- 模拟无 GPU 场景。\n"
+                    ).encode(),
+                }
+            )
+            imported.get_by_role("button", name="读取规范文件").click()
+            expect(page.locator("#intake-count")).to_have_text("2 项")
             page.locator('button[data-panel="explore"]').click()
             page.get_by_label("Human Key 或关键词").fill("no-synthetic-result")
             page.get_by_role("button", name="搜索").click()
@@ -112,7 +130,8 @@ def test_local_ui_honors_reduced_motion_without_hiding_state(tmp_path: Path) -> 
             page.wait_for_load_state("networkidle")
             assert page.evaluate("window.gsap.version") == "3.15.0"
             expect(page.locator("#overview h1")).to_be_visible()
-            expect(page.locator(".flow-step")).to_have_count(4)
+            expect(page.locator(".overview-actions button")).to_have_count(3)
+            page.screenshot(path=str(tmp_path / "narrow-overview.png"), full_page=True)
             page.locator('button[data-panel="workspace"]').click()
             expect(page.locator("#workspace")).to_be_visible()
             browser.close()
@@ -160,13 +179,13 @@ def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path
                 "- 提供模拟 nvidia-smi 的自动测试；\n"
                 "- 未经确认不得全局安装软件或修改 PATH。"
             )
-            form.get_by_role("button", name="分析需求并选择模板").click()
+            form.get_by_role("button", name="整理工程内容").click()
             expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
             expect(page.locator("#intake-count")).to_have_text("4 项")
             page.screenshot(path=str(tmp_path / "zero-spec-intake.png"), full_page=True)
             accept = page.locator("#intake-accept-form")
-            accept.get_by_role("checkbox").check()
-            accept.get_by_role("button", name="采用推荐边界并建立工程草案").click()
+            expect(accept.get_by_role("checkbox")).to_have_count(0)
+            accept.get_by_role("button", name="建立工程草案").click()
             expect(page.locator("#workspace-output")).to_contain_text(
                 "建立可编辑草案", timeout=60_000
             )
@@ -182,7 +201,7 @@ def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path
             expect(page.locator("#sign-output")).to_contain_text("批准已完成")
             page.get_by_role("button", name="将已批准变更写入工程").click()
             expect(page.locator("#sign-output")).to_contain_text(
-                "已安全写入工程", timeout=60_000
+                "已保存到工程", timeout=60_000
             )
             canonical = tuple(item for _, item in runtime.domain.repository.documents())
             assert len([item for item in canonical if item.get("resource_type") == "revision"]) == 4
@@ -261,7 +280,7 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
             sign_form.get_by_role("button", name="确认批准并签名").click()
             expect(page.locator("#sign-output")).to_contain_text("批准已完成")
             page.get_by_role("button", name="将已批准变更写入工程").click()
-            expect(page.locator("#sign-output")).to_contain_text("已安全写入工程", timeout=60_000)
+            expect(page.locator("#sign-output")).to_contain_text("已保存到工程", timeout=60_000)
 
             baseline_prepare = page.locator("#baseline-prepare-form")
             result_configuration_uid = baseline_prepare.get_by_label("工程配置").input_value()

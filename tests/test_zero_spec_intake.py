@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,11 +80,14 @@ def test_gpu_request_selects_source_backed_pack_and_preserves_statements() -> No
     assert "## User Scenarios & Testing *(mandatory)*" in analysis.starter_document
     assert "### arc42 Architecture Views" in analysis.starter_document
     assert "运行时视图" in analysis.starter_document
-    assert analysis.next_question is not None
-    assert analysis.next_question.topic == "外部素材与许可证"
+    assert analysis.next_question is None
+    assert not any(
+        item.disposition.value in {"blocking", "needs_decision"}
+        for item in analysis.gaps
+    )
 
 
-def test_gap_resolver_asks_one_decision_and_recommends_an_answer() -> None:
+def test_operational_boundaries_are_resolved_without_user_questions() -> None:
     analysis = IntakeService().analyze(
         IntakeRequest(
             description=(
@@ -92,16 +96,15 @@ def test_gap_resolver_asks_one_decision_and_recommends_an_answer() -> None:
             )
         )
     )
-    unresolved = [
-        item
+    assert analysis.next_question is None
+    assert all(
+        item.disposition.value not in {"blocking", "needs_decision"}
         for item in analysis.gaps
-        if item.disposition.value in {"blocking", "needs_decision"}
-    ]
-    assert len(unresolved) == 2
-    assert analysis.next_question is not None
-    assert analysis.next_question.topic == "高影响操作边界"
-    assert analysis.next_question.recommended_answer
-    assert "grill-me" in analysis.next_question.source_rule
+    )
+    operation_boundary = next(
+        item for item in analysis.gaps if item.topic == "高影响操作边界"
+    )
+    assert operation_boundary.disposition.value == "defaulted"
 
 
 def test_small_script_uses_exact_spec_kit_lean_source() -> None:
@@ -138,8 +141,6 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
             "description": GPU_REQUEST,
             "project_name": "gpu-lab-manager",
             "display_name": "Local owner",
-            "human_confirm": True,
-            "accept_recommended": True,
         },
     )
     assert response.status_code == 200, response.text
@@ -173,14 +174,35 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
     assert review.value["validation"]["operation_decision"]["disposition"] == "allow"
 
 
-def test_accept_intake_requires_explicit_human_confirmation(tmp_path: Path) -> None:
-    _, client, csrf = unlocked_runtime(tmp_path)
+def test_accept_intake_does_not_require_internal_authorization_input(tmp_path: Path) -> None:
+    runtime, client, csrf = unlocked_runtime(tmp_path)
     response = client.post(
         "/api/intake/accept",
         headers={"X-LESR-CSRF": csrf},
         json={
             "description": "建立一个本地软件工程并提供可运行代码、测试和使用说明。",
-            "human_confirm": False,
         },
     )
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["workspace_uid"] in runtime.domain.workspaces
+
+
+def test_web_intake_imports_a_custom_markdown_specification(tmp_path: Path) -> None:
+    _, client, csrf = unlocked_runtime(tmp_path)
+    source = """# GPU 检测\n\n- 读取 NVIDIA GPU 型号与显存。\n\n# 自动测试\n\n- 使用模拟输出覆盖无 GPU 场景。\n"""
+    response = client.post(
+        "/api/intake/import-preview",
+        headers={"X-LESR-CSRF": csrf},
+        json={
+            "filename": "gpu-manager.md",
+            "content_base64": base64.b64encode(source.encode("utf-8")).decode("ascii"),
+            "project_name": "gpu-lab-manager",
+        },
+    )
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value["source"] == {"filename": "gpu-manager.md", "section_count": 2}
+    assert value["analysis"]["selected_pack"]["pack_uid"] == "local-ai-runtime"
+    statements = {item["statement"] for item in value["analysis"]["requirements"]}
+    assert "读取 NVIDIA GPU 型号与显存。" in statements
+    assert "使用模拟输出覆盖无 GPU 场景。" in statements
