@@ -120,20 +120,38 @@
 
       <section class="panel" id="explore">
         <div class="panel-heading compact"><p class="eyebrow">查找规范</p><h2>按 Human Key 或关键词查找</h2><p class="section-copy">优先显示 Human Key、类型和正文摘要。技术标识只记录在审计详情中。</p></div>
-        <form class="command-form" id="query-form"><label>Human Key 或关键词<input name="text" placeholder="例如 REQ-SW-0142、CAN、超时" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
-        <div class="explore-grid">
-          <div class="result-list" id="query-results"><div class="empty-state">输入编号或关键词开始查找。</div></div>
-          <div class="relationship-stage" id="graph-stage"><div class="relation-orbit orbit-a"></div><div class="relation-orbit orbit-b"></div><div class="relation-node node-a"></div><div class="relation-node node-b"></div><div class="relation-focus" id="graph-core"><small>当前选择</small><b>尚未选择</b><span>关系概览</span></div><p>选择左侧结果后，在这里查看它与需求、设计和测试的关系。</p></div>
+        <form class="search-command" id="query-form"><label><span>Human Key 或关键词</span><input name="text" placeholder="例如 REQ-SW-0142、CAN、超时" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
+        <div class="explore-workspace">
+          <section class="search-results" aria-labelledby="search-results-title">
+            <header><h3 id="search-results-title">查找结果</h3><span id="query-result-count">等待搜索</span></header>
+            <div class="result-list" id="query-results"><div class="empty-state">输入编号或关键词开始查找。</div></div>
+          </section>
+          <aside class="spec-preview" id="graph-stage" aria-label="规范内容预览">
+            <p class="preview-label">当前选择</p>
+            <div id="graph-core">
+              <b id="spec-preview-key">尚未选择</b>
+              <span id="spec-preview-kind">从左侧选择一项规范内容</span>
+            </div>
+            <p class="preview-statement" id="spec-preview-statement">选择后将在这里显示正文摘要和下一步操作。</p>
+            <div class="preview-next">
+              <p>下一步</p>
+              <button type="button" data-go="context">整理相关资料</button>
+              <button type="button" data-go="workspace">基于此项发起变更</button>
+            </div>
+          </aside>
         </div>
       </section>
 
       <section class="panel" id="context">
         <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理完成任务所需的资料</h2><p class="section-copy">输入目标的 Human Key，查看必须阅读、建议参考和仍有缺口的内容。</p></div>
-        <div class="two-column">
-          <form class="stack-form framed" id="context-form"><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>目标 Human Key<input name="target_key" placeholder="例如 REQ-SW-0142" required></label><label>这次要做什么<select name="task_type"><option value="requirement_change">修改需求</option><option value="test_design">设计测试</option><option value="deviation_review">审阅偏离</option><option value="can_analysis">分析 CAN 接口</option><option value="mqtt_change">修改 MQTT 设计</option></select></label><button>整理相关资料</button></form>
-          <div class="plain-legend"><article><i class="mandatory"></i><div><b>必须阅读</b><p>由规则、关系和本次操作直接决定。</p></div></article><article><i class="supporting"></i><div><b>建议参考</b><p>可能有帮助，但不会替代必读内容。</p></div></article><article><i class="unknown"></i><div><b>仍有缺口</b><p>缺少关系或配置时会明确告诉你。</p></div></article></div>
-        </div>
-        <div class="human-output" id="context-output"><p>尚未整理相关资料。</p></div>
+        <form class="context-command" id="context-form">
+          <label>目标 Human Key<input name="target_key" placeholder="例如 REQ-SW-0142" required></label>
+          <label>这次要做什么<select name="task_type"><option value="requirement_change">修改需求</option><option value="test_design">设计测试</option><option value="deviation_review">审阅偏离</option><option value="can_analysis">分析 CAN 接口</option><option value="mqtt_change">修改 MQTT 设计</option></select></label>
+          <label>工程配置<select name="configuration_uid" data-configuration-select required></select></label>
+          <button>整理资料</button>
+        </form>
+        <div class="context-key" aria-label="资料分类说明"><span><i class="mandatory"></i>必须阅读</span><span><i class="supporting"></i>建议参考</span><span><i class="unknown"></i>仍有缺口</span></div>
+        <section class="context-result" id="context-output"><div class="empty-state">尚未整理相关资料。</div></section>
       </section>
 
       <section class="panel" id="workspace">
@@ -151,15 +169,15 @@
       </section>
 
       <section class="panel" id="review">
-        <div class="panel-heading compact"><p class="eyebrow">审阅与批准</p><h2>核对范围、理由和校验结论</h2><p class="section-copy">LESR 会验证签名与权限，但不会让这些技术细节干扰人的判断。</p></div>
-        <div class="review-grid">
-          <article class="review-reason"><small>为什么要批准</small><strong id="review-reason">尚无待审阅事项</strong></article>
-          <article><small>变更范围</small><div id="sign-scope" class="scope-list"><span>尚未选择</span></div></article>
-          <article><small>系统校验</small><strong id="review-validation">尚未校验</strong><p id="review-findings">提交变更后显示结果。</p></article>
-          <article><small>批准要求</small><strong id="sign-role">尚未选择</strong><p>批准会在 15 分钟后失效。</p></article>
-        </div>
+        <div class="panel-heading compact"><p class="eyebrow">审阅与批准</p><h2>核对范围、理由和校验结论</h2><p class="section-copy">查看本次变更的校验结论、批准理由和范围，然后作出决定。</p></div>
+        <section class="review-decision" aria-label="审阅结论">
+          <div class="review-primary"><small>系统校验</small><strong id="review-validation">尚未校验</strong><p id="review-findings">提交变更后显示结果。</p></div>
+          <div class="review-reason"><small>批准理由</small><strong id="review-reason">尚无待审阅事项</strong></div>
+          <div class="review-role"><small>需要谁批准</small><strong id="sign-role">尚未选择</strong><p>批准在 15 分钟后失效</p></div>
+        </section>
+        <section class="review-scope"><header><small>变更范围</small><span>请确认这些内容与批准理由一致</span></header><div id="sign-scope" class="scope-list"><span>尚未选择</span></div></section>
         <form id="sign-form" class="sign-zone">
-          <div class="sign-intro"><span>人工决定</span><b>确认批准</b><p>签名只在本机短暂使用，完成后立即退出。</p></div>
+          <div class="sign-intro"><span>最后一步</span><b>作出批准决定</b><p>确认上方范围、理由和校验结果后签名。</p></div>
           <div class="sign-fields"><input type="hidden" name="package_uid"><label>批准人<select name="reviewer" data-reviewer-select required></select></label><label>本次角色<select name="role" required><option value="">等待审阅要求</option></select></label><label class="human-check"><input type="checkbox" name="human_confirm" required><span>我已阅读变更范围、批准理由、校验结果和附加条件，并确认由我本人批准。</span></label><button>确认批准并签名</button></div>
         </form>
         <div class="approval-result" id="sign-output"><i></i><span>尚未签名。</span></div>
@@ -168,23 +186,24 @@
 
       <section class="panel" id="baseline">
         <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>发布已批准的工程基线</h2><p class="section-copy">选择工程配置和基线名称，完成审阅后发布。</p></div>
-        <div class="baseline-layout">
-          <form class="stack-form framed" id="baseline-prepare-form"><h3><span>1</span> 选择要发布的配置</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><button>检查是否可以发布</button></form>
-          <form class="stack-form framed" id="baseline-apply-form"><h3><span>2</span> 命名并发布</h3><input type="hidden" name="review_package_uid"><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><p class="form-note">准备完成后，请到“审阅与批准”确认，再返回这里发布。</p><button>发布已批准基线</button></form>
-          <aside class="baseline-note"><span>发布结果</span><strong id="baseline-state">尚未准备</strong><p>基线保留精确的工程状态；用于分享的版本名称可以重新生成。</p></aside>
+        <div class="baseline-workflow">
+          <div class="baseline-steps">
+            <form class="baseline-step" id="baseline-prepare-form"><header><span>1</span><div><h3>检查要发布的内容</h3><p>确认配置完整，并生成审阅内容。</p></div></header><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><button>检查并送审</button></form>
+            <form class="baseline-step" id="baseline-apply-form"><header><span>2</span><div><h3>完成批准后发布</h3><p>版本名称给人阅读，不影响工程状态。</p></div></header><input type="hidden" name="review_package_uid"><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><button>发布已批准基线</button></form>
+          </div>
+          <aside class="baseline-status"><small>当前状态</small><strong id="baseline-state">尚未准备</strong><p id="baseline-guidance">先选择本次要发布的工程配置。</p><div id="baseline-output"><p>尚无发布记录。</p></div></aside>
         </div>
-        <div class="human-output" id="baseline-output"><p>尚未准备基线。</p></div>
       </section>
 
-      <section class="panel" id="tasks"><div class="panel-heading compact"><p class="eyebrow">后台任务</p><h2>查看耗时任务的处理进度</h2><p class="section-copy">完整校验、深度追踪和备份会在后台继续，不会阻塞日常编辑。</p></div><button class="secondary-action" id="refresh-tasks">刷新任务</button><div class="task-list" id="task-results"><div class="empty-state">尚未读取任务。</div></div></section>
+      <section class="panel" id="tasks"><div class="panel-heading compact"><p class="eyebrow">后台任务</p><h2>查看耗时任务的处理进度</h2><p class="section-copy">只显示仍在处理或最近完成的工作。</p></div><div class="task-toolbar"><div><strong>任务队列</strong><span>完整校验、深度追踪与备份</span></div><button class="secondary-action" id="refresh-tasks">刷新</button></div><div class="task-list" id="task-results"><div class="empty-state">尚未读取任务。</div></div></section>
 
-      <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>本机工程维护</h2><p class="section-copy">普通工程工作不需要进入这里。维护操作默认先给出计划，不直接删除或改写内容。</p></div><div class="maintenance-grid"><article><span>备份</span><b>保存工程副本</b><p>生成可恢复的完整包。</p></article><article><span>恢复</span><b>恢复到空目录</b><p>验证完整后再启用。</p></article><article><span>升级</span><b>前向迁移</b><p>先备份，再显示变更报告。</p></article><article><span>清理</span><b>检查可清理内容</b><p>仅生成计划，不自动删除。</p><button id="gc-plan">生成清理计划</button></article></div><div class="human-output" id="maintenance-output"><p>尚未执行维护检查。</p></div></section>
+      <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>本机工程维护</h2><p class="section-copy">这里用于备份、恢复、升级和空间清理。日常编辑无需进入。</p></div><div class="maintenance-layout"><section class="maintenance-primary"><small>可立即检查</small><h3>清理未使用的工作区记录</h3><p>先列出可以清理的内容，检查后再决定是否处理。</p><button id="gc-plan">生成清理计划</button><div id="maintenance-output"><p>尚未生成计划。</p></div></section><aside class="maintenance-list"><h3>其他维护</h3><article><div><b>保存工程副本</b><p>生成可恢复的完整备份包。</p></div><span>备份</span></article><article><div><b>恢复工程</b><p>只恢复到空目录，并在启用前检查内容。</p></div><span>恢复</span></article><article><div><b>升级工程格式</b><p>先备份，再展示将要发生的变化。</p></div><span>升级</span></article></aside></div></section>
 
       <section class="panel audit-panel" id="audit">
         <div class="panel-heading compact"><p class="eyebrow">审计详情</p><h2>技术记录与故障排查</h2><p class="section-copy">这里集中保存 Commit、UID、Hash、Delegation 和原始返回值。它们不会出现在日常工作页面。</p></div>
-        <div class="audit-banner"><strong>技术信息</strong><p>除非正在审计或排查问题，否则无需阅读或复制这些内容。</p></div>
-        <div class="audit-facts"><article><small>Canonical Commit</small><code id="audit-commit">{{ canonical_commit }}</code></article><article><small>Runtime Contract</small><code>1.0</code></article><article><small>Session</small><code>loopback / local</code></article></div>
-        <pre class="audit-output" id="audit-output">尚无本次会话的技术记录。</pre>
+        <div class="audit-summary"><div><small>本次会话</small><strong>本机运行</strong><span>技术记录会随操作自动更新</span></div><p>只有在排查故障或接受审计时，才需要展开下面的原始信息。</p></div>
+        <details class="audit-section"><summary><span><b>工程状态标识</b><small>Commit 与运行契约</small></span><i>展开</i></summary><dl class="audit-facts"><div><dt>Canonical Commit</dt><dd><code id="audit-commit">{{ canonical_commit }}</code></dd></div><div><dt>Runtime Contract</dt><dd><code>1.0</code></dd></div><div><dt>Session</dt><dd><code>loopback / local</code></dd></div></dl></details>
+        <details class="audit-section"><summary><span><b>本次会话原始记录</b><small>请求、返回值与内部标识</small></span><i>展开</i></summary><pre class="audit-output" id="audit-output">尚无本次会话的技术记录。</pre></details>
       </section>
     </main>
   </div>

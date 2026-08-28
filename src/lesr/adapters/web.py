@@ -317,7 +317,14 @@ class LocalWebRuntime:
                 "local-web-user",
                 value.evaluation_time,
             ).payload()
-            return self._value_or_error(result)
+            context = self._value_or_error(result)
+            context["mandatory_items"] = self._human_scope(
+                tuple(context.get("mandatory", ())), workspace_uid=""
+            )
+            context["supporting_items"] = self._human_scope(
+                tuple(context.get("supporting", ())), workspace_uid=""
+            )
+            return context
 
         @app.post("/api/workspace/open")
         async def workspace_open(

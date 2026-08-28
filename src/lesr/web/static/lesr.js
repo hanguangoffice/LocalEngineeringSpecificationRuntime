@@ -65,7 +65,7 @@ const motion = (() => {
     if (panelTimeline) panelTimeline.kill();
     if (!enabled) return;
     const content = panel.querySelectorAll(
-      '.section-copy, form, .intake-composer, .intake-result, .explore-grid, .workspace-layout, .review-grid, .human-output, .maintenance-grid, .task-list, .audit-banner, .audit-facts, .audit-output'
+      '.section-copy, form, .intake-composer, .intake-result, .explore-workspace, .context-key, .context-result, .workspace-layout, .review-decision, .review-scope, .sign-zone, .baseline-workflow, .task-toolbar, .task-list, .maintenance-layout, .audit-summary, .audit-section, .human-output'
     );
     panelTimeline = gsap.timeline({defaults: {ease}})
       .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16})
@@ -94,20 +94,7 @@ const motion = (() => {
     gsap.timeline().to(target, {backgroundColor: color, duration: .12})
       .to(target, {backgroundColor: '', duration: .55, ease});
   };
-  const configureGraph = () => {
-    const stage = document.querySelector('#graph-stage');
-    const core = document.querySelector('#graph-core');
-    if (!enabled || !stage || !core) return;
-    const xTo = gsap.quickTo(core, 'x', {duration: .42, ease});
-    const yTo = gsap.quickTo(core, 'y', {duration: .42, ease});
-    stage.addEventListener('pointermove', (event) => {
-      const bounds = stage.getBoundingClientRect();
-      xTo(((event.clientX - bounds.left) / bounds.width - .5) * 14);
-      yTo(((event.clientY - bounds.top) / bounds.height - .5) * 14);
-    });
-    stage.addEventListener('pointerleave', () => { xTo(0); yTo(0); });
-  };
-  return {boot, enterPanel, step, stateChange, reveal, flash, configureGraph, version: gsap.version};
+  return {boot, enterPanel, step, stateChange, reveal, flash, version: gsap.version};
 })();
 
 window.__LESR_MOTION__ = {
@@ -178,6 +165,7 @@ document.querySelectorAll('.nav-item').forEach((button) => button.addEventListen
   button.classList.add('active');
   panel.classList.add('active');
   motion.enterPanel(panel);
+  if (panel.id === 'tasks') void loadTasks();
 }));
 document.querySelectorAll('[data-panel-link]').forEach((link) => link.addEventListener('click', (event) => {
   event.preventDefault(); selectPanel(link.dataset.panelLink);
@@ -440,6 +428,8 @@ document.querySelector('#query-form').addEventListener('submit', async (event) =
     const value = await api(`/api/query?text=${encodeURIComponent(text)}`);
     const results = document.querySelector('#query-results');
     results.replaceChildren();
+    document.querySelector('#query-result-count').textContent = value.items.length
+      ? `找到 ${value.items.length} 项` : '没有匹配内容';
     value.items.forEach((item) => {
       const row = create('button', 'result-item');
       row.type = 'button'; row.dataset.uid = itemUid(item);
@@ -451,10 +441,21 @@ document.querySelector('#query-form').addEventListener('submit', async (event) =
           element.removeAttribute('aria-current');
         });
         row.setAttribute('aria-current', 'true');
-        const core = document.querySelector('#graph-core');
-        core.querySelector('b').textContent = item.human_key || '未命名';
-        core.querySelector('span').textContent = humanKind(item.kind || item.resource_type);
-        motion.flash('#graph-core', '#2b795b'); audit('选择工程内容', item);
+        document.querySelector('#spec-preview-key').textContent = item.human_key || '未命名';
+        document.querySelector('#spec-preview-kind').textContent
+          = humanKind(item.kind || item.resource_type);
+        document.querySelector('#spec-preview-statement').textContent
+          = statementOf(item) || '这项内容没有可显示的正文摘要。';
+        document.querySelector('#context-form [name="target_key"]').value
+          = item.human_key || '';
+        document.querySelector('#workspace-edit-form [name="human_key"]').value
+          = item.human_key || '';
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          gsap.fromTo('#graph-core, #spec-preview-statement, .preview-next',
+            {y: 9, autoAlpha: 0},
+            {y: 0, autoAlpha: 1, duration: .34, stagger: .055, ease: 'power3.out'});
+        }
+        audit('选择工程内容', item);
       });
       results.append(row);
     });
@@ -474,17 +475,54 @@ const resolveHumanKey = async (humanKey) => {
 const renderContext = (value, targetKey) => {
   const output = document.querySelector('#context-output');
   output.replaceChildren();
-  const status = value.completeness === 'COMPLETE' ? '资料完整' : '资料存在缺口';
-  const grid = create('div', 'summary-grid');
-  [['整理结果', status], ['必须阅读', `${(value.mandatory || []).length} 项`],
-    ['建议参考', `${(value.supporting || []).length} 项`]].forEach(([label, result]) => {
+  const complete = value.completeness === 'COMPLETE';
+  const status = complete ? '资料已备齐' : '资料仍有缺口';
+  const grid = create('div', 'context-summary');
+  grid.dataset.complete = String(complete);
+  [['整理结果', status, 'context-status'],
+    ['必须阅读', `${(value.mandatory || []).length} 项`, ''],
+    ['建议参考', `${(value.supporting || []).length} 项`, '']].forEach(([label, result, className]) => {
     const card = create('article');
+    if (className) card.className = className;
     card.append(create('small', '', label), create('strong', '', result)); grid.append(card);
   });
-  output.append(grid, create('p', 'output-note', value.completeness === 'COMPLETE'
-    ? `已为 ${targetKey} 整理完成。`
-    : `已为 ${targetKey} 整理现有资料，但仍有关系或配置缺口。`));
-  motion.flash(output);
+  const explanations = {
+    INCOMPLETE_MISSING_RELATION: '缺少完成这项工作所需的关系，请先补充关联内容。',
+    INCOMPLETE_BUDGET: '必读资料超出本次读取范围，可以继续进行深度追踪。',
+    INCOMPLETE_CONFIGURATION: '当前工程配置不完整，请先选择或补全配置。',
+    INCOMPLETE_CONFLICT: '当前配置存在冲突，解决后才能得到完整资料。',
+    INCOMPLETE_CONFIDENTIALITY: '部分必读资料受访问限制，当前结果并不完整。',
+  };
+  output.append(grid, create('p', 'context-explanation', complete
+    ? `${targetKey} 的必读资料已经整理完成，可以开始工作。`
+    : `${targetKey} 已整理现有资料。${explanations[value.completeness] || '仍有内容无法确定。'}`));
+  const materials = create('div', 'context-materials');
+  const materialSection = (title, items, tone) => {
+    const section = create('section', tone);
+    const heading = create('header');
+    heading.append(create('h3', '', title), create('span', '', `${items.length} 项`));
+    section.append(heading);
+    if (!items.length) {
+      section.append(create('p', 'context-empty', title === '必须阅读'
+        ? '没有解析到必读内容。' : '当前没有额外参考内容。'));
+    } else {
+      items.forEach((item) => {
+        const row = create('article');
+        row.append(create('b', '', item.human_key), create('span', '', humanKind(item.kind)));
+        section.append(row);
+      });
+    }
+    return section;
+  };
+  materials.append(
+    materialSection('必须阅读', value.mandatory_items || [], 'mandatory-materials'),
+    materialSection('建议参考', value.supporting_items || [], 'supporting-materials'),
+  );
+  output.append(materials);
+  if (!complete) output.append(create('p', 'context-gaps',
+    explanations[value.completeness] || '当前资料不完整，请先处理缺口。'));
+  gsap.set(output.children, {y: 12, autoAlpha: 0});
+  motion.reveal(output.children);
 };
 document.querySelector('#context-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -717,8 +755,10 @@ document.querySelector('#baseline-prepare-form').addEventListener('submit', asyn
     document.querySelector('#baseline-apply-form [name="review_package_uid"]')
       .value = runtimeState.packageUid;
     motion.stateChange('#baseline-state', '等待人工批准');
+    document.querySelector('#baseline-guidance').textContent
+      = '检查已完成。请到“审阅与批准”作出决定，然后返回发布。';
     document.querySelector('#baseline-output').replaceChildren(create('p', '',
-      '工程状态已检查完成。请确认范围和理由，再返回这里发布。'));
+      '最近更新：基线内容已准备。'));
     await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
   } catch (error) { toast(error.message); }
 });
@@ -738,13 +778,15 @@ document.querySelector('#baseline-apply-form').addEventListener('submit', async 
     });
     runtimeState.base = value.result_commit; runtimeState.approval = null;
     motion.stateChange('#baseline-state', '已发布');
+    document.querySelector('#baseline-guidance').textContent
+      = '当前配置已经成为正式工程基线。';
     document.querySelector('#baseline-output').replaceChildren(create('p', '',
-      data.tag_name ? `基线“${data.tag_name}”已发布。` : '基线已发布。'));
+      data.tag_name ? `发布记录：基线“${data.tag_name}”已发布。` : '发布记录：基线已发布。'));
     audit('工程基线已发布', value); toast('基线已经发布。');
   } catch (error) { toast(error.message); }
 });
 
-document.querySelector('#refresh-tasks').addEventListener('click', async () => {
+const loadTasks = async () => {
   try {
     const value = await api('/api/tasks');
     const list = document.querySelector('#task-results'); list.replaceChildren();
@@ -759,7 +801,8 @@ document.querySelector('#refresh-tasks').addEventListener('click', async () => {
     if (!value.length) list.append(create('div', 'empty-state', '目前没有后台任务。'));
     gsap.set(list.children, {y: 10, autoAlpha: 0}); motion.reveal(list.children);
   } catch (error) { toast(error.message); }
-});
+};
+document.querySelector('#refresh-tasks').addEventListener('click', loadTasks);
 document.querySelector('#gc-plan').addEventListener('click', async () => {
   try {
     const value = await api('/api/maintenance/gc', {method: 'POST', body: '{}'});
@@ -772,5 +815,4 @@ document.querySelector('#lock-button').addEventListener('click', async () => {
 });
 
 motion.boot();
-motion.configureGraph();
 Promise.all([loadSession(), health()]);
