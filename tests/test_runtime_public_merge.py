@@ -156,7 +156,7 @@ def test_public_review_records_keep_package_immutable_and_survive_restart(tmp_pa
     assert commented.value["approvals_invalidated"] is False
     comment = commented.value["comment"]
     resolution = CommentResolution(
-        comment_hash=comment["comment_hash"],
+        comment_uid=comment["comment_uid"],
         actor_uid="reviewer",
         disposition="accepted",
         rationale="Timing bound added to the candidate.",

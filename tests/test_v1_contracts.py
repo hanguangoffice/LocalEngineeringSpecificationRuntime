@@ -174,6 +174,7 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
             "mission_report_work",
             "decision_list",
             "decision_resolve",
+            "engineering_map",
         } == set(tools)
     for name in (
         "workspace_open",

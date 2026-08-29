@@ -208,6 +208,11 @@ RUNTIME_CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
                 access=CapabilityAccess.WRITE,
                 mcp=True,
             ),
+            RuntimeCapability(
+                name="engineering.map",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
         ),
         key=lambda item: item.name,
     )

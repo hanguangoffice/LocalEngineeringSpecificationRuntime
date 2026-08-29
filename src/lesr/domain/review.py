@@ -15,7 +15,6 @@ from lesr.domain.rules import EnforcementEffect
 from lesr.domain.semantic import (
     FrozenModel,
     document_hash,
-    semantic_hash,
     uuid7_candidate,
 )
 
@@ -30,15 +29,6 @@ class ReviewComment(FrozenModel):
     author_uid: str
     body: str = Field(min_length=1)
     created_at: datetime
-    comment_hash: str = ""
-
-    @model_validator(mode="after")
-    def calculate_hash(self) -> ReviewComment:
-        expected = document_hash(self.model_dump(mode="json"), "comment_hash")
-        if self.comment_hash and self.comment_hash != expected:
-            raise ValueError("comment_hash is invalid")
-        object.__setattr__(self, "comment_hash", expected)
-        return self
 
 
 class CommentDisposition(StrEnum):
@@ -51,20 +41,11 @@ class CommentResolution(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["comment_resolution"] = "comment_resolution"
     resolution_uid: str = Field(default_factory=uuid7_candidate)
-    comment_hash: str
+    comment_uid: str
     actor_uid: str
     disposition: CommentDisposition
     rationale: str
     created_at: datetime
-    resolution_hash: str = ""
-
-    @model_validator(mode="after")
-    def calculate_hash(self) -> CommentResolution:
-        expected = document_hash(self.model_dump(mode="json"), "resolution_hash")
-        if self.resolution_hash and self.resolution_hash != expected:
-            raise ValueError("resolution_hash is invalid")
-        object.__setattr__(self, "resolution_hash", expected)
-        return self
 
 
 class ConditionSatisfaction(FrozenModel):
@@ -72,20 +53,15 @@ class ConditionSatisfaction(FrozenModel):
     resource_type: Literal["condition_satisfaction"] = "condition_satisfaction"
     satisfaction_uid: str = Field(default_factory=uuid7_candidate)
     approval_uid: str
-    condition_hash: str
+    condition: object
     evidence_uids: tuple[str, ...]
     actor_uid: str
     satisfied_at: datetime
-    satisfaction_hash: str = ""
 
     @model_validator(mode="after")
-    def validate_and_hash(self) -> ConditionSatisfaction:
+    def require_evidence(self) -> ConditionSatisfaction:
         if not self.evidence_uids:
             raise ValueError("condition satisfaction requires evidence")
-        expected = document_hash(self.model_dump(mode="json"), "satisfaction_hash")
-        if self.satisfaction_hash and self.satisfaction_hash != expected:
-            raise ValueError("satisfaction_hash is invalid")
-        object.__setattr__(self, "satisfaction_hash", expected)
         return self
 
 
@@ -97,15 +73,6 @@ class ApprovalRevocation(FrozenModel):
     actor_uid: str
     reason: str = Field(min_length=1)
     revoked_at: datetime
-    revocation_hash: str = ""
-
-    @model_validator(mode="after")
-    def calculate_hash(self) -> ApprovalRevocation:
-        expected = document_hash(self.model_dump(mode="json"), "revocation_hash")
-        if self.revocation_hash and self.revocation_hash != expected:
-            raise ValueError("revocation_hash is invalid")
-        object.__setattr__(self, "revocation_hash", expected)
-        return self
 
 
 class StageQuorum(FrozenModel):
@@ -188,9 +155,9 @@ class GovernanceEvaluator:
         reasons: list[str] = []
         trust_by_key = {item.key_uid: item for item in trust}
         revoked = {item.approval_uid for item in revocations if item.revoked_at <= now}
-        resolved_comments = {item.comment_hash for item in resolutions}
+        resolved_comments = {item.comment_uid for item in resolutions}
         package_comments = {
-            item.comment_hash
+            item.comment_uid
             for item in comments
             if item.package_hash == package.package_hash
         }
@@ -225,13 +192,12 @@ class GovernanceEvaluator:
             ):
                 reasons.append(f"PREPARER_SELF_APPROVAL:{approval.approval_uid}")
                 continue
-            condition_hashes = {semantic_hash({"condition": item}) for item in approval.conditions}
-            satisfied = {
-                item.condition_hash
+            satisfied = [
+                item.condition
                 for item in satisfactions
                 if item.approval_uid == approval.approval_uid
-            }
-            if not condition_hashes <= satisfied:
+            ]
+            if any(condition not in satisfied for condition in approval.conditions):
                 reasons.append(f"CONDITION_UNSATISFIED:{approval.approval_uid}")
                 continue
             valid.append(approval)

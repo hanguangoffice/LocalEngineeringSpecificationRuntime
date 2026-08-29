@@ -282,6 +282,45 @@ def test_accept_intake_does_not_require_internal_authorization_input(tmp_path: P
     assert response.json()["workspace_uid"] in runtime.domain.workspaces
 
 
+def test_template_driven_engineering_map_includes_the_editable_intake(
+    tmp_path: Path,
+) -> None:
+    runtime, client, csrf = unlocked_runtime(tmp_path)
+    response = client.post(
+        "/api/intake/accept",
+        headers={"X-LESR-CSRF": csrf},
+        json={
+            "description": GPU_REQUEST,
+            "project_name": "temporary-observatory",
+            "display_name": "Local owner",
+        },
+    )
+    assert response.status_code == 200, response.text
+    accepted = response.json()
+
+    result = runtime.domain.engineering_map(
+        accepted["configuration_uid"],
+        datetime.now(UTC).isoformat(),
+        accepted["workspace_uid"],
+    )
+
+    assert result.ok, result.payload()
+    assert result.value["mapping_name"] == "本地 AI、GPU 与模型应用工程结构"
+    labels = {item["label"] for item in result.value["areas"]}
+    assert "Spec Kit 需求规格" in labels
+    assert "arc42 架构文档" in labels
+    human_keys = {
+        item["human_key"]
+        for area in result.value["areas"]
+        for item in area["items"]
+    }
+    assert set(accepted["human_keys"]) <= human_keys
+    serialized = str(result.value).casefold()
+    assert "canonical_commit" not in serialized
+    assert "snapshot_hash" not in serialized
+    assert "delegation_uid" not in serialized
+
+
 def test_web_intake_imports_a_custom_markdown_specification(tmp_path: Path) -> None:
     _, client, csrf = unlocked_runtime(tmp_path)
     source = """# GPU 检测\n\n- 读取 NVIDIA GPU 型号与显存。\n\n# 自动测试\n\n- 使用模拟输出覆盖无 GPU 场景。\n"""

@@ -20,6 +20,7 @@ class CapabilityGroup(StrEnum):
     COMPLIANCE = "compliance"
     MISSION = "mission"
     DECISION = "decision"
+    ENGINEERING = "engineering"
 
 
 class ErrorCategory(StrEnum):
@@ -241,6 +242,13 @@ class LESRDomainPort(Protocol):
         reason: str,
         selected_action: str | None = None,
         selected_alternative: str | None = None,
+    ) -> DomainResult: ...
+
+    def engineering_map(
+        self,
+        configuration_uid: str,
+        evaluation_time: str,
+        workspace_uid: str | None = None,
     ) -> DomainResult: ...
 
 

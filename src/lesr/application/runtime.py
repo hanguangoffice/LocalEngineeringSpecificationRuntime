@@ -28,6 +28,7 @@ from lesr.adapters.git import (
 )
 from lesr.adapters.mission_store import MissionStore
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore, TaskWorker
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.schemas import SchemaCatalog
 from lesr.application.agent_broker import AgentReport
 from lesr.application.contracts import (
@@ -39,6 +40,7 @@ from lesr.application.contracts import (
     WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
+from lesr.application.engineering_view import build_engineering_view
 from lesr.application.mission_runtime import MissionCoordinator, MissionPlan
 from lesr.domain.approval import (
     SignedApproval,
@@ -51,6 +53,7 @@ from lesr.domain.decision import DecisionDisposition
 from lesr.domain.evaluation import (
     ConstraintEnvironment,
     ConstraintExpression,
+    ContextBundle,
     Direction,
     GraphNode,
     GraphRelation,
@@ -85,6 +88,7 @@ from lesr.domain.merge import (
     begin_reconciliation,
 )
 from lesr.domain.model import (
+    DefinitionRevision,
     EffectiveModel,
     EffectiveModelCompiler,
     FacetDefinitionRevision,
@@ -95,6 +99,12 @@ from lesr.domain.model import (
     TailoringOverlay,
     WorkflowProjector,
     WorkflowRevision,
+)
+from lesr.domain.presentation import (
+    EngineeringArea,
+    PresentationMappingRevision,
+    PresentationSelector,
+    ViewMode,
 )
 from lesr.domain.review import (
     ApprovalRevocation,
@@ -158,6 +168,7 @@ class LocalRuntimeService:
         self.task_store = TaskStore(self.project)
         self.mission_store = MissionStore(self.project)
         self.missions = MissionCoordinator(self.mission_store)
+        self.presentation_store = PresentationMappingStore(self.project)
         self.workspaces: dict[str, Workspace] = {}
         self.submissions: dict[str, Any] = {}
         self.reviews: dict[str, ReviewPackage] = {}
@@ -180,6 +191,7 @@ class LocalRuntimeService:
             CapabilityGroup.COMPLIANCE: [],
             CapabilityGroup.MISSION: [],
             CapabilityGroup.DECISION: [],
+            CapabilityGroup.ENGINEERING: [],
         }
         for capability in RUNTIME_CAPABILITIES:
             prefix = capability.name.split(".", 1)[0]
@@ -200,6 +212,8 @@ class LocalRuntimeService:
                 if prefix == "mission"
                 else CapabilityGroup.DECISION
                 if prefix == "decision"
+                else CapabilityGroup.ENGINEERING
+                if prefix == "engineering"
                 else CapabilityGroup.COMPLIANCE
             )
             groups[group].append(capability.name)
@@ -350,6 +364,137 @@ class LocalRuntimeService:
                 str(error),
                 (decision_request_uid,),
             )
+
+    def engineering_map(
+        self,
+        configuration_uid: str,
+        evaluation_time: str,
+        workspace_uid: str | None = None,
+    ) -> DomainResult:
+        """Render the resolved engineering structure without technical identifiers."""
+
+        try:
+            instant = self._parse_evaluation_time(evaluation_time)
+            context: ContextBundle | None = None
+            if workspace_uid is None:
+                snapshot = self._evaluator(configuration_uid, instant).snapshot
+            else:
+                workspace = self.workspaces.get(workspace_uid)
+                if workspace is None:
+                    raise KeyError(workspace_uid)
+                if workspace.configuration_uid != configuration_uid:
+                    raise ValueError("workspace belongs to another engineering configuration")
+                assessment = self.assess_workspace(
+                    WorkspaceAssessmentRequest(
+                        workspace_uid=workspace_uid,
+                        evaluation_time=evaluation_time,
+                        maximum_depth=3,
+                    )
+                )
+                if not assessment.ok:
+                    return assessment
+                snapshot = GraphSnapshot.model_validate(
+                    assessment.value["audit"]["graph_snapshot"]
+                )
+                context = ContextBundle.model_validate(
+                    assessment.value["context_bundle"]
+                )
+            model = self._effective_model(configuration_uid)
+            selected_uids = set(model.definition_revision_uids)
+            definitions: tuple[DefinitionRevision, ...] = tuple(
+                self._definition_revision(value)
+                for value in self.documents
+                if value.get("revision_uid") in selected_uids
+                and value.get("resource_type")
+                in {
+                    "facet_definition_revision",
+                    "kind_definition_revision",
+                    "relation_type_revision",
+                    "workflow_revision",
+                }
+            )
+            for mapping in reversed(self.presentation_store.list()):
+                try:
+                    view = build_engineering_view(
+                        mapping,
+                        model,
+                        snapshot,
+                        definitions,
+                        context_bundle=context,
+                    )
+                except ValueError:
+                    continue
+                return DomainResult(view.model_dump(mode="json"))
+            fallback = self._fallback_presentation_mapping(model, definitions)
+            view = build_engineering_view(
+                fallback,
+                model,
+                snapshot,
+                definitions,
+                context_bundle=context,
+            )
+            return DomainResult(view.model_dump(mode="json"))
+        except KeyError as error:
+            return self._error(
+                "LESR-ENGINEERING-MAP-NOT-AVAILABLE",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (configuration_uid,),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-ENGINEERING-MAP-INDETERMINATE",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (configuration_uid,),
+            )
+
+    @staticmethod
+    def _fallback_presentation_mapping(
+        model: EffectiveModel,
+        definitions: tuple[DefinitionRevision, ...],
+    ) -> PresentationMappingRevision:
+        kinds = sorted(
+            (item for item in definitions if isinstance(item, KindDefinitionRevision)),
+            key=lambda item: item.name,
+        )
+        if not kinds:
+            raise ValueError("effective engineering model defines no content types")
+        known_labels = {
+            "goal": "目标与边界",
+            "functional_requirement": "功能需求",
+            "quality_requirement": "质量需求",
+            "constraint_requirement": "工程约束",
+            "safety_requirement": "安全需求",
+            "design": "设计",
+            "architecture_decision": "架构决策",
+            "test_case": "测试",
+            "evidence": "验证证据",
+            "api_contract": "接口契约",
+            "message_contract": "消息契约",
+            "data_asset": "数据资产",
+            "model_asset": "模型资产",
+            "threat": "威胁模型",
+            "deliverable": "交付内容",
+            "dependency": "外部依赖",
+        }
+        return PresentationMappingRevision(
+            name="当前工程结构",
+            source_profile_revision_uids=model.profile_revision_uids,
+            engineering_areas=tuple(
+                EngineeringArea(
+                    area_key=item.name.replace("_", "-"),
+                    label=known_labels.get(item.name, item.name.replace("_", " ")),
+                    selector=PresentationSelector(
+                        kind_definition_revision_uids=(item.revision_uid,)
+                    ),
+                    order=index * 10,
+                )
+                for index, item in enumerate(kinds, 1)
+            ),
+            view_modes=(ViewMode.OVERVIEW, ViewMode.OUTLINE, ViewMode.DOCUMENT),
+            default_view_mode=ViewMode.OVERVIEW,
+        )
 
     @classmethod
     def _local_runtime_payload(cls, value: Any) -> Any:

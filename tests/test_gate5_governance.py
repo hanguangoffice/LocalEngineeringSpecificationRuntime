@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from lesr.adapters.schemas import SchemaCatalog
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.review import (
     ApprovalRevocation,
@@ -85,7 +86,7 @@ def test_partial_conditional_approvals_jointly_cover_scope_and_quorum(tmp_path: 
     )
     satisfaction = ConditionSatisfaction(
         approval_uid=approvals[0].approval_uid,
-        condition_hash=semantic_hash({"condition": condition}),
+        condition=condition,
         evidence_uids=(UIDS[8],),
         actor_uid=UIDS[9],
         satisfied_at=NOW,
@@ -147,22 +148,86 @@ def test_open_comment_and_pre_apply_revocation_both_block(tmp_path: Path) -> Non
     assert not decision.allowed
     assert "OPEN_REVIEW_COMMENT" in decision.reasons
     assert any(reason.startswith("APPROVAL_REVOKED") for reason in decision.reasons)
+    resolution = CommentResolution(
+        comment_uid=comment.comment_uid,
+        actor_uid=reviewer.actor_uid,
+        disposition=CommentDisposition.ACCEPTED,
+        rationale="Timing bound added",
+        created_at=NOW,
+    )
+    resolved = GovernanceEvaluator.evaluate(
+        review_package,
+        (approval,),
+        (reviewer,),
+        (comment,),
+        (resolution,),
+        (),
+        (revocation,),
+        now=datetime.now(UTC),
+    )
+    assert "OPEN_REVIEW_COMMENT" not in resolved.reasons
 
 
 def test_comment_resolution_and_post_apply_revocation_are_immutable_evidence() -> None:
     resolution = CommentResolution(
-        comment_hash=HASHES[7],
+        comment_uid=UIDS[10],
         actor_uid=UIDS[6],
         disposition=CommentDisposition.ACCEPTED,
         rationale="candidate was updated",
         created_at=NOW,
     )
-    assert resolution.resolution_hash.startswith("sha256:")
+    assert resolution.comment_uid == UIDS[10]
+    assert "resolution_hash" not in resolution.model_dump(mode="json")
     before = revocation_consequence(already_applied=False)
     after = revocation_consequence(already_applied=True)
     assert before.pre_apply_invalidates
     assert after.assurance_finding == "APPROVAL_REVOKED_AFTER_APPLY"
     assert after.revalidation_trigger == "REVALIDATE_APPLIED_SCOPE"
+
+
+def test_review_auxiliary_records_use_uids_and_explicit_references() -> None:
+    comment = ReviewComment(
+        package_hash=HASHES[0],
+        resource_uid=UIDS[3],
+        location="/statement",
+        author_uid=UIDS[6],
+        body="Clarify the timing bound",
+        created_at=NOW,
+    )
+    resolution = CommentResolution(
+        comment_uid=comment.comment_uid,
+        actor_uid=UIDS[7],
+        disposition=CommentDisposition.ACCEPTED,
+        rationale="Timing bound added",
+        created_at=NOW,
+    )
+    condition = {"type": "evidence_present", "uid": UIDS[8]}
+    satisfaction = ConditionSatisfaction(
+        approval_uid=UIDS[9],
+        condition=condition,
+        evidence_uids=(UIDS[8],),
+        actor_uid=UIDS[7],
+        satisfied_at=NOW,
+    )
+    revocation = ApprovalRevocation(
+        approval_uid=UIDS[9],
+        actor_uid=UIDS[7],
+        reason="evidence withdrawn",
+        revoked_at=NOW,
+    )
+    records = (
+        ("review-comment.schema.json", comment),
+        ("comment-resolution.schema.json", resolution),
+        ("condition-satisfaction.schema.json", satisfaction),
+        ("approval-revocation.schema.json", revocation),
+    )
+    catalog = SchemaCatalog()
+    for schema_name, record in records:
+        value = record.model_dump(mode="json")
+        catalog.validate(schema_name, value)
+        assert not any(key.endswith("_hash") for key in value if key != "package_hash")
+    assert resolution.comment_uid == comment.comment_uid
+    assert satisfaction.condition == condition
 
 
 def test_baseline_preparation_requires_complete_configuration_validation_and_impact() -> None:

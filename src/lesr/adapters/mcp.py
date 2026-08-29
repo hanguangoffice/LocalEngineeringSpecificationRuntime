@@ -503,6 +503,19 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             selected_alternative,
         ).payload()
 
+    @server.tool(name="engineering_map", annotations=read_only, structured_output=True)
+    def engineering_map(
+        configuration_uid: str,
+        evaluation_time: str,
+        workspace_uid: str | None = None,
+    ) -> dict[str, Any]:
+        """Read the Profile- or template-defined engineering map in human terms."""
+        return domain.engineering_map(
+            configuration_uid,
+            evaluation_time,
+            workspace_uid,
+        ).payload()
+
     @server.resource("lesr://objects/{uid}")
     def object_resource(uid: str) -> str:
         """Stable read-only logical-object resource."""
