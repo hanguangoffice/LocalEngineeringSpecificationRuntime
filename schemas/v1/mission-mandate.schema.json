@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/mission-mandate.schema.json",
+  "title": "Local Runtime Mission Mandate",
+  "description": "Standing Mission authority for background execution. It is local runtime state, is not Canonical Git state, and accepts no client risk classification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
+    "mandate_uid", "mission_uid", "title", "issued_by_actor_uid", "scope",
+    "allowed_operations", "limits", "issued_at", "expires_at", "revoked_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "mission_mandate"},
+    "persistence_scope": {"const": "local_runtime"},
+    "canonical_git_eligible": {"const": false},
+    "mandate_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "mission_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "title": {"type": "string", "minLength": 1},
+    "issued_by_actor_uid": {"type": "string", "minLength": 1},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration_uid", "engineering_areas", "resource_uids",
+        "allow_new_resources"
+      ],
+      "properties": {
+        "configuration_uid": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/$defs/uuid7"},
+            {"type": "null"}
+          ]
+        },
+        "engineering_areas": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "resource_uids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "allow_new_resources": {"type": "boolean"}
+      }
+    },
+    "allowed_operations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.-]+$"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_work_packages", "max_changed_resources", "max_changed_relations",
+        "max_external_actions", "max_destructive_actions"
+      ],
+      "properties": {
+        "max_work_packages": {"type": "integer", "minimum": 1},
+        "max_changed_resources": {"type": "integer", "minimum": 1},
+        "max_changed_relations": {"type": "integer", "minimum": 0},
+        "max_external_actions": {"type": "integer", "minimum": 0},
+        "max_destructive_actions": {"type": "integer", "minimum": 0}
+      }
+    },
+    "issued_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "expires_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "revoked_at": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+        {"type": "null"}
+      ]
+    }
+  }
+}

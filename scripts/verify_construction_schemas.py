@@ -9,13 +9,13 @@ from jsonschema import FormatChecker
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 
-from lesr.domain.catalog import SCHEMA_CATALOG
+from lesr.domain.catalog import CONSTRUCTION_SCHEMA_CATALOG
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas" / "v1"
 
 
-REQUIRED_SCHEMAS = set(SCHEMA_CATALOG)
+REQUIRED_SCHEMAS = set(CONSTRUCTION_SCHEMA_CATALOG)
 
 
 def load_schemas() -> dict[Path, dict[str, Any]]:

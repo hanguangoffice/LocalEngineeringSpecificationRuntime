@@ -1,17 +1,24 @@
-# LESR 1.0 architecture status
+# LESR architecture status
 
-LESR is a local, single-repository, single-user semantic engineering runtime.
+LESR is a local, single-repository, single-user semantic engineering control plane
+for people and AI agents.
 Git commit trees are canonical authority; SQLite/FTS5 and the task database are
 rebuildable local runtime state. Domain services mediate every authoritative write.
 CLI, MCP, and Web are adapters to one Capability Descriptor and do not embed a
 second policy evaluator.
 
+The normal product flow is goal-driven rather than operation-driven. A Mission
+orchestrates Work Packages and specialist Agent Runs; Context, Working Copy,
+validation, impact, rebase and Git transaction capabilities execute behind that
+flow. Only policy-derived Decision Requests interrupt the user. The complete product
+contract is in `AGENTIC-PRODUCT-CONTRACT.md`.
+
 The zero-spec intake layer is deliberately pre-authority. It verifies and reads
 licensed upstream Spec Kit/arc42 snapshots, preserves the user's statements,
 selects a scenario pack, and creates editable Working Copies. It cannot publish
-a Revision. The only first-use mutation is a human-confirmed bootstrap of the
-local Ed25519 trust root, minimal Profile, and initial Configuration; review,
-signature, and Apply remain the existing authority boundary.
+a Revision. Bootstrap, template selection and Context assembly are background
+runtime work. Formal signing is used only when the effective Profile assigns a
+human responsibility boundary.
 
 The 0.5 operation-queue workspace and shallow relation validation are superseded.
 The 1.0 dependency order is: frozen contracts; Profile semantic kernel; real

@@ -86,6 +86,23 @@ SCHEMA_CATALOG: tuple[str, ...] = (
     "workspace.schema.json",
 )
 
+# Mission execution, decision routing, and presentation are local-runtime
+# resources.  They deliberately stay outside the canonical repository manifest:
+# restarting or upgrading the agent runtime must not change the engineering
+# state contract of an existing 1.0 repository.
+RUNTIME_SCHEMA_CATALOG: tuple[str, ...] = (
+    "agent-run.schema.json",
+    "decision-request.schema.json",
+    "mission-mandate.schema.json",
+    "mission.schema.json",
+    "presentation-mapping.schema.json",
+    "work-package.schema.json",
+)
+
+CONSTRUCTION_SCHEMA_CATALOG: tuple[str, ...] = tuple(
+    sorted((*SCHEMA_CATALOG, *RUNTIME_SCHEMA_CATALOG))
+)
+
 
 CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
     sorted(

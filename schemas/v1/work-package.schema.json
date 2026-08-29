@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/work-package.schema.json",
+  "title": "Local Runtime Work Package",
+  "description": "One node in a local Mission DAG. It is runtime coordination state and is ineligible for Canonical Git.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
+    "work_package_uid", "mission_uid", "title", "objective", "role", "state",
+    "dependency_uids", "blocked_by_uids", "workspace_uid", "agent_run_uids",
+    "failure_reason", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "work_package"},
+    "persistence_scope": {"const": "local_runtime"},
+    "canonical_git_eligible": {"const": false},
+    "work_package_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "mission_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "title": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "state": {"enum": ["planned", "ready", "running", "waiting_for_decision", "blocked", "completed", "failed", "cancelled"]},
+    "dependency_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+    "blocked_by_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+    "workspace_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+    "agent_run_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
+    "failure_reason": {"type": ["string", "null"], "minLength": 1},
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "updated_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "blocked"}}},
+      "then": {"properties": {"blocked_by_uids": {"minItems": 1}}},
+      "else": {"properties": {"blocked_by_uids": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"state": {"const": "failed"}}},
+      "then": {"properties": {"failure_reason": {"type": "string", "minLength": 1}}},
+      "else": {"properties": {"failure_reason": {"type": "null"}}}
+    }
+  ]
+}

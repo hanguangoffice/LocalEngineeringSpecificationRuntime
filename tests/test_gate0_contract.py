@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from lesr.adapters.git import GitCanonicalRepository, IntegrityError
-from lesr.domain.catalog import CAPABILITIES, SCHEMA_CATALOG, RepositoryManifest
+from lesr.domain.catalog import (
+    CAPABILITIES,
+    CONSTRUCTION_SCHEMA_CATALOG,
+    RUNTIME_SCHEMA_CATALOG,
+    SCHEMA_CATALOG,
+    RepositoryManifest,
+)
 
 
 def test_manifest_is_complete_deterministic_and_self_hashed() -> None:
@@ -39,6 +45,9 @@ def test_pre_1_0_repository_is_rejected(tmp_path: Path) -> None:
 
 def test_manifest_schema_catalog_matches_files() -> None:
     root = Path(__file__).resolve().parents[1] / "schemas" / "v1"
-    assert tuple(sorted(path.name for path in root.glob("*.schema.json"))) == SCHEMA_CATALOG
+    assert tuple(sorted(path.name for path in root.glob("*.schema.json"))) == (
+        CONSTRUCTION_SCHEMA_CATALOG
+    )
+    assert not set(RUNTIME_SCHEMA_CATALOG).intersection(SCHEMA_CATALOG)
     for path in root.glob("*.schema.json"):
         json.loads(path.read_text(encoding="utf-8"))

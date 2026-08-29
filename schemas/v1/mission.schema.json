@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/mission.schema.json",
+  "title": "Local Runtime Mission",
+  "description": "A local multi-agent orchestration aggregate. Mission state is stored in the runtime database or Workspace refs and never in Canonical Git.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
+    "mission_uid", "title", "objective", "initiated_by_actor_uid", "state",
+    "configuration_uid", "delegation_uid", "work_packages", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "mission"},
+    "persistence_scope": {"const": "local_runtime"},
+    "canonical_git_eligible": {"const": false},
+    "mission_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "title": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "initiated_by_actor_uid": {"type": "string", "minLength": 1},
+    "state": {"enum": ["planned", "running", "waiting_for_decision", "blocked", "completed", "failed", "cancelled"]},
+    "configuration_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+    "delegation_uid": {"oneOf": [{"$ref": "common.schema.json#/$defs/uuid7"}, {"type": "null"}]},
+    "work_packages": {"type": "array", "minItems": 1, "items": {"$ref": "work-package.schema.json"}},
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "updated_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+  }
+}

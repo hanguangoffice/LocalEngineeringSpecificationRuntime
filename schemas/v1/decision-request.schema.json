@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/decision-request.schema.json",
+  "title": "Local Runtime Human Decision Request",
+  "description": "A complete human-readable request for one material decision and one authorizable operation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
+    "decision_request_uid", "mission_uid", "work_package_uid", "mandate_uid",
+    "disposition", "decision_type", "engineering_area", "target", "change_summary",
+    "impact", "validation", "recommendation", "alternatives", "triggered_policies",
+    "action", "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "decision_request"},
+    "persistence_scope": {"const": "local_runtime"},
+    "canonical_git_eligible": {"const": false},
+    "decision_request_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "mission_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "work_package_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "mandate_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "disposition": {"const": "HUMAN_DECISION_NOW"},
+    "decision_type": {"type": "string", "minLength": 1},
+    "engineering_area": {"type": "string", "minLength": 1},
+    "target": {"$ref": "#/$defs/target"},
+    "change_summary": {"type": "string", "minLength": 1},
+    "impact": {"$ref": "#/$defs/impact"},
+    "validation": {"$ref": "#/$defs/validation"},
+    "recommendation": {"type": "string", "minLength": 1},
+    "alternatives": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/alternative"}
+    },
+    "triggered_policies": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/triggered_policy"}
+    },
+    "action": {"$ref": "#/$defs/action"},
+    "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "content_type", "engineering_key"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "content_type": {"type": "string", "minLength": 1},
+        "engineering_key": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeness", "summary", "affected_areas", "affected_targets"],
+      "properties": {
+        "completeness": {"enum": ["complete", "incomplete", "indeterminate"]},
+        "summary": {"type": "string", "minLength": 1},
+        "affected_areas": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "affected_targets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conclusion", "summary", "evidence"],
+      "properties": {
+        "conclusion": {"enum": ["passed", "failed", "indeterminate"]},
+        "summary": {"type": "string", "minLength": 1},
+        "evidence": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "alternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary", "trade_off"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1},
+        "trade_off": {"type": "string", "minLength": 1}
+      }
+    },
+    "triggered_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_code", "title", "explanation"],
+      "properties": {
+        "policy_code": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "explanation": {"type": "string", "minLength": 1}
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "label", "result"],
+      "properties": {
+        "operation": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "result": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

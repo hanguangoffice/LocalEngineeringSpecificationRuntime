@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/presentation-mapping.schema.json",
+  "title": "Presentation Mapping Revision",
+  "description": "Non-authoritative Profile/template-driven instructions for rendering a resolved engineering graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "resource_type",
+    "core_class",
+    "presentation_mapping_uid",
+    "revision_uid",
+    "revision_number",
+    "parent_revision_uid",
+    "name",
+    "source_profile_revision_uids",
+    "source_template_artifact_uids",
+    "engineering_areas",
+    "hierarchies",
+    "trace_matrices",
+    "view_modes",
+    "default_view_mode",
+    "creates_normative_facts"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "presentation_mapping_revision"},
+    "core_class": {"const": "presentation_resource"},
+    "presentation_mapping_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "revision_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "revision_number": {"type": "integer", "minimum": 1},
+    "parent_revision_uid": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/$defs/uuid7"},
+        {"type": "null"}
+      ]
+    },
+    "name": {"type": "string", "minLength": 1},
+    "source_profile_revision_uids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+    },
+    "source_template_artifact_uids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "engineering_areas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/engineering_area"}
+    },
+    "hierarchies": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/hierarchy"}
+    },
+    "trace_matrices": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/trace_matrix"}
+    },
+    "view_modes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/view_mode"}
+    },
+    "default_view_mode": {"$ref": "#/$defs/view_mode"},
+    "creates_normative_facts": {"const": false}
+  },
+  "anyOf": [
+    {"properties": {"source_profile_revision_uids": {"minItems": 1}}},
+    {"properties": {"source_template_artifact_uids": {"minItems": 1}}}
+  ],
+  "$defs": {
+    "view_mode": {
+      "enum": [
+        "overview",
+        "outline",
+        "hierarchy",
+        "relation_graph",
+        "trace_matrix",
+        "document",
+        "coverage"
+      ]
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind_definition_revision_uids",
+        "facet_definition_revision_uids",
+        "relation_type_revision_uids",
+        "match"
+      ],
+      "properties": {
+        "kind_definition_revision_uids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "facet_definition_revision_uids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "relation_type_revision_uids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "match": {"enum": ["any", "all"]}
+      },
+      "anyOf": [
+        {"properties": {"kind_definition_revision_uids": {"minItems": 1}}},
+        {"properties": {"facet_definition_revision_uids": {"minItems": 1}}},
+        {"properties": {"relation_type_revision_uids": {"minItems": 1}}}
+      ]
+    },
+    "object_selector": {
+      "allOf": [
+        {"$ref": "#/$defs/selector"},
+        {
+          "anyOf": [
+            {"properties": {"kind_definition_revision_uids": {"minItems": 1}}},
+            {"properties": {"facet_definition_revision_uids": {"minItems": 1}}}
+          ]
+        }
+      ]
+    },
+    "engineering_area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["area_key", "label", "description", "selector", "order"],
+      "properties": {
+        "area_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": ["string", "null"]},
+        "selector": {"$ref": "#/$defs/object_selector"},
+        "order": {"type": "integer", "minimum": 0}
+      }
+    },
+    "hierarchy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hierarchy_key",
+        "label",
+        "root_selector",
+        "member_selector",
+        "relation_type_revision_uids",
+        "direction",
+        "maximum_depth"
+      ],
+      "properties": {
+        "hierarchy_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "label": {"type": "string", "minLength": 1},
+        "root_selector": {"$ref": "#/$defs/object_selector"},
+        "member_selector": {"$ref": "#/$defs/object_selector"},
+        "relation_type_revision_uids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "direction": {"enum": ["source_to_target", "target_to_source"]},
+        "maximum_depth": {"type": "integer", "minimum": 1, "maximum": 16}
+      }
+    },
+    "trace_matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matrix_key",
+        "label",
+        "row_selector",
+        "column_selector",
+        "relation_type_revision_uids",
+        "require_formal_trace_credit",
+        "formal_trace_category"
+      ],
+      "properties": {
+        "matrix_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "label": {"type": "string", "minLength": 1},
+        "row_selector": {"$ref": "#/$defs/object_selector"},
+        "column_selector": {"$ref": "#/$defs/object_selector"},
+        "relation_type_revision_uids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "common.schema.json#/$defs/uuid7"}
+        },
+        "require_formal_trace_credit": {"type": "boolean"},
+        "formal_trace_category": {"type": ["string", "null"], "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"require_formal_trace_credit": {"const": true}},
+            "required": ["require_formal_trace_credit"]
+          },
+          "then": {"properties": {"formal_trace_category": {"type": "string"}}},
+          "else": {"properties": {"formal_trace_category": {"type": "null"}}}
+        }
+      ]
+    }
+  }
+}
