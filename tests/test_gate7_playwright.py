@@ -66,7 +66,7 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
                 "提供 PyTorch 模拟测试。未经确认不得全局安装软件。"
             )
             intake.get_by_role("button", name="整理工程内容").click()
-            expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
+            expect(page.locator("#intake-pack")).to_have_text("本地 AI、GPU 与模型应用")
             expect(page.locator("#intake-requirements .intake-requirement")).to_have_count(1)
             expect(page.locator("#intake")).not_to_contain_text("sha256:")
             expect(page.locator("#intake")).not_to_contain_text("59dc772b")
@@ -217,7 +217,7 @@ def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path
                 "- 未经确认不得全局安装软件或修改 PATH。"
             )
             form.get_by_role("button", name="整理工程内容").click()
-            expect(page.locator("#intake-pack")).to_have_text("本地 AI 与 GPU 工程")
+            expect(page.locator("#intake-pack")).to_have_text("本地 AI、GPU 与模型应用")
             expect(page.locator("#intake-count")).to_have_text("4 项")
             page.screenshot(path=str(tmp_path / "zero-spec-intake.png"), full_page=True)
             accept = page.locator("#intake-accept-form")

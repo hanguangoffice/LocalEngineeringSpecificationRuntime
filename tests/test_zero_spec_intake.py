@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lesr.adapters.git import GitCanonicalRepository
@@ -59,10 +60,17 @@ def unlocked_runtime(
 def test_upstream_templates_are_exact_verified_snapshots() -> None:
     catalog = IntakeCatalog()
     verified = catalog.verify_vendored_sources()
-    assert len(verified) == 20
+    assert len(verified) == 38
     assert {item["source_uid"] for item in verified} == {
         "github-spec-kit-2026-08-28",
         "arc42-zh-2026-07-07",
+        "madr-4.0.0",
+        "swagger-petstore-v31-1.0.10",
+        "asyncapi-3.1.0",
+        "cookiecutter-data-science-2.3.0",
+        "model-card-toolkit-2.0.0",
+        "owasp-threat-model-library-1.0.2",
+        "nasa-fret-3.1.0",
     }
     assert "## User Scenarios & Testing *(mandatory)*" in catalog.read_vendored(
         "spec-kit/templates/spec-template.md"
@@ -74,6 +82,13 @@ def test_gpu_request_selects_source_backed_pack_and_preserves_statements() -> No
         IntakeRequest(description=GPU_REQUEST, project_name="gpu-lab-manager")
     )
     assert analysis.selected_pack.pack_uid == "local-ai-runtime"
+    assert {item.artifact_uid for item in analysis.selected_pack.artifacts} == {
+        "spec-kit-standard",
+        "arc42-architecture",
+        "ccds-project",
+        "model-card",
+        "madr",
+    }
     assert analysis.source_fidelity == "verified_upstream_snapshot"
     assert any(item.statement == "NVIDIA GPU 型号；" for item in analysis.requirements)
     assert any(item.category.value == "safety" for item in analysis.requirements)
@@ -85,6 +100,57 @@ def test_gpu_request_selects_source_backed_pack_and_preserves_statements() -> No
         item.disposition.value in {"blocking", "needs_decision"}
         for item in analysis.gaps
     )
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_pack", "expected_artifact"),
+    (
+        (
+            "为 ECU 固件设计 CAN 实时控制器，并定义安全关键状态转换和故障诊断要求。",
+            "embedded-safety",
+            "nasa-fret",
+        ),
+        (
+            "设计 REST API 和 OpenAPI 契约，包括资源端点、错误响应与版本兼容策略。",
+            "rest-api-service",
+            "openapi",
+        ),
+        (
+            "构建 MQTT 事件驱动 IoT 服务，定义 topic、消息载荷和发布订阅关系。",
+            "event-driven-integration",
+            "asyncapi",
+        ),
+        (
+            "建立数据科学与机器学习项目，管理数据集、特征工程、训练和模型评估。",
+            "data-science-ml",
+            "model-card",
+        ),
+        (
+            "为支付服务完成 OWASP 威胁建模，识别攻击面、信任边界和滥用场景。",
+            "security-sensitive",
+            "owasp-threat-model",
+        ),
+        (
+            "设计可扩展的平台运行时与插件适配器框架，并记录关键架构选择。",
+            "platform-runtime",
+            "madr",
+        ),
+    ),
+)
+def test_application_directions_select_distinct_upstream_templates(
+    description: str,
+    expected_pack: str,
+    expected_artifact: str,
+) -> None:
+    analysis = IntakeService().analyze(IntakeRequest(description=description))
+    assert analysis.selected_pack.pack_uid == expected_pack
+    selected = next(
+        item
+        for item in analysis.selected_pack.artifacts
+        if item.artifact_uid == expected_artifact
+    )
+    assert selected.display_name in analysis.starter_document
+    assert selected.purpose in analysis.starter_document
 
 
 def test_operational_boundaries_are_resolved_without_user_questions() -> None:
@@ -127,7 +193,12 @@ def test_web_intake_analyzes_without_exposing_internal_ids(tmp_path: Path) -> No
         json={"description": GPU_REQUEST, "project_name": "gpu-lab-manager"},
     )
     assert response.status_code == 200
-    assert response.json()["selected_pack"]["pack_uid"] == "local-ai-runtime"
+    value = response.json()
+    assert value["selected_pack"]["pack_uid"] == "local-ai-runtime"
+    assert {item["display_name"] for item in value["selected_pack"]["artifacts"]} >= {
+        "Cookiecutter Data Science 工程结构",
+        "TensorFlow Model Card",
+    }
 
 
 def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(

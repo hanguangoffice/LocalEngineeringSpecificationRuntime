@@ -29,6 +29,15 @@ class TemplateSource(FrozenIntakeModel):
     notes: str
 
 
+class TemplateArtifact(FrozenIntakeModel):
+    artifact_uid: str
+    display_name: str
+    source_uid: str
+    path: str
+    purpose: str
+    role: Literal["primary", "companion", "reference"]
+
+
 class TemplatePack(FrozenIntakeModel):
     pack_uid: str
     display_name: str
@@ -37,6 +46,7 @@ class TemplatePack(FrozenIntakeModel):
     signals: tuple[str, ...] = ()
     priority: int = Field(ge=0)
     architecture_depth: Literal["lean", "standard", "full"]
+    artifacts: tuple[TemplateArtifact, ...]
 
 
 class RequirementCategory(StrEnum):

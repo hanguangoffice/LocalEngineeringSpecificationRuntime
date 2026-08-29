@@ -43,25 +43,64 @@
       ]
     },
     {
-      "source_uid": "grill-me-stevegsax-2026-04-07",
-      "display_name": "grill-me archived method reference",
-      "repository": "https://github.com/stevegsax/grill-me",
-      "commit": "a383d37b36d221f1d635ac7567d04ca5a565facb",
-      "license": "reference-only: no repository license",
-      "usage": "method_reference",
-      "notes": "No source prose is distributed. Only independently implemented behavior is traced in docs/zero-spec-intake-sources.md.",
+      "source_uid": "madr-4.0.0", "display_name": "MADR 4.0.0", "repository": "https://github.com/adr/madr", "commit": "2475fe1973f66a12aaf58a91d8fa7b42c0f5ea3d", "license": "CC0-1.0 OR MIT", "usage": "vendored_template", "notes": "Official Markdown Architectural Decision Records template from release 4.0.0.",
       "files": [
-        {"path": "grill-me-stevegsax/SKILL.md", "bytes": 13854, "sha256": "0a54e4e5bbee4359feafc288c0bf67818c54729cb0ea2d5f69cce7d51d66589d"}
+        {"path": "madr/template/adr-template.md", "bytes": 3316, "sha256": "4903614bbae9aeb2aa811caeb9e156677ef1a993872af6ff8dcfb67b2266cae1"},
+        {"path": "madr/LICENSE.CC0-1.0", "bytes": 7048, "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"}
       ]
     },
     {
-      "source_uid": "grill-me-matt-riley-2026-08-05",
-      "display_name": "grill-me and reverse-prompt method reference",
-      "repository": "https://github.com/matt-riley/agent-skills",
-      "commit": "b4cbef10b4f7e84210d1e4f9d696d25ac74699be",
-      "license": "GPL-3.0",
-      "usage": "method_reference",
-      "notes": "No GPL source prose or code is distributed. Selected interaction behavior is independently implemented and traced.",
+      "source_uid": "swagger-petstore-v31-1.0.10", "display_name": "Swagger Petstore OpenAPI 3.1", "repository": "https://github.com/swagger-api/swagger-petstore", "commit": "a1019e6f46909dc9e37c15ffe04541d388d0f03d", "license": "Apache-2.0", "usage": "vendored_template", "notes": "Official design-first OpenAPI 3.1 contract example from the v31 1.0.10 release.",
+      "files": [
+        {"path": "swagger-petstore/openapi.yaml", "bytes": 7873, "sha256": "fa395ae79f5efbf31ae3cb1dd29e0064c41a5fc2746d8f26a34018f013d61cb9"},
+        {"path": "swagger-petstore/LICENSE", "bytes": 11359, "sha256": "aa4dc81ef2c6b4c2fd8cb7a7a4245c34396acd5a5dfa1ba6c8c0cf9ee88423fb"}
+      ]
+    },
+    {
+      "source_uid": "asyncapi-3.1.0", "display_name": "AsyncAPI 3.1.0", "repository": "https://github.com/asyncapi/spec", "commit": "b3fac5bb522771428ea57b16129b273cd3ea0180", "license": "Apache-2.0", "usage": "vendored_template", "notes": "Official minimal asynchronous API document from release 3.1.0.",
+      "files": [
+        {"path": "asyncapi/examples/simple-asyncapi.yml", "bytes": 744, "sha256": "8fcbe903a4630d4c8ed7a73726dd603d56c2a98d109498bea1574f0d819d5a92"},
+        {"path": "asyncapi/LICENSE", "bytes": 11356, "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"}
+      ]
+    },
+    {
+      "source_uid": "cookiecutter-data-science-2.3.0", "display_name": "Cookiecutter Data Science 2.3.0", "repository": "https://github.com/drivendataorg/cookiecutter-data-science", "commit": "0f6b163cdbe3918a2c65ab57ad9fefda93976d9e", "license": "MIT", "usage": "vendored_template", "notes": "Official project structure and project README template from release 2.3.0.",
+      "files": [
+        {"path": "cookiecutter-data-science/project/README.md", "bytes": 2789, "sha256": "2366709bc22cc97b25de3bb708d736012408ba674d5700862019f080c5f1d03b"},
+        {"path": "cookiecutter-data-science/ccds.json", "bytes": 1290, "sha256": "f218b0219d325dfe924545761bbb7e975f6ddad7a13671cc8260e177fe1dee3f"},
+        {"path": "cookiecutter-data-science/LICENSE", "bytes": 1081, "sha256": "2e9a57c9933fb9a2f121f54e870f02dbbb7b285e1fe2e08dfe7721ca455c97ec"}
+      ]
+    },
+    {
+      "source_uid": "model-card-toolkit-2.0.0", "display_name": "TensorFlow Model Card Toolkit 2.0.0", "repository": "https://github.com/tensorflow/model-card-toolkit", "commit": "05474c8ccf259a9b229d33b98edfc2cbf28e1a8e", "license": "Apache-2.0", "usage": "vendored_template", "notes": "Archived official model-card Markdown template and schema from release 2.0.0.",
+      "files": [
+        {"path": "model-card-toolkit/template/default_template.md.jinja", "bytes": 4858, "sha256": "1e1d199fca58f212042d853919e890f504e31c7980e92a5c0651bae96329430c"},
+        {"path": "model-card-toolkit/schema/model_card.schema.json", "bytes": 10781, "sha256": "369dd9dbeff0980dd34fa8d14a6a17d7c63c4bf3874e414fdf886f47d72f46dd"},
+        {"path": "model-card-toolkit/LICENSE", "bytes": 11418, "sha256": "4770cddf7753a89bf8d2ab5bf507462aaa8fdb461dd1b7bf700963fb5fce3e8f"}
+      ]
+    },
+    {
+      "source_uid": "owasp-threat-model-library-1.0.2", "display_name": "OWASP Threat Model Library 1.0.2", "repository": "https://github.com/OWASP/www-project-threat-model-library", "commit": "a3d9c0c5a8dbcbf50e7ce5ddedeb299418fa9b27", "license": "MIT", "usage": "vendored_template", "notes": "Official threat-model schema plus one complete AI/ML example from release 1.0.2.",
+      "files": [
+        {"path": "owasp-threat-model/threat-model.schema.json", "bytes": 34317, "sha256": "428772fecfed799921e90bb7e7acf7ce7bb8e379128e43c4e7f4346a528539be"},
+        {"path": "owasp-threat-model/examples/husky-ai-threat-model.json", "bytes": 46901, "sha256": "103979db1d6a3b35ba0e4a40923c7817c94d6190ee0596648154bbb6d1fa5649"},
+        {"path": "owasp-threat-model/LICENSE.md", "bytes": 1081, "sha256": "6f5d6604c5b1bb540c71b19236d1639893cd5ec1a003467f2975b5edcd78805f"}
+      ]
+    },
+    {
+      "source_uid": "nasa-fret-3.1.0", "display_name": "NASA FRET 3.1.0", "repository": "https://github.com/NASA-SW-VnV/fret", "commit": "58db455be35182a015e607232d9f4e3c86731932", "license": "Apache-2.0", "usage": "vendored_template", "notes": "Official structured requirement templates and authoring guidance from release 3.1.0; README contains the upstream license notice.",
+      "files": [
+        {"path": "nasa-fret/templates/templates.json", "bytes": 21536, "sha256": "d9d5592942a93bd5ff96c5551383f8f92d6022ed0f6cfde0eb6bb91f831c9ea5"},
+        {"path": "nasa-fret/docs/writingReqs.md", "bytes": 9286, "sha256": "d93b8bea6d14ba89f6df5f8fd9c433ae62fbcbeb07cc955f61017d98c9206c9b"},
+        {"path": "nasa-fret/README.md", "bytes": 4090, "sha256": "7b928ff496a1961a566f34dd7de47159a5dc1ceadf0739962429055f2da91fda"}
+      ]
+    },
+    {
+      "source_uid": "grill-me-stevegsax-2026-04-07", "display_name": "grill-me archived method reference", "repository": "https://github.com/stevegsax/grill-me", "commit": "a383d37b36d221f1d635ac7567d04ca5a565facb", "license": "reference-only: no repository license", "usage": "method_reference", "notes": "No source prose is distributed. Only independently implemented behavior is traced in docs/zero-spec-intake-sources.md.",
+      "files": [{"path": "grill-me-stevegsax/SKILL.md", "bytes": 13854, "sha256": "0a54e4e5bbee4359feafc288c0bf67818c54729cb0ea2d5f69cce7d51d66589d"}]
+    },
+    {
+      "source_uid": "grill-me-matt-riley-2026-08-05", "display_name": "grill-me and reverse-prompt method reference", "repository": "https://github.com/matt-riley/agent-skills", "commit": "b4cbef10b4f7e84210d1e4f9d696d25ac74699be", "license": "GPL-3.0", "usage": "method_reference", "notes": "No GPL source prose or code is distributed. Selected interaction behavior is independently implemented and traced.",
       "files": [
         {"path": "agent-skills/skills/grill-me/SKILL.md", "bytes": 6113, "sha256": "73cdeb5f05c677e154defeeebfe7504e64161d31fe7742e999644b42a3d304e0"},
         {"path": "agent-skills/skills/grill-me/references/interrogation-patterns.md", "bytes": 866, "sha256": "008e89e1c3eb78313645ef37ad251aadbd0d7a87eff8d8648121072fabc75a10"},
@@ -71,58 +110,75 @@
   ],
   "packs": [
     {
-      "pack_uid": "local-ai-runtime",
-      "display_name": "本地 AI 与 GPU 工程",
-      "summary": "Spec Kit 的需求与验收骨架，加上 arc42 的运行时、部署、质量和风险视图。",
-      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
-      "signals": ["nvidia", "cuda", "gpu", "rtx", "显存", "本地模型", "pytorch", "数字人", "tts", "live2d", "ai"],
-      "priority": 90,
-      "architecture_depth": "full"
+      "pack_uid": "local-ai-runtime", "display_name": "本地 AI、GPU 与模型应用", "summary": "产品需求、系统架构、数据工程、模型说明和关键决策使用各自的公开上游模板。", "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07", "cookiecutter-data-science-2.3.0", "model-card-toolkit-2.0.0", "madr-4.0.0"], "signals": ["nvidia", "cuda", "gpu", "rtx", "显存", "本地模型", "pytorch", "数字人", "tts", "live2d", "推理"], "priority": 120, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "功能、用户场景、验收和成功标准", "role": "primary"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "系统边界、构建块、运行时、部署、质量和风险", "role": "companion"},
+        {"artifact_uid": "ccds-project", "display_name": "Cookiecutter Data Science 工程结构", "source_uid": "cookiecutter-data-science-2.3.0", "path": "cookiecutter-data-science/project/README.md", "purpose": "数据、模型、实验、报告和可复现工程结构", "role": "companion"},
+        {"artifact_uid": "model-card", "display_name": "TensorFlow Model Card", "source_uid": "model-card-toolkit-2.0.0", "path": "model-card-toolkit/template/default_template.md.jinja", "purpose": "模型用途、限制、数据、指标和风险说明", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "记录重要技术选择、方案比较和后果", "role": "companion"}
+      ]
     },
     {
-      "pack_uid": "embedded-engineering",
-      "display_name": "嵌入式与软硬件协同",
-      "summary": "Spec Kit 的可测试需求，加上 arc42 的系统边界、运行时和部署视图。",
-      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
-      "signals": ["embedded", "firmware", "mcu", "can", "ecu", "嵌入式", "固件", "硬件", "实时"],
-      "priority": 80,
-      "architecture_depth": "full"
+      "pack_uid": "embedded-safety", "display_name": "嵌入式、实时与安全关键系统", "summary": "通用需求与架构之外，使用 NASA FRET 的结构化实时需求模板。", "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07", "nasa-fret-3.1.0", "madr-4.0.0"], "signals": ["embedded", "firmware", "mcu", "can", "ecu", "嵌入式", "固件", "硬件", "实时", "安全关键", "航空", "avionics", "控制器"], "priority": 105, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "功能、用户场景和可测试验收", "role": "primary"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "系统边界、运行时、部署和质量场景", "role": "companion"},
+        {"artifact_uid": "nasa-fret", "display_name": "NASA FRET 结构化需求", "source_uid": "nasa-fret-3.1.0", "path": "nasa-fret/templates/templates.json", "purpose": "状态变化、命令、边界、诊断和实时响应需求", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "记录关键设计选择及其后果", "role": "companion"}
+      ]
     },
     {
-      "pack_uid": "api-integration",
-      "display_name": "服务、API 与系统集成",
-      "summary": "Spec Kit 的用户场景与验收要求，加上 arc42 的上下文、接口和运行时视图。",
-      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
-      "signals": ["api", "service", "服务", "接口", "mqtt", "消息", "webhook", "integration", "集成"],
-      "priority": 70,
-      "architecture_depth": "full"
+      "pack_uid": "security-sensitive", "display_name": "安全敏感与威胁建模", "summary": "需求和架构配合 OWASP 威胁模型结构与 MADR 决策记录。", "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07", "owasp-threat-model-library-1.0.2", "madr-4.0.0"], "signals": ["威胁建模", "威胁模型", "threat model", "攻击面", "零信任", "owasp", "滥用场景", "abuse case", "安全审查"], "priority": 100, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "产品范围、场景和验收", "role": "primary"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "边界、部署、质量和风险视图", "role": "companion"},
+        {"artifact_uid": "owasp-threat-model", "display_name": "OWASP Threat Model Library", "source_uid": "owasp-threat-model-library-1.0.2", "path": "owasp-threat-model/threat-model.schema.json", "purpose": "范围、信任边界、资产、数据流、威胁和控制", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "安全决策、备选方案和影响", "role": "companion"}
+      ]
     },
     {
-      "pack_uid": "platform-runtime",
-      "display_name": "平台、运行时与插件系统",
-      "summary": "Spec Kit 的交付规格，加上 arc42 的构建块、运行时、部署和架构决策。",
-      "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07"],
-      "signals": ["platform", "runtime", "plugin", "adapter", "平台", "运行时", "插件", "适配器", "框架"],
-      "priority": 60,
-      "architecture_depth": "full"
+      "pack_uid": "data-science-ml", "display_name": "数据科学与机器学习", "summary": "数据科学工程结构与模型说明均采用成熟的独立上游模板。", "source_uids": ["github-spec-kit-2026-08-28", "cookiecutter-data-science-2.3.0", "model-card-toolkit-2.0.0", "madr-4.0.0"], "signals": ["data science", "数据科学", "dataset", "数据集", "训练", "特征工程", "notebook", "模型评估", "机器学习", "ml pipeline", "数据管道"], "priority": 90, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "目标、使用场景和验收结果", "role": "primary"},
+        {"artifact_uid": "ccds-project", "display_name": "Cookiecutter Data Science 工程结构", "source_uid": "cookiecutter-data-science-2.3.0", "path": "cookiecutter-data-science/project/README.md", "purpose": "数据、特征、模型、实验和报告结构", "role": "companion"},
+        {"artifact_uid": "model-card", "display_name": "TensorFlow Model Card", "source_uid": "model-card-toolkit-2.0.0", "path": "model-card-toolkit/template/default_template.md.jinja", "purpose": "模型用途、限制、数据和量化分析", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "数据和模型方案选择记录", "role": "companion"}
+      ]
     },
     {
-      "pack_uid": "small-delivery-lean",
-      "display_name": "小工具、脚本与快速原型",
-      "summary": "严格采用 Spec Kit Lean 的 specify → plan → tasks → implement 最小流程。",
-      "source_uids": ["github-spec-kit-2026-08-28"],
-      "signals": ["script", "cli", "poc", "prototype", "脚本", "小工具", "原型", "一次性"],
-      "priority": 40,
-      "architecture_depth": "lean"
+      "pack_uid": "event-driven-integration", "display_name": "事件驱动、消息与 IoT 集成", "summary": "使用 AsyncAPI 记录消息通道、操作、消息和绑定，配合需求与架构模板。", "source_uids": ["github-spec-kit-2026-08-28", "asyncapi-3.1.0", "arc42-zh-2026-07-07", "madr-4.0.0"], "signals": ["mqtt", "kafka", "amqp", "websocket", "消息", "事件驱动", "event-driven", "broker", "topic", "发布订阅", "物联网", "iot"], "priority": 85, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "业务场景和可测试需求", "role": "primary"},
+        {"artifact_uid": "asyncapi", "display_name": "AsyncAPI 3.1 消息契约", "source_uid": "asyncapi-3.1.0", "path": "asyncapi/examples/simple-asyncapi.yml", "purpose": "服务、通道、操作、消息、载荷和协议绑定", "role": "companion"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "上下文、运行时、部署和质量场景", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "消息拓扑和交付语义决策", "role": "companion"}
+      ]
     },
     {
-      "pack_uid": "software-standard",
-      "display_name": "通用软件产品与功能",
-      "summary": "采用 GitHub Spec Kit 的标准需求、计划和任务模板。",
-      "source_uids": ["github-spec-kit-2026-08-28"],
-      "signals": [],
-      "priority": 1,
-      "architecture_depth": "standard"
+      "pack_uid": "rest-api-service", "display_name": "REST API 与服务集成", "summary": "使用 OpenAPI 3.1 契约实例配合产品需求、架构和设计决策。", "source_uids": ["github-spec-kit-2026-08-28", "swagger-petstore-v31-1.0.10", "arc42-zh-2026-07-07", "madr-4.0.0"], "signals": ["rest api", "openapi", "swagger", "http api", "接口服务", "web api", "endpoint", "端点", "微服务", "webhook"], "priority": 80, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "API 使用场景和验收结果", "role": "primary"},
+        {"artifact_uid": "openapi", "display_name": "Swagger OpenAPI 3.1 契约", "source_uid": "swagger-petstore-v31-1.0.10", "path": "swagger-petstore/openapi.yaml", "purpose": "资源、操作、参数、请求、响应和错误契约", "role": "companion"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "服务边界、运行时和部署视图", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "接口和兼容性决策", "role": "companion"}
+      ]
+    },
+    {
+      "pack_uid": "platform-runtime", "display_name": "平台、运行时与插件系统", "summary": "需求、完整架构和架构决策使用三套独立公开模板。", "source_uids": ["github-spec-kit-2026-08-28", "arc42-zh-2026-07-07", "madr-4.0.0"], "signals": ["platform", "runtime", "plugin", "adapter", "平台", "运行时", "插件", "适配器", "框架", "扩展点"], "priority": 65, "architecture_depth": "full",
+      "artifacts": [
+        {"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "产品范围、场景和验收", "role": "primary"},
+        {"artifact_uid": "arc42-architecture", "display_name": "arc42 架构文档", "source_uid": "arc42-zh-2026-07-07", "path": "arc42-template/ZH/arc42-template.adoc", "purpose": "构建块、运行时、部署和质量", "role": "companion"},
+        {"artifact_uid": "madr", "display_name": "MADR 架构决策记录", "source_uid": "madr-4.0.0", "path": "madr/template/adr-template.md", "purpose": "扩展点、边界和技术选择", "role": "companion"}
+      ]
+    },
+    {
+      "pack_uid": "small-delivery-lean", "display_name": "小工具、脚本与快速原型", "summary": "严格采用 Spec Kit Lean 的 specify → plan → tasks → implement 最小流程。", "source_uids": ["github-spec-kit-2026-08-28"], "signals": ["script", "cli", "poc", "prototype", "脚本", "小工具", "原型", "一次性"], "priority": 40, "architecture_depth": "lean",
+      "artifacts": [{"artifact_uid": "spec-kit-lean", "display_name": "Spec Kit Lean", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/presets/lean/commands/speckit.specify.md", "purpose": "轻量需求、计划和任务流程", "role": "primary"}]
+    },
+    {
+      "pack_uid": "software-standard", "display_name": "通用软件产品与功能", "summary": "采用 GitHub Spec Kit 的标准需求、计划和任务模板。", "source_uids": ["github-spec-kit-2026-08-28"], "signals": [], "priority": 1, "architecture_depth": "standard",
+      "artifacts": [{"artifact_uid": "spec-kit-standard", "display_name": "Spec Kit 需求规格", "source_uid": "github-spec-kit-2026-08-28", "path": "spec-kit/templates/spec-template.md", "purpose": "功能、用户场景、验收和成功标准", "role": "primary"}]
     }
   ]
 }

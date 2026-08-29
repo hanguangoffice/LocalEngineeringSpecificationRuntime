@@ -8,6 +8,7 @@ from lesr.intake.models import (
     IntakeRequest,
     RequirementCategory,
     RequirementItem,
+    TemplateArtifact,
     TemplatePack,
     TemplateSource,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "IntakeService",
     "RequirementCategory",
     "RequirementItem",
+    "TemplateArtifact",
     "TemplatePack",
     "TemplateSource",
 ]

@@ -36,6 +36,15 @@ class IntakeService:
                 "display_name": pack.display_name,
                 "summary": pack.summary,
                 "architecture_depth": pack.architecture_depth,
+                "artifacts": tuple(
+                    {
+                        "display_name": artifact.display_name,
+                        "purpose": artifact.purpose,
+                        "role": artifact.role,
+                        "source": self.catalog.source(artifact.source_uid).display_name,
+                    }
+                    for artifact in pack.artifacts
+                ),
                 "sources": tuple(
                     {
                         "display_name": self.catalog.source(uid).display_name,
@@ -65,10 +74,11 @@ class IntakeService:
             for signal in selected.signals
             if signal.casefold() in description.casefold()
         )
+        template_names = "、".join(item.display_name for item in selected.artifacts)
         reasons = (
             (f"识别到：{'、'.join(matched[:6])}" if matched else "未发现专用场景信号，采用通用软件模板"),
-            f"模板结构来自 {self.catalog.source(selected.source_uids[0]).display_name} 的固定上游版本",
-            "复杂系统附加 arc42 原始中文架构视图" if len(selected.source_uids) > 1 else "不额外引入重型架构文档",
+            f"采用的上游结构：{template_names}",
+            f"共使用 {len(selected.artifacts)} 份固定版本模板；场景专用内容不会由模型自行补写",
         )
         return IntakeAnalysis(
             selected_pack=selected,
@@ -252,9 +262,7 @@ class IntakeService:
 
     @staticmethod
     def _template_path(pack: TemplatePack) -> str:
-        if pack.architecture_depth == "lean":
-            return "spec-kit/presets/lean/commands/speckit.specify.md"
-        return "spec-kit/templates/spec-template.md"
+        return next(item.path for item in pack.artifacts if item.role == "primary")
 
     def _render_starter(
         self,
@@ -279,7 +287,12 @@ class IntakeService:
             "",
         ]
         lines.extend(f"- **{item.human_key}**: {item.statement}" for item in requirements)
-        if len(pack.source_uids) > 1:
+        lines.extend(("", "### Selected source templates", ""))
+        lines.extend(
+            f"- **{item.display_name}** — {item.purpose}"
+            for item in pack.artifacts
+        )
+        if "arc42-zh-2026-07-07" in pack.source_uids:
             lines.extend(("", "### arc42 Architecture Views", ""))
             lines.extend(f"- {heading}" for heading in self._arc42_headings())
         return rendered.rstrip() + "\n" + "\n".join(lines) + "\n"
