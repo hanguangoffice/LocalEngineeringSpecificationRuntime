@@ -19,7 +19,7 @@ lesr web PROJECT
 - “描述需求”：直接粘贴现有需求；
 - “导入规范文件”：选择已有的 Markdown 或 PDF 规范。
 
-LESR 根据内容选择 GitHub Spec Kit 或 arc42 模板组合，按目标、功能、约束、测试和交付内容分组，并生成 Human Key。点击“建立工程草案”后即可继续编辑和送审。
+LESR 根据内容选择一组固定上游模板，而不是生成自有文档骨架。通用需求由 GitHub Spec Kit 组织；系统架构、REST API、事件消息、数据科学、模型说明、嵌入式实时需求、安全威胁模型和架构决策会分别补充 arc42、OpenAPI、AsyncAPI、Cookiecutter Data Science、TensorFlow Model Card、NASA FRET、OWASP Threat Model Library 或 MADR。系统随后按目标、功能、约束、测试和交付内容分组，并生成 Human Key。点击“建立工程草案”后即可继续编辑和送审。
 
 工程执行限制、来源判定和本机身份配置由运行时处理，不作为建立草案前的用户问答。只有真正改变产品范围或预期结果、且无法从现有内容判断的选择，才会出现在界面中。
 

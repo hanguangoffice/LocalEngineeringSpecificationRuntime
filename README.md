@@ -54,7 +54,7 @@ lesr web PROJECT
 .venv\Scripts\python.exe -m lesr.cli.main web PROJECT
 ```
 
-终端会显示一个本机地址。复制到浏览器打开后，进入“从需求开始”：可以直接粘贴自然语言需求，也可以导入自己的 Markdown 或 PDF 规范文件。LESR 会选择合适的 GitHub Spec Kit 与 arc42 结构，按用途整理工程内容并建立可编辑草案。运行策略、本机身份和初始配置在后台完成；只有会改变产品范围或预期结果、且无法从已有内容判断的选择才会交给用户。
+终端会显示一个本机地址。复制到浏览器打开后，进入“从需求开始”：可以直接粘贴自然语言需求，也可以导入自己的 Markdown 或 PDF 规范文件。LESR 会从固定上游版本中选择适合当前方向的模板组合：通用需求使用 GitHub Spec Kit，架构、API、消息、数据科学、模型说明、嵌入式实时需求、安全威胁模型和架构决策分别采用 arc42、OpenAPI、AsyncAPI、Cookiecutter Data Science、TensorFlow Model Card、NASA FRET、OWASP Threat Model Library 与 MADR。运行策略、本机身份和初始配置在后台完成；只有会改变产品范围或预期结果、且无法从已有内容判断的选择才会交给用户。
 
 已有规范的日常工作只需要：
 

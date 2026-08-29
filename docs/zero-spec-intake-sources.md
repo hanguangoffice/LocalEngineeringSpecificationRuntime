@@ -6,16 +6,19 @@ LESR 的零规范接入不让模型凭经验发明文档骨架。运行时只从
 
 模板组合只负责选择适当的公开骨架：
 
-| LESR 方案 | 原样采用的上游结构 | 适用判断 |
-|---|---|---|
-| 通用软件产品与功能 | GitHub Spec Kit `spec-template.md` | 未发现更具体场景 |
-| 小工具、脚本与快速原型 | Spec Kit Lean `speckit.specify.md` | script、CLI、PoC、小工具等明确轻量信号 |
-| 平台、运行时与插件系统 | Spec Kit 标准模板 + arc42 中文模板 | platform、runtime、plugin、adapter 等信号 |
-| 服务、API 与系统集成 | Spec Kit 标准模板 + arc42 中文模板 | API、服务、消息、集成等信号 |
-| 嵌入式与软硬件协同 | Spec Kit 标准模板 + arc42 中文模板 | CAN、ECU、固件、硬件、实时等信号 |
-| 本地 AI 与 GPU 工程 | Spec Kit 标准模板 + arc42 中文模板 | NVIDIA、CUDA、GPU、显存、本地模型等信号 |
+| LESR 方案 | 原样采用的独立上游结构 |
+|---|---|
+| 通用软件产品与功能 | GitHub Spec Kit |
+| 小工具、脚本与快速原型 | GitHub Spec Kit Lean |
+| 平台、运行时与插件系统 | Spec Kit + arc42 + MADR |
+| REST API 与服务集成 | Spec Kit + Swagger OpenAPI 3.1 + arc42 + MADR |
+| 事件驱动、消息与 IoT 集成 | Spec Kit + AsyncAPI 3.1 + arc42 + MADR |
+| 数据科学与机器学习 | Spec Kit + Cookiecutter Data Science + TensorFlow Model Card + MADR |
+| 本地 AI、GPU 与模型应用 | Spec Kit + arc42 + Cookiecutter Data Science + TensorFlow Model Card + MADR |
+| 嵌入式、实时与安全关键系统 | Spec Kit + arc42 + NASA FRET + MADR |
+| 安全敏感与威胁建模 | Spec Kit + arc42 + OWASP Threat Model Library + MADR |
 
-后四种不是 LESR 自创的四份架构模板，而是同一批已核对上游文档的场景化选择方案。场景选择不会改写 Spec Kit 或 arc42 的章节。
+这些方案不再只是给同两套模板换场景名称。每个领域模板都对应本地保存的上游原文件，并由场景选择器实际加入该方案。通用需求模板仍负责用户场景和验收；领域模板分别负责 API、消息、数据、模型、实时需求、威胁模型或架构决策，不相互冒充。
 
 ## 固定来源
 
@@ -33,6 +36,20 @@ LESR 的零规范接入不让模型凭经验发明文档骨架。运行时只从
 - License: CC BY-SA 4.0
 - 本地保存：中文入口和第 1～12 章原始 AsciiDoc。
 - LESR 没有删除、翻译或重写上游文件。由 arc42 模板衍生的模板内容遵守 CC BY-SA；用户填写的工程内容仍归用户自行决定授权，符合上游许可证说明。
+
+### 领域专用模板
+
+| 来源 | 固定版本 | 许可证 | LESR 用途 |
+|---|---|---|---|
+| [MADR](https://github.com/adr/madr) | `4.0.0` / `2475fe1973f66a12aaf58a91d8fa7b42c0f5ea3d` | CC0-1.0 OR MIT | 架构决策记录 |
+| [Swagger Petstore](https://github.com/swagger-api/swagger-petstore) | `swagger-petstore-v31-1.0.10` / `a1019e6f46909dc9e37c15ffe04541d388d0f03d` | Apache-2.0 | OpenAPI 3.1 设计优先契约实例 |
+| [AsyncAPI Specification](https://github.com/asyncapi/spec) | `v3.1.0` / `b3fac5bb522771428ea57b16129b273cd3ea0180` | Apache-2.0 | 异步消息契约 |
+| [Cookiecutter Data Science](https://github.com/drivendataorg/cookiecutter-data-science) | `v2.3.0` / `0f6b163cdbe3918a2c65ab57ad9fefda93976d9e` | MIT | 数据科学工程结构 |
+| [TensorFlow Model Card Toolkit](https://github.com/tensorflow/model-card-toolkit) | `v2.0.0` / `05474c8ccf259a9b229d33b98edfc2cbf28e1a8e` | Apache-2.0 | 模型用途、限制、数据和评估说明；上游已归档，因此固定在最后稳定版 |
+| [OWASP Threat Model Library](https://github.com/OWASP/www-project-threat-model-library) | `v1.0.2` / `a3d9c0c5a8dbcbf50e7ce5ddedeb299418fa9b27` | MIT | 威胁模型 Schema 与完整实例 |
+| [NASA FRET](https://github.com/NASA-SW-VnV/fret) | `v3.1.0` / `58db455be35182a015e607232d9f4e3c86731932` | Apache-2.0 | 状态、实时、边界、诊断等结构化需求 |
+
+LESR 不执行这些上游模板中的 Jinja、JavaScript 或其他代码；它们作为只读规范结构使用。OpenAPI 和 OWASP 条目包含官方完整实例，是供系统提取字段结构与覆盖项的参考，不会把示例业务内容当成用户需求。
 
 每个文件的字节数和 SHA-256 记录在 `src/lesr/intake/catalog.json`。这里使用校验值的具体原因是证明外部仓库在指定提交时的文件被逐字节纳入；LESR 自己的 Git 历史无法证明另一个仓库的历史内容。校验边界仅限第三方快照同步，不用于普通需求对象。
 
@@ -60,7 +77,8 @@ LESR 的零规范接入不让模型凭经验发明文档骨架。运行时只从
 
 - `IntakeCatalog.verify_vendored_sources()` 在分析前验证全部可分发上游文件。
 - `IntakeService` 只复制用户原句到 Requirement Item，不以模型生成句子替换原文。
-- Starter Document 从上游模板文件读取后仅替换上游定义的占位符，并在末尾增加清晰标记的 `LESR Intake Mapping`。
+- Starter Document 从选中方案的主模板读取后仅替换主模板定义的占位符，并在末尾增加清晰标记的 `LESR Intake Mapping` 与所选领域模板清单。
+- 场景选择结果必须准确列出实际采用的上游模板名称和用途；不得只返回一个 LESR 自创的场景名。
 - arc42 的 12 个主章节标题直接从固定的 AsciiDoc 文件解析，不在 Python 中手写第二份章节清单。
 - 对空仓库的“建立工程草案”自动建立本机身份、最小 Profile、Configuration 和可编辑 Workspace；运行边界由后端处理，不进入日常界面。
 

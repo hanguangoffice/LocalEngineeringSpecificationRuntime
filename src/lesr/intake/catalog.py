@@ -99,3 +99,17 @@ class IntakeCatalog:
             unknown = set(pack.source_uids) - known
             if unknown:
                 raise ValueError(f"template pack has unknown sources: {sorted(unknown)}")
+            if not pack.artifacts:
+                raise ValueError(f"template pack has no artifacts: {pack.pack_uid}")
+            if sum(item.role == "primary" for item in pack.artifacts) != 1:
+                raise ValueError(
+                    f"template pack must have exactly one primary artifact: {pack.pack_uid}"
+                )
+            if {item.source_uid for item in pack.artifacts} - set(pack.source_uids):
+                raise ValueError(f"template pack artifact source is not in pack: {pack.pack_uid}")
+            for artifact in pack.artifacts:
+                source = self.source(artifact.source_uid)
+                if artifact.path not in {item.path for item in source.files}:
+                    raise ValueError(
+                        f"template pack artifact is not in its source: {artifact.path}"
+                    )
