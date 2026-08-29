@@ -78,7 +78,7 @@ class IntakeService:
         reasons = (
             (f"识别到：{'、'.join(matched[:6])}" if matched else "未发现专用场景信号，采用通用软件模板"),
             f"采用的上游结构：{template_names}",
-            f"共使用 {len(selected.artifacts)} 份固定版本模板；场景专用内容不会由模型自行补写",
+            f"共使用 {len(selected.artifacts)} 份固定版本模板；场景内容按模板定义的范围整理",
         )
         return IntakeAnalysis(
             selected_pack=selected,

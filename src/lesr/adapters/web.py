@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+import re
 import secrets
 import tempfile
 from dataclasses import dataclass
@@ -260,10 +262,44 @@ class LocalWebRuntime:
             return self._accept_intake(value)
 
         @app.get("/api/query")
-        async def query(request: Request, text: str = "") -> dict[str, Any]:
+        async def query(
+            request: Request, text: str = "", kind: str = ""
+        ) -> dict[str, Any]:
             self._session(request)
-            result = self.domain.query(None, None, 50, text or None).payload()
-            return self._value_or_error(result)
+            canonical_items, canonical_total = GitCanonicalRepository(
+                self.project
+            ).query_projection(
+                self.project / ".lesr" / "projection.sqlite3",
+                kind=kind or None,
+                text=text or None,
+                offset=0,
+                page_size=50,
+                resource_type="revision",
+            )
+            draft_items = self._matching_working_copies(text=text, kind=kind)
+            items: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for item in (*draft_items, *canonical_items):
+                identity = str(
+                    item.get("object_uid")
+                    or item.get("revision_uid")
+                    or item.get("uid")
+                    or item.get("human_key")
+                    or ""
+                )
+                if identity and identity in seen:
+                    continue
+                if identity:
+                    seen.add(identity)
+                items.append(item)
+                if len(items) >= 50:
+                    break
+            return {
+                "items": items,
+                "total": canonical_total + len(draft_items),
+                "draft_count": len(draft_items),
+                "next_cursor": None,
+            }
 
         @app.get("/api/review-package/{package_uid}")
         async def review_package(request: Request, package_uid: str) -> dict[str, Any]:
@@ -520,6 +556,73 @@ class LocalWebRuntime:
         except RuntimeError:
             return "uninitialized"
 
+    @staticmethod
+    def _kind_label(kind: str) -> str:
+        labels = {
+            "software_requirement": "软件需求",
+            "software_design": "软件设计",
+            "test_case": "测试用例",
+            "test_procedure": "测试规程",
+            "test_result": "测试结果",
+            "interface_definition": "接口定义",
+            "architecture_decision": "架构决策",
+            "risk": "工程风险",
+            "evidence": "工程证据",
+        }
+        return labels.get(kind, kind.replace("_", " ").strip().title())
+
+    @staticmethod
+    def _kind_prefix(kind: str) -> str:
+        known = {
+            "software_requirement": "REQ-SW",
+            "software_design": "DES-SW",
+            "test_case": "TEST",
+            "test_procedure": "TEST-PROC",
+            "test_result": "TEST-RESULT",
+            "interface_definition": "IF",
+            "architecture_decision": "ADR",
+            "risk": "RISK",
+            "evidence": "EVID",
+        }
+        if kind in known:
+            return known[kind]
+        parts = tuple(part for part in kind.split("_") if part)
+        return "-".join(part[:4].upper() for part in parts[:2]) or "ITEM"
+
+    def _matching_working_copies(
+        self, *, text: str, kind: str
+    ) -> tuple[dict[str, Any], ...]:
+        workspaces = getattr(self.domain, "workspaces", {})
+        if not isinstance(workspaces, dict):
+            return ()
+        terms = tuple(
+            item.casefold()
+            for item in re.split(r"[^\w.-]+", text, flags=re.UNICODE)
+            if item
+        )
+        matches: list[dict[str, Any]] = []
+        for workspace in workspaces.values():
+            workspace_state = getattr(getattr(workspace, "state", None), "value", None)
+            if workspace_state != "editable":
+                continue
+            copies = getattr(workspace, "working_copies", ())
+            for working_copy in copies:
+                item = working_copy.model_dump(mode="json")
+                if kind and item.get("kind") != kind:
+                    continue
+                searchable = json.dumps(item, ensure_ascii=False).casefold()
+                if terms and not all(term in searchable for term in terms):
+                    continue
+                item["fields"] = item.get("draft_fields", [])
+                item["workspace_draft"] = True
+                matches.append(item)
+        return tuple(
+            sorted(
+                matches,
+                key=lambda item: str(item.get("human_key", "")).casefold(),
+            )
+        )
+
     def _session_context(self) -> dict[str, Any]:
         repository = GitCanonicalRepository(self.project)
         commit = repository.current_commit()
@@ -568,6 +671,35 @@ class LocalWebRuntime:
                     ),
                 }
             )
+        kinds_by_name: dict[str, dict[str, str]] = {}
+        for value in documents:
+            if value.get("resource_type") != "kind_definition_revision":
+                continue
+            name = str(value.get("name", "")).strip()
+            if not name:
+                continue
+            kinds_by_name[name] = {
+                "value": name,
+                "name": self._kind_label(name),
+            }
+        human_keys = {
+            str(value.get("human_key"))
+            for value in documents
+            if value.get("human_key")
+        }
+        for item in self._matching_working_copies(text="", kind=""):
+            if item.get("human_key"):
+                human_keys.add(str(item["human_key"]))
+        key_suggestions: dict[str, str] = {}
+        for name in kinds_by_name:
+            prefix = self._kind_prefix(name)
+            pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
+            numbers = [
+                int(match.group(1))
+                for key in human_keys
+                if (match := pattern.fullmatch(key)) is not None
+            ]
+            key_suggestions[name] = f"{prefix}-{max(numbers, default=0) + 1:04d}"
         return {
             "project_name": self.project.name,
             "configurations": [
@@ -581,6 +713,15 @@ class LocalWebRuntime:
                 for index, value in enumerate(configurations, 1)
             ],
             "actors": sorted(actors, key=lambda item: str(item["display_name"]).casefold()),
+            "content_types": sorted(
+                kinds_by_name.values(), key=lambda item: item["name"].casefold()
+            ),
+            "key_suggestions": key_suggestions,
+            "task_types": [
+                {"value": "requirement_change", "name": "修改或补充工程内容"},
+                {"value": "test_design", "name": "设计验证"},
+                {"value": "deviation_review", "name": "评审变更或偏离"},
+            ],
             "audit": {
                 "canonical_commit": commit,
                 "repository_format": "1.0",
@@ -755,7 +896,10 @@ class LocalWebRuntime:
     def _configuration_name(value: dict[str, Any], index: int) -> str:
         variant = value.get("variant")
         if isinstance(variant, str) and variant.strip():
-            return variant.strip()
+            normalized = variant.strip()
+            if normalized == "zero-spec-intake":
+                return "主工程配置"
+            return normalized
         created = str(value.get("created_at", ""))[:10]
         if created:
             return f"工程配置 · {created}"

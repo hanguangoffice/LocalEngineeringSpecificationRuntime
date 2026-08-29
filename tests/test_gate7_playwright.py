@@ -87,9 +87,9 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
             imported.get_by_role("button", name="读取规范文件").click()
             expect(page.locator("#intake-count")).to_have_text("2 项")
             page.locator('button[data-panel="explore"]').click()
-            page.get_by_label("Human Key 或关键词").fill("no-synthetic-result")
+            page.get_by_label("工程编号或关键词").fill("no-synthetic-result")
             page.get_by_role("button", name="搜索").click()
-            page.get_by_text("没有找到匹配内容。").wait_for()
+            page.get_by_text("没有找到“no-synthetic-result”").wait_for()
             expect(page.locator("#query-result-count")).to_have_text("没有匹配内容")
             page.wait_for_timeout(650)
             page.screenshot(path=str(tmp_path / "explore-empty.png"), full_page=True)
@@ -226,19 +226,17 @@ def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path
             expect(page.locator("#workspace-output")).to_contain_text(
                 "建立可编辑草案", timeout=60_000
             )
-            page.locator("#workspace-submit-form").get_by_role(
-                "button", name="校验并提交审阅"
+            page.locator("#workspace-compose-form").get_by_role(
+                "button", name="检查并送审"
             ).click()
             expect(page.locator("#review-reason")).to_have_text(
                 "从自然语言需求建立初始工程规格", timeout=60_000
             )
             sign = page.locator("#sign-form")
             sign.get_by_role("checkbox").check()
-            sign.get_by_role("button", name="确认批准并签名").click()
-            expect(page.locator("#sign-output")).to_contain_text("批准已完成")
-            page.get_by_role("button", name="将已批准变更写入工程").click()
+            sign.get_by_role("button", name="批准并写入工程").click()
             expect(page.locator("#sign-output")).to_contain_text(
-                "已保存到工程", timeout=60_000
+                "已写入工程", timeout=60_000
             )
             canonical = tuple(item for _, item in runtime.domain.repository.documents())
             assert len([item for item in canonical if item.get("resource_type") == "revision"]) == 4
@@ -278,28 +276,21 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
             page.goto(f"http://127.0.0.1:{port}/unlock?token=product-flow-token")
             page.wait_for_load_state("networkidle")
             page.locator('button[data-panel="workspace"]').click()
-            open_form = page.locator("#workspace-open-form")
-            expect(open_form.get_by_label("工程配置")).to_have_value(
+            change_form = page.locator("#workspace-compose-form")
+            expect(change_form.get_by_label("工程配置")).to_have_value(
                 product.configuration_uid
             )
-            expect(open_form.get_by_label("以谁的身份工作")).to_have_value(
+            expect(change_form.get_by_label("操作人")).to_have_value(
                 product.actor_uid
             )
-            open_form.get_by_role("button", name="开始编辑").click()
-            page.get_by_text("可以编辑", exact=True).wait_for()
-
-            edit_form = page.locator("#workspace-edit-form")
-            edit_form.get_by_label("Human Key").fill("DES-WEB-1")
-            edit_form.get_by_label("内容类型").select_option("software_design")
-            edit_form.get_by_label("正文或说明").fill(
+            change_form.get_by_label("工程编号").fill("DES-WEB-1")
+            change_form.get_by_label("内容类型").select_option("software_design")
+            change_form.get_by_label("正文或说明").fill(
                 "The controller shall publish a deterministic state frame."
             )
-            edit_form.get_by_label("变更理由").fill("补充控制器状态发布设计。")
-            edit_form.get_by_role("button", name="保存变更内容").click()
-            page.locator("#workspace-output").get_by_text("DES-WEB-1").wait_for()
-
-            submit_form = page.locator("#workspace-submit-form")
-            submit_form.get_by_role("button", name="校验并提交审阅").click()
+            change_form.get_by_label("变更理由").fill("补充控制器状态发布设计。")
+            page.screenshot(path=str(tmp_path / "change-composer.png"), full_page=True)
+            change_form.get_by_role("button", name="检查并送审").click()
             page.locator("#sign-form").wait_for()
             expect(page.locator("#review-reason")).to_contain_text(
                 "补充控制器状态发布设计"
@@ -314,33 +305,38 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
 
             sign_form = page.locator("#sign-form")
             expect(sign_form.get_by_label("批准人")).to_have_value(product.actor_uid)
-            expect(sign_form.get_by_label("本次角色")).to_have_value("technical")
+            expect(sign_form.locator('[name="role"]')).to_have_value("technical")
             sign_form.get_by_role("checkbox").check()
-            sign_form.get_by_role("button", name="确认批准并签名").click()
-            expect(page.locator("#sign-output")).to_contain_text("批准已完成")
-            page.get_by_role("button", name="将已批准变更写入工程").click()
-            expect(page.locator("#sign-output")).to_contain_text("已保存到工程", timeout=60_000)
+            sign_form.get_by_role("button", name="批准并写入工程").click()
+            expect(page.locator("#sign-output")).to_contain_text("已写入工程", timeout=60_000)
 
-            baseline_prepare = page.locator("#baseline-prepare-form")
-            result_configuration_uid = baseline_prepare.get_by_label("工程配置").input_value()
+            page.locator('button[data-panel="explore"]').click()
+            search = page.get_by_label("工程编号或关键词")
+            search.fill("DES-WEB")
+            expect(page.locator("#query-results")).to_contain_text("DES-WEB-1")
+            expect(page.locator("#query-results")).to_contain_text(
+                "deterministic state frame"
+            )
+            expect(page.locator("#query-results")).not_to_contain_text("编辑中")
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "explore-populated.png"), full_page=True)
+
+            page.locator('button[data-panel="baseline"]').click()
+            baseline_form = page.locator("#baseline-form")
+            result_configuration_uid = baseline_form.get_by_label("工程配置").input_value()
             assert result_configuration_uid != product.configuration_uid
-            baseline_prepare.get_by_role("button", name="检查并送审").click()
+            baseline_form.get_by_label("版本名称（可选）").fill("设计冻结 1.0")
+            baseline_form.get_by_role("button", name="检查并进入批准").click()
             page.locator("#sign-form").wait_for()
             page.wait_for_function(
                 "previous => document.querySelector('#sign-form [name=package_uid]').value !== previous",
                 arg=candidate_package_uid,
             )
-            sign_form.get_by_role("button", name="确认批准并签名").click()
-            expect(page.locator("#sign-output")).to_contain_text(
-                "返回“发布基线”", timeout=60_000
-            )
-            page.locator('button[data-panel="baseline"]').click()
-            page.wait_for_timeout(650)
-            page.screenshot(path=str(tmp_path / "baseline-approved.png"), full_page=True)
-            baseline_apply = page.locator("#baseline-apply-form")
-            baseline_apply.get_by_label("版本名称（可选）").fill("设计冻结 1.0")
-            baseline_apply.get_by_role("button", name="发布已批准基线").click()
+            sign_form.get_by_role("checkbox").check()
+            sign_form.get_by_role("button", name="批准并发布基线").click()
             expect(page.locator("#baseline-output")).to_contain_text("已发布", timeout=60_000)
+            page.wait_for_timeout(650)
+            page.screenshot(path=str(tmp_path / "baseline-published.png"), full_page=True)
             canonical_documents = tuple(
                 item for _, item in runtime.domain.repository.documents()
             )

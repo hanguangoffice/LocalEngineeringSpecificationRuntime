@@ -24,7 +24,7 @@
       <p class="rail-label">工作</p>
       <button class="nav-item active" data-panel="overview"><i>⌂</i><b>工作台</b></button>
       <button class="nav-item" data-panel="intake"><i>✦</i><b>从需求开始</b></button>
-      <button class="nav-item" data-panel="explore"><i>⌕</i><b>查找规范</b></button>
+      <button class="nav-item" data-panel="explore"><i>⌕</i><b>查找工程内容</b></button>
       <button class="nav-item" data-panel="context"><i>◎</i><b>相关资料</b></button>
       <button class="nav-item" data-panel="workspace"><i>＋</i><b>发起变更</b></button>
       <button class="nav-item" data-panel="review"><i>✓</i><b>审阅与批准</b></button>
@@ -33,7 +33,6 @@
       <button class="nav-item" data-panel="tasks"><i>↻</i><b>后台任务</b></button>
       <button class="nav-item" data-panel="maintenance"><i>⌁</i><b>维护</b></button>
       <button class="nav-item audit-link" data-panel="audit"><i>⋯</i><b>审计详情</b></button>
-      <div class="rail-note"><i></i><span>数据仅保存在本机</span></div>
     </nav>
 
     <main>
@@ -67,7 +66,7 @@
         </div>
         <nav class="overview-actions" aria-label="其他工作">
           <p>其他工作</p>
-          <button type="button" data-go="explore"><b>查找规范</b><span>按 Human Key 或关键词定位内容</span></button>
+          <button type="button" data-go="explore"><b>查找工程内容</b><span>按工程编号、标题或正文定位内容</span></button>
           <button type="button" data-go="workspace"><b>发起变更</b><span>说明修改内容与原因</span></button>
           <button type="button" data-go="review"><b>审阅与批准</b><span>查看变更范围、影响和理由</span></button>
         </nav>
@@ -119,18 +118,19 @@
       </section>
 
       <section class="panel" id="explore">
-        <div class="panel-heading compact"><p class="eyebrow">查找规范</p><h2>按 Human Key 或关键词查找</h2><p class="section-copy">优先显示 Human Key、类型和正文摘要。技术标识只记录在审计详情中。</p></div>
-        <form class="search-command" id="query-form"><label><span>Human Key 或关键词</span><input name="text" placeholder="例如 REQ-SW-0142、CAN、超时" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
+        <div class="panel-heading compact"><p class="eyebrow">查找工程内容</p><h2>搜索，也可以直接浏览</h2><p class="section-copy">输入工程编号、标题或正文中的词，留空可查看全部内容。</p></div>
+        <form class="search-command" id="query-form"><label><span>工程编号或关键词</span><input name="text" placeholder="例如 REQ-SW-0001、显存、启动" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
+        <div class="query-filters" id="query-filters" aria-label="按内容类型筛选"></div>
         <div class="explore-workspace">
           <section class="search-results" aria-labelledby="search-results-title">
             <header><h3 id="search-results-title">查找结果</h3><span id="query-result-count">等待搜索</span></header>
-            <div class="result-list" id="query-results"><div class="empty-state">输入编号或关键词开始查找。</div></div>
+            <div class="result-list" id="query-results"><div class="empty-state">正在读取工程内容…</div></div>
           </section>
           <aside class="spec-preview" id="graph-stage" aria-label="规范内容预览">
             <p class="preview-label">当前选择</p>
             <div id="graph-core">
               <b id="spec-preview-key">尚未选择</b>
-              <span id="spec-preview-kind">从左侧选择一项规范内容</span>
+              <span id="spec-preview-kind">从左侧选择一项工程内容</span>
             </div>
             <p class="preview-statement" id="spec-preview-statement">选择后将在这里显示正文摘要和下一步操作。</p>
             <div class="preview-next">
@@ -143,29 +143,37 @@
       </section>
 
       <section class="panel" id="context">
-        <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理完成任务所需的资料</h2><p class="section-copy">输入目标的 Human Key，查看必须阅读、建议参考和仍有缺口的内容。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理任务资料</h2><p class="section-copy">选择目标内容和本次工作，查看必读内容、参考资料和待补项目。</p></div>
         <form class="context-command" id="context-form">
-          <label>目标 Human Key<input name="target_key" placeholder="例如 REQ-SW-0142" required></label>
-          <label>这次要做什么<select name="task_type"><option value="requirement_change">修改需求</option><option value="test_design">设计测试</option><option value="deviation_review">审阅偏离</option><option value="can_analysis">分析 CAN 接口</option><option value="mqtt_change">修改 MQTT 设计</option></select></label>
+          <label>目标工程内容<input name="target_key" list="engineering-content-suggestions" placeholder="输入工程编号或关键词" required></label>
+          <label>这次要做什么<select name="task_type" data-task-select required></select></label>
           <label>工程配置<select name="configuration_uid" data-configuration-select required></select></label>
           <button>整理资料</button>
         </form>
+        <datalist id="engineering-content-suggestions"></datalist>
         <div class="context-key" aria-label="资料分类说明"><span><i class="mandatory"></i>必须阅读</span><span><i class="supporting"></i>建议参考</span><span><i class="unknown"></i>仍有缺口</span></div>
         <section class="context-result" id="context-output"><div class="empty-state">尚未整理相关资料。</div></section>
       </section>
 
       <section class="panel" id="workspace">
-        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>发起一项工程变更</h2><p class="section-copy">选择工程配置，说明要修改的内容和原因。</p></div>
-        <div class="workspace-layout">
-          <div class="workbench">
-            <form class="stack-form framed" id="workspace-open-form" data-stage="1"><h3><span>1</span> 选择工作范围</h3><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>以谁的身份工作<select name="actor" data-actor-select required></select></label><button>开始编辑</button></form>
-            <form class="stack-form framed" id="workspace-edit-form" data-stage="2"><h3><span>2</span> 描述变更</h3><label>Human Key<input name="human_key" placeholder="例如 DES-SW-0208" required></label><label>内容类型<select name="kind" required><option value="software_requirement">软件需求</option><option value="software_design">软件设计</option><option value="test_case">测试用例</option><option value="can_signal">CAN 信号</option></select></label><label>正文或说明<textarea name="statement" placeholder="写下工程内容本身" required></textarea></label><label>变更理由<textarea name="change_reason" placeholder="为什么需要这次变更？批准人会看到这段话。" required></textarea></label><button>保存变更内容</button></form>
-            <form class="stack-form framed" id="workspace-submit-form" data-stage="3"><h3><span>3</span> 检查并送审</h3><div class="scope-preview" id="workspace-scope"><small>变更范围</small><strong>尚未填写</strong><p>保存内容后，系统将在这里汇总。</p></div><button>校验并提交审阅</button></form>
-          </div>
-          <aside class="workspace-status-card"><small>本次变更</small><strong id="workspace-state">尚未开始</strong><p id="workspace-guidance">先选择配置和本机身份。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
+        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>说明要改什么</h2><p class="section-copy">填写工程内容和变更理由，系统会检查后送交审阅。</p></div>
+        <div class="change-composer">
+          <form class="change-form" id="workspace-compose-form">
+            <div class="change-context-bar">
+              <label>工程配置<select name="configuration_uid" data-configuration-select required></select></label>
+              <label>操作人<select name="actor" data-actor-select required></select></label>
+            </div>
+            <div class="change-form-grid">
+              <label>内容类型<select name="kind" data-kind-select required></select></label>
+              <label>工程编号<input name="human_key" placeholder="例如 REQ-SW-0001" autocomplete="off" required><small class="field-help">用于引用工程内容，可直接采用推荐编号。</small></label>
+              <label class="wide-field">正文或说明<textarea name="statement" placeholder="写下要建立或修改的工程内容" required></textarea></label>
+              <label class="wide-field">变更理由<textarea name="change_reason" placeholder="说明这项变更解决什么问题" required></textarea></label>
+            </div>
+            <div class="change-submit"><div class="scope-preview" id="workspace-scope"><small>本次范围</small><strong>等待填写</strong><p>工程编号和内容类型会在这里汇总。</p></div><button>检查并送审</button></div>
+          </form>
+          <aside class="change-status"><small>本次变更</small><strong id="workspace-state">准备填写</strong><p id="workspace-guidance">完成内容后即可送审。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
         </div>
-        <div class="decision-strip" id="decision-strip"><span>系统校验</span><strong>等待变更内容</strong><small>送审后显示是否可批准，以及需要处理的问题。</small></div>
-        <div class="human-output" id="workspace-output"><p>尚未发起变更。</p></div>
+        <div class="human-output" id="workspace-output" hidden><p>尚未发起变更。</p></div>
       </section>
 
       <section class="panel" id="review">
@@ -173,23 +181,21 @@
         <section class="review-decision" aria-label="审阅结论">
           <div class="review-primary"><small>系统校验</small><strong id="review-validation">尚未校验</strong><p id="review-findings">提交变更后显示结果。</p></div>
           <div class="review-reason"><small>批准理由</small><strong id="review-reason">尚无待审阅事项</strong></div>
-          <div class="review-role"><small>需要谁批准</small><strong id="sign-role">尚未选择</strong><p>批准在 15 分钟后失效</p></div>
+          <div class="review-role"><small>批准角色</small><strong id="sign-role">尚未选择</strong></div>
         </section>
         <section class="review-scope"><header><small>变更范围</small><span>请确认这些内容与批准理由一致</span></header><div id="sign-scope" class="scope-list"><span>尚未选择</span></div></section>
         <form id="sign-form" class="sign-zone">
-          <div class="sign-intro"><span>最后一步</span><b>作出批准决定</b><p>确认上方范围、理由和校验结果后签名。</p></div>
-          <div class="sign-fields"><input type="hidden" name="package_uid"><label>批准人<select name="reviewer" data-reviewer-select required></select></label><label>本次角色<select name="role" required><option value="">等待审阅要求</option></select></label><label class="human-check"><input type="checkbox" name="human_confirm" required><span>我已阅读变更范围、批准理由、校验结果和附加条件，并确认由我本人批准。</span></label><button>确认批准并签名</button></div>
+          <div class="sign-intro"><span>批准</span><b>确认本次决定</b><p>核对上方范围、理由和校验结论。</p></div>
+          <div class="sign-fields"><input type="hidden" name="package_uid"><input type="hidden" name="role"><label>批准人<select name="reviewer" data-reviewer-select required></select></label><div class="approval-role-line"><small>本次角色</small><strong id="sign-role-inline">等待审阅要求</strong></div><label class="human-check"><input type="checkbox" name="human_confirm" required><span>我确认批准这项变更。</span></label><button id="approve-and-apply">批准并写入工程</button></div>
         </form>
-        <div class="approval-result" id="sign-output"><i></i><span>尚未签名。</span></div>
-        <button class="primary-action" id="apply-candidate" type="button" disabled>将已批准变更写入工程 <i>→</i></button>
+        <div class="approval-result" id="sign-output"><i></i><span>等待批准。</span></div>
       </section>
 
       <section class="panel" id="baseline">
-        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>发布已批准的工程基线</h2><p class="section-copy">选择工程配置和基线名称，完成审阅后发布。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>建立工程版本</h2><p class="section-copy">选择工程配置并填写版本名称，检查后进入批准。</p></div>
         <div class="baseline-workflow">
           <div class="baseline-steps">
-            <form class="baseline-step" id="baseline-prepare-form"><header><span>1</span><div><h3>检查要发布的内容</h3><p>确认配置完整，并生成审阅内容。</p></div></header><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><button>检查并送审</button></form>
-            <form class="baseline-step" id="baseline-apply-form"><header><span>2</span><div><h3>完成批准后发布</h3><p>版本名称给人阅读，不影响工程状态。</p></div></header><input type="hidden" name="review_package_uid"><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><button>发布已批准基线</button></form>
+            <form class="baseline-step" id="baseline-form"><header><div><h3>本次发布</h3><p>系统会汇总配置、变更范围和校验结论。</p></div></header><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><button>检查并进入批准</button></form>
           </div>
           <aside class="baseline-status"><small>当前状态</small><strong id="baseline-state">尚未准备</strong><p id="baseline-guidance">先选择本次要发布的工程配置。</p><div id="baseline-output"><p>尚无发布记录。</p></div></aside>
         </div>
@@ -197,11 +203,11 @@
 
       <section class="panel" id="tasks"><div class="panel-heading compact"><p class="eyebrow">后台任务</p><h2>查看耗时任务的处理进度</h2><p class="section-copy">只显示仍在处理或最近完成的工作。</p></div><div class="task-toolbar"><div><strong>任务队列</strong><span>完整校验、深度追踪与备份</span></div><button class="secondary-action" id="refresh-tasks">刷新</button></div><div class="task-list" id="task-results"><div class="empty-state">尚未读取任务。</div></div></section>
 
-      <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>本机工程维护</h2><p class="section-copy">这里用于备份、恢复、升级和空间清理。日常编辑无需进入。</p></div><div class="maintenance-layout"><section class="maintenance-primary"><small>可立即检查</small><h3>清理未使用的工作区记录</h3><p>先列出可以清理的内容，检查后再决定是否处理。</p><button id="gc-plan">生成清理计划</button><div id="maintenance-output"><p>尚未生成计划。</p></div></section><aside class="maintenance-list"><h3>其他维护</h3><article><div><b>保存工程副本</b><p>生成可恢复的完整备份包。</p></div><span>备份</span></article><article><div><b>恢复工程</b><p>只恢复到空目录，并在启用前检查内容。</p></div><span>恢复</span></article><article><div><b>升级工程格式</b><p>先备份，再展示将要发生的变化。</p></div><span>升级</span></article></aside></div></section>
+      <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>备份、恢复与空间管理</h2><p class="section-copy">管理工程副本、格式版本和工作区记录。</p></div><div class="maintenance-layout"><section class="maintenance-primary"><small>空间管理</small><h3>查看可清理的工作区记录</h3><p>列出长期未使用且未被审阅、批准或基线引用的记录。</p><button id="gc-plan">查看清理清单</button><div id="maintenance-output"><p>等待查看清理清单。</p></div></section><aside class="maintenance-list"><h3>工程维护</h3><article><div><b>保存工程副本</b><p>创建完整备份包。</p></div><span>备份</span></article><article><div><b>恢复工程</b><p>从备份包建立工程。</p></div><span>恢复</span></article><article><div><b>升级工程格式</b><p>查看并执行版本升级。</p></div><span>升级</span></article></aside></div></section>
 
       <section class="panel audit-panel" id="audit">
-        <div class="panel-heading compact"><p class="eyebrow">审计详情</p><h2>技术记录与故障排查</h2><p class="section-copy">这里集中保存 Commit、UID、Hash、Delegation 和原始返回值。它们不会出现在日常工作页面。</p></div>
-        <div class="audit-summary"><div><small>本次会话</small><strong>本机运行</strong><span>技术记录会随操作自动更新</span></div><p>只有在排查故障或接受审计时，才需要展开下面的原始信息。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">审计详情</p><h2>工程技术记录</h2><p class="section-copy">查看工程版本、运行契约和本次会话请求。</p></div>
+        <div class="audit-summary"><div><small>本次会话</small><strong>本机运行</strong><span>记录随操作更新</span></div><p>最近操作显示在会话记录中。</p></div>
         <details class="audit-section"><summary><span><b>工程状态标识</b><small>Commit 与运行契约</small></span><i>展开</i></summary><dl class="audit-facts"><div><dt>Canonical Commit</dt><dd><code id="audit-commit">{{ canonical_commit }}</code></dd></div><div><dt>Runtime Contract</dt><dd><code>1.0</code></dd></div><div><dt>Session</dt><dd><code>loopback / local</code></dd></div></dl></details>
         <details class="audit-section"><summary><span><b>本次会话原始记录</b><small>请求、返回值与内部标识</small></span><i>展开</i></summary><pre class="audit-output" id="audit-output">尚无本次会话的技术记录。</pre></details>
       </section>

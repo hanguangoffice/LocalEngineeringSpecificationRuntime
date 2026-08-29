@@ -220,6 +220,9 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .human-check { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 11px; color: #d4ded9; font-weight: 400; line-height: 1.55; }
 .human-check input { width: auto; margin-top: 4px; }
 .sign-fields button { grid-column: 1 / -1; color: var(--ink); background: #e7b283; }
+.approval-role-line { display: grid; align-content: center; gap: 6px; padding: 0 4px; }
+.approval-role-line small { color: #aebdb6; font-size: 13px; }
+.approval-role-line strong { color: white; font-size: 16px; }
 .approval-result { display: flex; align-items: center; gap: 10px; min-height: 52px; margin-bottom: 14px; padding: 0 17px; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); background: var(--surface); font-size: 14px; }
 .approval-result i { width: 9px; height: 9px; border-radius: 50%; background: #b2b1a8; }
 .approval-result.is-ready i { background: #68a882; }
@@ -260,6 +263,12 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .search-command label span { color: var(--muted); font-size: 14px; }
 .search-command input { min-height: 56px; border-width: 0 0 2px; border-radius: 0; padding: 10px 2px; background: transparent; font: 650 22px var(--serif); }
 .search-command button { min-height: 56px; }
+.query-filters { display: flex; flex-wrap: wrap; gap: 8px; max-width: 960px; margin: -20px 0 32px; }
+.query-filters button { min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; color: #4f6058; background: transparent; font-size: 14px; }
+.query-filters button:hover, .query-filters button.active { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+.empty-state { display: grid; justify-items: start; gap: 14px; }
+.empty-state b { color: var(--ink); font: 650 18px var(--serif); }
+.empty-state .text-action { min-height: 38px; padding: 0; border: 0; color: var(--green); background: transparent; font-weight: 700; }
 .explore-workspace { display: grid; grid-template-columns: minmax(360px, 1.08fr) minmax(340px, .92fr); gap: 0; max-width: 1180px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .search-results { min-height: 470px; padding: 28px 36px 34px 0; border-right: 1px solid var(--line); }
 .search-results > header { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; margin-bottom: 12px; }
@@ -314,6 +323,23 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .context-empty { margin: 0; padding: 14px 0; color: var(--muted); font-size: 14px; }
 .context-gaps { margin: 0; padding: 18px 20px; border: 1px solid #d8aa84; background: var(--amber-soft); color: #654f40; font-size: 15px; line-height: 1.65; }
 
+.change-composer { display: grid; grid-template-columns: minmax(520px, 1fr) 270px; gap: 42px; max-width: 1180px; align-items: start; }
+.change-form { border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); }
+.change-context-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+.change-context-bar label { grid-template-columns: auto minmax(170px, 1fr); align-items: center; gap: 12px; font-size: 14px; }
+.change-context-bar select { padding-block: 10px; }
+.change-form-grid { display: grid; grid-template-columns: .72fr 1.28fr; gap: 22px; padding: 30px 0 26px; }
+.change-form-grid .wide-field { grid-column: 1 / -1; }
+.change-form-grid textarea { min-height: 130px; }
+.field-help { color: var(--muted); font-size: 13px; font-weight: 400; line-height: 1.5; }
+.change-submit { display: grid; grid-template-columns: minmax(280px, 1fr) 210px; align-items: center; gap: 24px; padding: 22px 0 28px; border-top: 1px solid var(--line); }
+.change-submit .scope-preview { padding: 0; background: transparent; }
+.change-submit button { min-height: 56px; }
+.change-status { position: sticky; top: 26px; min-height: 240px; padding: 28px; color: white; background: var(--ink-deep); }
+.change-status small { color: #a7bab1; font-size: 14px; }
+.change-status strong { display: block; margin-top: 20px; font: 650 27px var(--serif); }
+.change-status p { margin: 12px 0 0; color: #ccd8d2; font-size: 15px; line-height: 1.65; }
+
 .review-decision { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(360px, 1.5fr) minmax(190px, .7fr); max-width: 1180px; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); }
 .review-decision > div { min-height: 170px; padding: 28px 30px; border-left: 1px solid var(--line); }
 .review-decision > div:first-child { padding-left: 0; border-left: 0; }
@@ -337,6 +363,7 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .baseline-step h3 { margin: 0; font: 650 22px var(--serif); }
 .baseline-step header p { margin: 7px 0 0; color: var(--muted); font-size: 14px; }
 .baseline-step button { align-self: end; }
+#baseline-form button { grid-column: 1 / -1; justify-self: end; min-width: 220px; }
 .baseline-status { position: sticky; top: 26px; min-height: 310px; padding: 28px; color: white; background: var(--ink-deep); }
 .baseline-status small { color: #a7bab1; font-size: 14px; }
 .baseline-status > strong { display: block; margin-top: 18px; font: 650 27px var(--serif); }
@@ -397,6 +424,8 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 
 @media (max-width: 1180px) {
   .overview-focus, .workspace-layout { grid-template-columns: 1fr; }
+  .change-composer { grid-template-columns: 1fr; }
+  .change-status { position: static; min-height: 190px; }
   .priority-work { min-height: auto; padding-right: 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .project-glance { padding-left: 0; }
   .workbench { grid-template-columns: 1fr 1fr; }
@@ -457,6 +486,10 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
   .intake-tabs { gap: 20px; padding: 0 18px; }
   .intake-requirement { grid-template-columns: 1fr; gap: 4px; }
   .search-command, .context-command, .baseline-step { grid-template-columns: 1fr; }
+  .change-context-bar, .change-form-grid, .change-submit { grid-template-columns: 1fr; }
+  .change-context-bar label { grid-template-columns: 1fr; }
+  .change-form-grid .wide-field, #baseline-form button { grid-column: auto; }
+  #baseline-form button { width: 100%; justify-self: stretch; }
   .search-command button { min-height: 50px; }
   .context-summary { grid-template-columns: 1fr; }
   .context-summary article, .context-summary article:nth-child(2) { padding: 20px 0; border-left: 0; border-top: 1px solid var(--line); }

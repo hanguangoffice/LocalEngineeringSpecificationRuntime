@@ -1404,6 +1404,7 @@ class GitCanonicalRepository:
         text: str | None,
         offset: int,
         page_size: int,
+        resource_type: str | None = None,
     ) -> tuple[tuple[dict[str, Any], ...], int]:
         """Query the disposable SQLite/FTS projection at the exact canonical commit."""
 
@@ -1422,24 +1423,37 @@ class GitCanonicalRepository:
             self.rebuild_projection(database)
         clauses: list[str] = []
         parameters: list[object] = []
-        join = ""
         if kind:
             clauses.append("resources.kind = ?")
             parameters.append(kind)
+        if resource_type:
+            clauses.append("resources.resource_type = ?")
+            parameters.append(resource_type)
         if text:
-            join = " JOIN documents_fts ON documents_fts.path = resources.path"
-            clauses.append("documents_fts MATCH ?")
-            parameters.append('"' + text.replace('"', '""') + '"')
+            terms = tuple(
+                item.casefold()
+                for item in re.split(r"[^\w.-]+", text, flags=re.UNICODE)
+                if item
+            )
+            for term in terms:
+                clauses.append(
+                    "(LOWER(resources.human_key) LIKE ? "
+                    "OR LOWER(resources.kind) LIKE ? "
+                    "OR LOWER(resources.resource_type) LIKE ? "
+                    "OR LOWER(resources.json) LIKE ?)"
+                )
+                pattern = f"%{term}%"
+                parameters.extend((pattern, pattern, pattern, pattern))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with sqlite3.connect(database) as connection:
             total = int(
                 connection.execute(
-                    f"SELECT COUNT(*) FROM resources{join}{where}",
+                    f"SELECT COUNT(*) FROM resources{where}",
                     parameters,
                 ).fetchone()[0]
             )
             rows = connection.execute(
-                f"SELECT resources.json FROM resources{join}{where} "
+                f"SELECT resources.json FROM resources{where} "
                 "ORDER BY resources.uid, resources.path LIMIT ? OFFSET ?",
                 (*parameters, page_size, offset),
             ).fetchall()

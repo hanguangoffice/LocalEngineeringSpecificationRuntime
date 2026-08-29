@@ -4,13 +4,14 @@ const runtimeState = {
   workspaceUid: null, base: null, actor: null, delegationUid: null,
   configurationUid: null, packageUid: null, approval: null,
   reviewPurpose: null, flowIndex: 0, context: null,
-  intakeRequest: null,
+  intakeRequest: null, intakeWorkspace: false, selectedItem: null,
+  queryKind: '', baselineTag: '',
   change: {humanKey: '', kind: '', statement: '', reason: ''}, audit: [],
 };
 
 const KIND_NAMES = {
   software_requirement: '软件需求', software_design: '软件设计',
-  test_case: '测试用例', can_signal: 'CAN 信号', revision: '工程内容',
+  test_case: '测试用例', revision: '工程内容',
   configuration_snapshot: '工程配置',
 };
 const ROLE_NAMES = {
@@ -65,7 +66,7 @@ const motion = (() => {
     if (panelTimeline) panelTimeline.kill();
     if (!enabled) return;
     const content = panel.querySelectorAll(
-      '.section-copy, form, .intake-composer, .intake-result, .explore-workspace, .context-key, .context-result, .workspace-layout, .review-decision, .review-scope, .sign-zone, .baseline-workflow, .task-toolbar, .task-list, .maintenance-layout, .audit-summary, .audit-section, .human-output'
+      '.section-copy, form, .intake-composer, .intake-result, .explore-workspace, .context-key, .context-result, .change-composer, .review-decision, .review-scope, .sign-zone, .baseline-workflow, .task-toolbar, .task-list, .maintenance-layout, .audit-summary, .audit-section, .human-output'
     );
     panelTimeline = gsap.timeline({defaults: {ease}})
       .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16})
@@ -166,6 +167,7 @@ document.querySelectorAll('.nav-item').forEach((button) => button.addEventListen
   panel.classList.add('active');
   motion.enterPanel(panel);
   if (panel.id === 'tasks') void loadTasks();
+  if (panel.id === 'explore') void loadQuery();
 }));
 document.querySelectorAll('[data-panel-link]').forEach((link) => link.addEventListener('click', (event) => {
   event.preventDefault(); selectPanel(link.dataset.panelLink);
@@ -223,7 +225,7 @@ const populateSession = (value) => {
         : '配置尚不完整。';
       select.append(option);
     });
-    select.addEventListener('change', () => syncConfiguration(select.value));
+    select.onchange = () => syncConfiguration(select.value);
   });
   document.querySelectorAll('[data-actor-select], [data-reviewer-select]').forEach((select) => {
     select.replaceChildren();
@@ -242,7 +244,36 @@ const populateSession = (value) => {
       select.append(option);
     });
   });
+  document.querySelectorAll('[data-kind-select]').forEach((select) => {
+    const previous = select.value;
+    select.replaceChildren();
+    (value.content_types || []).forEach((kind) => {
+      const option = create('option', '', kind.name);
+      option.value = kind.value; select.append(option);
+    });
+    if (!select.options.length) {
+      const option = create('option', '', '先从需求建立工程内容');
+      option.value = ''; option.disabled = true; option.selected = true; select.append(option);
+    } else if ([...select.options].some((option) => option.value === previous)) {
+      select.value = previous;
+    }
+    select.onchange = () => suggestEngineeringNumber(false);
+  });
+  document.querySelectorAll('[data-task-select]').forEach((select) => {
+    select.replaceChildren();
+    (value.task_types || []).forEach((task) => {
+      const option = create('option', '', task.name);
+      option.value = task.value; select.append(option);
+    });
+  });
+  renderQueryFilters(value.content_types || []);
   if (value.configurations.length) syncConfiguration(value.configurations[0].configuration_uid);
+  const firstActor = value.actors[0];
+  if (firstActor && !runtimeState.actor) {
+    runtimeState.actor = firstActor.actor_uid;
+    runtimeState.delegationUid = firstActor.delegation_uid;
+  }
+  suggestEngineeringNumber(false);
   audit('会话上下文已自动解析', value);
 };
 async function loadSession() {
@@ -393,6 +424,7 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.actor = value.actor_uid;
     runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
+    runtimeState.intakeWorkspace = true;
     runtimeState.change.humanKey = value.requirement_count === 1
       ? value.human_keys[0] : `初始规格（${value.requirement_count} 项）`;
     runtimeState.change.kind = 'software_requirement';
@@ -401,10 +433,22 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.actor = value.actor_uid;
     runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
+    const changeForm = document.querySelector('#workspace-compose-form');
+    changeForm.querySelector('[name="human_key"]').value = value.human_keys[0] || 'REQ-SW-0001';
+    const intakeKind = changeForm.querySelector('[name="kind"]');
+    if ([...intakeKind.options].some((option) => option.value === 'software_requirement')) {
+      intakeKind.value = 'software_requirement';
+    }
+    changeForm.querySelector('[name="statement"]').value
+      = `已从需求整理 ${value.requirement_count} 项初始工程内容。`;
+    changeForm.querySelector('[name="change_reason"]').value
+      = '从自然语言需求建立初始工程规格';
     const scope = document.querySelector('#workspace-scope');
     scope.querySelector('strong').textContent = `${value.requirement_count} 项初始工程内容`;
     scope.querySelector('p').textContent = value.human_keys.join('、');
-    document.querySelector('#workspace-output').replaceChildren(create('p', '',
+    const workspaceOutput = document.querySelector('#workspace-output');
+    workspaceOutput.hidden = false;
+    workspaceOutput.replaceChildren(create('p', '',
       `已采用“${value.selected_template}”建立可编辑草案。请检查内容，然后送审。`));
     advanceWorkspace('草案已建立', `${value.requirement_count} 项内容可以继续编辑。`, .66);
     motion.step(0);
@@ -415,61 +459,111 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
 });
 
 const statementOf = (item) => {
-  const field = (item.fields || []).find((entry) => entry.path === '/statement');
+  const field = (item.fields || item.draft_fields || [])
+    .find((entry) => entry.path === '/statement');
   return typeof field?.value === 'string' ? field.value : '';
 };
 const itemUid = (item) => item.object_uid || item.revision_uid
   || item.entity_uid || item.uid || '';
-document.querySelector('#query-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = String(new FormData(event.target).get('text') || '').trim();
-  if (!text) return toast('请输入 Human Key 或关键词。');
+const suggestEngineeringNumber = (force) => {
+  const kind = document.querySelector('#workspace-compose-form [name="kind"]')?.value;
+  const input = document.querySelector('#workspace-compose-form [name="human_key"]');
+  const suggestion = runtimeState.context?.key_suggestions?.[kind];
+  if (input && suggestion && (force || !input.value.trim())) input.value = suggestion;
+};
+const renderQueryFilters = (contentTypes) => {
+  const filters = document.querySelector('#query-filters');
+  filters.replaceChildren();
+  [{value: '', name: '全部内容'}, ...contentTypes].forEach((kind) => {
+    const button = create('button', '', kind.name);
+    button.type = 'button'; button.dataset.kind = kind.value;
+    button.classList.toggle('active', kind.value === runtimeState.queryKind);
+    button.addEventListener('click', () => {
+      runtimeState.queryKind = kind.value;
+      filters.querySelectorAll('button').forEach((item) => {
+        item.classList.toggle('active', item === button);
+      });
+      void loadQuery();
+    });
+    filters.append(button);
+  });
+};
+const selectQueryItem = (item, row) => {
+  runtimeState.selectedItem = item;
+  document.querySelectorAll('.result-item').forEach((element) => {
+    element.removeAttribute('aria-current');
+  });
+  row.setAttribute('aria-current', 'true');
+  document.querySelector('#spec-preview-key').textContent = item.human_key || '未命名';
+  document.querySelector('#spec-preview-kind').textContent
+    = `${humanKind(item.kind || item.resource_type)}${item.workspace_draft ? ' · 编辑中' : ''}`;
+  document.querySelector('#spec-preview-statement').textContent
+    = statementOf(item) || '这项内容还没有正文摘要。';
+  document.querySelector('#context-form [name="target_key"]').value = item.human_key || '';
+  const form = document.querySelector('#workspace-compose-form');
+  form.querySelector('[name="human_key"]').value = item.human_key || '';
+  const kind = form.querySelector('[name="kind"]');
+  if ([...kind.options].some((option) => option.value === item.kind)) kind.value = item.kind;
+  form.querySelector('[name="statement"]').value = statementOf(item);
+  updateChangePreview();
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    gsap.fromTo('#graph-core, #spec-preview-statement, .preview-next',
+      {y: 9, autoAlpha: 0},
+      {y: 0, autoAlpha: 1, duration: .34, stagger: .055, ease: 'power3.out'});
+  }
+  audit('选择工程内容', item);
+};
+const loadQuery = async () => {
+  const form = document.querySelector('#query-form');
+  const text = String(new FormData(form).get('text') || '').trim();
   try {
-    const value = await api(`/api/query?text=${encodeURIComponent(text)}`);
+    const value = await api(`/api/query?text=${encodeURIComponent(text)}&kind=${encodeURIComponent(runtimeState.queryKind)}`);
     const results = document.querySelector('#query-results');
     results.replaceChildren();
     document.querySelector('#query-result-count').textContent = value.items.length
-      ? `找到 ${value.items.length} 项` : '没有匹配内容';
+      ? `${value.items.length} 项内容` : '没有匹配内容';
+    const suggestions = document.querySelector('#engineering-content-suggestions');
+    suggestions.replaceChildren();
     value.items.forEach((item) => {
       const row = create('button', 'result-item');
       row.type = 'button'; row.dataset.uid = itemUid(item);
       row.append(create('b', '', item.human_key || '未命名工程内容'),
-        create('span', '', humanKind(item.kind || item.resource_type)),
-        create('p', '', statementOf(item) || '没有可显示的正文摘要。'));
-      row.addEventListener('click', () => {
-        document.querySelectorAll('.result-item').forEach((element) => {
-          element.removeAttribute('aria-current');
-        });
-        row.setAttribute('aria-current', 'true');
-        document.querySelector('#spec-preview-key').textContent = item.human_key || '未命名';
-        document.querySelector('#spec-preview-kind').textContent
-          = humanKind(item.kind || item.resource_type);
-        document.querySelector('#spec-preview-statement').textContent
-          = statementOf(item) || '这项内容没有可显示的正文摘要。';
-        document.querySelector('#context-form [name="target_key"]').value
-          = item.human_key || '';
-        document.querySelector('#workspace-edit-form [name="human_key"]').value
-          = item.human_key || '';
-        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-          gsap.fromTo('#graph-core, #spec-preview-statement, .preview-next',
-            {y: 9, autoAlpha: 0},
-            {y: 0, autoAlpha: 1, duration: .34, stagger: .055, ease: 'power3.out'});
-        }
-        audit('选择工程内容', item);
-      });
+        create('span', '', `${humanKind(item.kind || item.resource_type)}${item.workspace_draft ? ' · 编辑中' : ''}`),
+        create('p', '', statementOf(item) || '尚无正文摘要。'));
+      row.addEventListener('click', () => selectQueryItem(item, row));
       results.append(row);
+      if (item.human_key) {
+        const option = create('option'); option.value = item.human_key; suggestions.append(option);
+      }
     });
-    if (!value.items.length) results.append(create('div', 'empty-state', '没有找到匹配内容。'));
+    if (!value.items.length) {
+      const empty = create('div', 'empty-state');
+      empty.append(create('b', '', text ? `没有找到“${text}”` : '工程中还没有可查找的内容。'));
+      const action = create('button', 'text-action', text ? '清除搜索' : '从需求开始');
+      action.type = 'button'; action.addEventListener('click', () => {
+        if (text) { form.reset(); void loadQuery(); } else selectPanel('intake');
+      });
+      empty.append(action); results.append(empty);
+    }
     else {
       gsap.set(results.children, {y: 12, autoAlpha: 0}); motion.reveal(results.children);
+      selectQueryItem(value.items[0], results.firstElementChild);
     }
   } catch (error) { toast(error.message); }
+};
+let queryTimer = null;
+document.querySelector('#query-form').addEventListener('submit', (event) => {
+  event.preventDefault(); void loadQuery();
+});
+document.querySelector('#query-form [name="text"]').addEventListener('input', () => {
+  window.clearTimeout(queryTimer);
+  queryTimer = window.setTimeout(() => void loadQuery(), 280);
 });
 const resolveHumanKey = async (humanKey) => {
   const query = await api(`/api/query?text=${encodeURIComponent(humanKey)}`);
   const exact = query.items.find((item) => String(item.human_key || '').toLocaleLowerCase()
     === humanKey.toLocaleLowerCase());
-  if (!exact) throw new Error(`没有找到 Human Key“${humanKey}”。`);
+  if (!exact) throw new Error(`没有找到工程编号“${humanKey}”。`);
   return exact;
 };
 const renderContext = (value, targetKey) => {
@@ -561,71 +655,79 @@ const advanceWorkspace = (state, guidance, progress) => {
   document.querySelector('#workspace-guidance').textContent = guidance;
   gsap.to('#workspace-progress', {scaleX: progress, duration: .5, ease: 'power2.inOut'});
 };
+const updateChangePreview = () => {
+  const form = document.querySelector('#workspace-compose-form');
+  const data = Object.fromEntries(new FormData(form));
+  const key = String(data.human_key || '').trim();
+  const statement = String(data.statement || '').trim();
+  const reason = String(data.change_reason || '').trim();
+  const scope = document.querySelector('#workspace-scope');
+  scope.querySelector('strong').textContent = key || '等待填写';
+  scope.querySelector('p').textContent = key
+    ? `${humanKind(data.kind)}${reason ? ` · ${reason}` : ''}` : '工程编号和内容类型会在这里汇总。';
+  if (key && statement && reason) advanceWorkspace('可以送审', '内容和理由已经填写。', .72);
+  else advanceWorkspace('准备填写', '完成内容后即可送审。', key || statement || reason ? .35 : 0);
+};
+document.querySelector('#workspace-compose-form').addEventListener('input', updateChangePreview);
+document.querySelector('#workspace-compose-form').addEventListener('change', updateChangePreview);
 const paintDecision = (validation) => {
   const decision = validation.operation_decision || {};
   const blocking = (decision.blocking_finding_uids || []).length;
   const findings = (validation.findings || validation.finding_hashes || []).length;
   const strip = document.querySelector('#decision-strip');
+  if (!strip) return;
   strip.dataset.disposition = decision.disposition || (blocking ? 'block' : 'allow');
   strip.querySelector('strong').textContent = blocking ? '需要先处理' : '可以进入批准';
   strip.querySelector('small').textContent = blocking
     ? `发现 ${blocking} 项会阻止保存的问题。`
-    : findings ? `发现 ${findings} 项提示，没有阻止保存的问题。` : '没有发现会阻止保存的问题。';
+    : findings ? `有 ${findings} 项提示可供审阅。` : '校验通过。';
   motion.flash(strip, blocking ? '#f3ded9' : '#dce9df');
 };
-document.querySelector('#workspace-open-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.target));
-  const actorOption = selectedOption('#workspace-open-form [name="actor"]');
-  if (!data.configuration_uid || !data.actor || !actorOption?.dataset.delegationUid) {
-    return toast('当前工程尚未建立可用配置。');
+const findExistingItem = async (humanKey) => {
+  if (runtimeState.selectedItem?.human_key?.toLocaleLowerCase() === humanKey.toLocaleLowerCase()) {
+    return runtimeState.selectedItem;
   }
+  const query = await api(`/api/query?text=${encodeURIComponent(humanKey)}`);
+  return query.items.find((item) => String(item.human_key || '').toLocaleLowerCase()
+    === humanKey.toLocaleLowerCase()) || null;
+};
+const openChangeWorkspace = async (data, actorOption) => {
   runtimeState.workspaceUid = uid(); runtimeState.actor = String(data.actor);
   runtimeState.delegationUid = actorOption.dataset.delegationUid;
   runtimeState.configurationUid = String(data.configuration_uid);
-  try {
-    const value = await api('/api/workspace/open', {
-      method: 'POST', body: JSON.stringify(envelope({
-        type: 'open_workspace', configuration_uid: data.configuration_uid,
-      })),
-    });
-    advanceWorkspace('可以编辑', '工作副本已经建立。现在说明要改什么。', .25);
-    document.querySelector('#workspace-output').replaceChildren(create('p', '',
-      `已按“${selectedOption('#workspace-open-form [name="configuration_uid"]')?.textContent}”开始本次变更。`));
-    motion.step(0); audit('工作副本已建立', value);
-  } catch (error) { toast(error.message); }
-});
-document.querySelector('#workspace-edit-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!runtimeState.workspaceUid) return toast('请先选择工作范围并开始编辑。');
-  const data = Object.fromEntries(new FormData(event.target));
+  const value = await api('/api/workspace/open', {
+    method: 'POST', body: JSON.stringify(envelope({
+      type: 'open_workspace', configuration_uid: data.configuration_uid,
+    })),
+  });
+  audit('工作副本已建立', value);
+};
+const saveChangeContent = async (data) => {
   runtimeState.change = {humanKey: String(data.human_key), kind: String(data.kind),
     statement: String(data.statement), reason: String(data.change_reason)};
+  const existing = await findExistingItem(runtimeState.change.humanKey);
   const operation = {
     operation_type: 'create_object',
     working_copy: {
-      workspace_uid: runtimeState.workspaceUid, object_uid: uid(),
-      base_revision_uid: null, base_revision_number: 0,
+      workspace_uid: runtimeState.workspaceUid,
+      object_uid: existing?.object_uid || uid(),
+      base_revision_uid: existing?.revision_uid || null,
+      base_revision_number: Number(existing?.revision_number || 0),
       human_key: runtimeState.change.humanKey, kind: runtimeState.change.kind,
-      facets: [], effective_model_hash: 'bound-by-runtime',
+      facets: existing?.facets || [], effective_model_hash: 'bound-by-runtime',
       delegation_uid: runtimeState.delegationUid,
       draft_fields: [{path: '/statement', value: runtimeState.change.statement}],
-      draft_fragments: [], relation_proposals: [], edit_log: [],
+      draft_fragments: existing?.fragments || [], relation_proposals: [], edit_log: [],
     },
   };
-  try {
-    const value = await api('/api/workspace/edit', {
-      method: 'POST', body: JSON.stringify(envelope(operation)),
-    });
-    advanceWorkspace('内容已保存', '可以继续检查并送审。', .58);
-    const scope = document.querySelector('#workspace-scope');
-    scope.querySelector('strong').textContent = runtimeState.change.humanKey;
-    scope.querySelector('p').textContent = `${humanKind(runtimeState.change.kind)} · ${runtimeState.change.reason}`;
-    document.querySelector('#workspace-output').replaceChildren(create('p', '',
-      `已保存 ${runtimeState.change.humanKey}（${humanKind(runtimeState.change.kind)}）。变更理由会随审阅一起提交。`));
-    motion.flash('#workspace-edit-form'); audit('变更内容已保存', value);
-  } catch (error) { toast(error.message); }
-});
+  const value = await api('/api/workspace/edit', {
+    method: 'POST', body: JSON.stringify(envelope(operation)),
+  });
+  const scope = document.querySelector('#workspace-scope');
+  scope.querySelector('strong').textContent = runtimeState.change.humanKey;
+  scope.querySelector('p').textContent = `${humanKind(runtimeState.change.kind)} · ${runtimeState.change.reason}`;
+  audit('变更内容已保存', value);
+};
 
 const renderReview = (value) => {
   const reason = runtimeState.reviewPurpose === 'baseline'
@@ -641,66 +743,64 @@ const renderReview = (value) => {
     value.blocking_count ? 'danger' : 'normal');
   document.querySelector('#review-findings').textContent = value.blocking_count
     ? `${value.blocking_count} 项问题会阻止保存。`
-    : value.finding_count ? `${value.finding_count} 项提示，不影响本次批准。`
-      : '没有发现会阻止本次批准的问题。';
-  const roleSelect = document.querySelector('#sign-form [name="role"]');
-  roleSelect.replaceChildren();
-  (value.stages || []).forEach((stage) => {
-    const option = create('option', '', humanRole(stage.role));
-    option.value = stage.role; roleSelect.append(option);
-  });
-  motion.stateChange('#sign-role', (value.stages || []).map((stage) => {
+    : value.finding_count ? `有 ${value.finding_count} 项提示可供审阅。`
+      : '校验通过。';
+  const stages = value.stages || [];
+  const roleNames = stages.map((stage) => {
     return humanRole(stage.role);
-  }).join('、') || '批准人');
+  }).join('、') || '批准人';
+  document.querySelector('#sign-form [name="role"]').value = stages[0]?.role || '';
+  motion.stateChange('#sign-role', roleNames);
+  motion.stateChange('#sign-role-inline', roleNames);
   document.querySelector('#sign-form [name="package_uid"]').value = value.package_uid;
+  document.querySelector('#sign-form [name="human_confirm"]').checked = false;
+  document.querySelector('#approve-and-apply').textContent = runtimeState.reviewPurpose === 'baseline'
+    ? '批准并发布基线' : '批准并写入工程';
   document.querySelector('#sign-output').classList.remove('is-ready');
-  document.querySelector('#sign-output span').textContent = '尚未签名。';
-  document.querySelector('#apply-candidate').disabled = true;
+  document.querySelector('#sign-output span').textContent = '等待批准。';
   audit('审阅摘要已加载', value);
 };
 const loadReviewPackage = async (packageUid) => {
   renderReview(await api(`/api/review-package/${encodeURIComponent(packageUid)}`));
 };
-document.querySelector('#workspace-submit-form').addEventListener('submit', async (event) => {
+const submitChangeWorkspace = async () => {
+  const value = await api('/api/workspace/submit', {
+    method: 'POST', body: JSON.stringify(envelope({
+      configuration_uid: runtimeState.configurationUid,
+      evaluation_time: new Date().toISOString(), maximum_depth: 3,
+    })),
+  });
+  runtimeState.packageUid = value.review_package.package_uid;
+  runtimeState.reviewPurpose = 'candidate'; runtimeState.approval = null;
+  runtimeState.intakeWorkspace = false;
+  advanceWorkspace('等待批准', '校验完成，请确认范围和理由。', 1);
+  paintDecision(value.validation);
+  document.querySelector('#workspace-output').replaceChildren(create('p', '',
+    `${runtimeState.change.humanKey} 已送交审阅。`));
+  motion.step(1); await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
+};
+document.querySelector('#workspace-compose-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!runtimeState.change.humanKey) return toast('请先保存变更内容。');
+  const form = event.target;
+  const data = Object.fromEntries(new FormData(form));
+  const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
+  if (!data.configuration_uid || !data.actor || !actorOption?.dataset.delegationUid) {
+    return toast('当前工程还没有可用的配置和操作人。');
+  }
+  const button = form.querySelector('button[type="submit"], button:not([type])');
+  button.disabled = true; button.textContent = '正在检查…';
   try {
-    const value = await api('/api/workspace/submit', {
-      method: 'POST', body: JSON.stringify(envelope({
-        configuration_uid: runtimeState.configurationUid,
-        evaluation_time: new Date().toISOString(), maximum_depth: 3,
-      })),
-    });
-    runtimeState.packageUid = value.review_package.package_uid;
-    runtimeState.reviewPurpose = 'candidate'; runtimeState.approval = null;
-    advanceWorkspace('等待批准', '系统校验已完成，请由合适的人确认范围和理由。', 1);
-    paintDecision(value.validation);
-    document.querySelector('#workspace-output').replaceChildren(create('p', '',
-      `${runtimeState.change.humanKey} 已完成校验并送交审阅。`));
-    motion.step(1); await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
-  } catch (error) { toast(error.message); }
+    if (!runtimeState.intakeWorkspace) {
+      await openChangeWorkspace(data, actorOption);
+      await saveChangeContent(data);
+    }
+    await submitChangeWorkspace();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false; button.textContent = '检查并送审';
+  }
 });
-document.querySelector('#sign-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!runtimeState.packageUid) return toast('当前没有待批准事项。');
-  const data = Object.fromEntries(new FormData(event.target));
-  const reviewer = selectedOption('#sign-form [name="reviewer"]');
-  try {
-    const value = await api('/api/sign', {
-      method: 'POST', body: JSON.stringify({package_uid: runtimeState.packageUid,
-        actor_uid: data.reviewer, key_uid: reviewer?.dataset.keyUid,
-        role: data.role, human_confirm: data.human_confirm === 'on'}),
-    });
-    runtimeState.approval = value.approval;
-    const output = document.querySelector('#sign-output'); output.classList.add('is-ready');
-    output.querySelector('span').textContent = runtimeState.reviewPurpose === 'baseline'
-      ? '批准已完成。返回“发布基线”即可发布。'
-      : '批准已完成。现在可以将变更写入工程。';
-    document.querySelector('#apply-candidate').disabled = runtimeState.reviewPurpose !== 'candidate';
-    motion.step(2); motion.flash('.sign-zone', '#274a3d'); audit('人工批准已签名', value);
-  } catch (error) { toast(error.message); }
-});
-
 const addResultConfiguration = (uidValue) => {
   document.querySelectorAll('[data-configuration-select]').forEach((select) => {
     if (![...select.options].some((option) => option.value === uidValue)) {
@@ -712,31 +812,70 @@ const addResultConfiguration = (uidValue) => {
   });
   syncConfiguration(uidValue);
 };
-document.querySelector('#apply-candidate').addEventListener('click', async () => {
-  if (!runtimeState.approval || runtimeState.reviewPurpose !== 'candidate') {
-    return toast('需要先由人完成批准。');
-  }
+const applyApprovedCandidate = async () => {
+  const value = await api('/api/apply', {
+    method: 'POST', body: JSON.stringify(envelope({
+      review_package_uid: runtimeState.packageUid,
+      signed_approvals: [runtimeState.approval], evaluation_time: new Date().toISOString(),
+    })),
+  });
+  runtimeState.base = value.result_commit;
+  runtimeState.configurationUid = value.configuration_uid;
+  runtimeState.approval = null; runtimeState.workspaceUid = null;
+  addResultConfiguration(value.configuration_uid);
+  document.querySelector('#sign-output span').textContent
+    = `${runtimeState.change.humanKey} 已写入工程。`;
+  motion.step(3); audit('批准的变更已写入工程', value);
+  toast('变更已经写入工程。');
+};
+const applyApprovedBaseline = async () => {
+  const value = await api('/api/baseline/apply', {
+    method: 'POST', body: JSON.stringify(envelope({
+      review_package_uid: runtimeState.packageUid,
+      signed_approvals: [runtimeState.approval], evaluation_time: new Date().toISOString(),
+      tag_name: runtimeState.baselineTag || null,
+    })),
+  });
+  runtimeState.base = value.result_commit; runtimeState.approval = null;
+  motion.stateChange('#baseline-state', '已发布');
+  document.querySelector('#baseline-guidance').textContent = '当前配置已经成为正式工程基线。';
+  document.querySelector('#baseline-output').replaceChildren(create('p', '',
+    runtimeState.baselineTag
+      ? `基线“${runtimeState.baselineTag}”已发布。` : '工程基线已发布。'));
+  audit('工程基线已发布', value); toast('基线已经发布。'); selectPanel('baseline');
+};
+document.querySelector('#sign-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!runtimeState.packageUid) return toast('当前没有待批准事项。');
+  const data = Object.fromEntries(new FormData(event.target));
+  const reviewer = selectedOption('#sign-form [name="reviewer"]');
+  const button = document.querySelector('#approve-and-apply');
+  button.disabled = true; button.textContent = '正在完成…';
   try {
-    const value = await api('/api/apply', {
-      method: 'POST', body: JSON.stringify(envelope({
-        review_package_uid: runtimeState.packageUid,
-        signed_approvals: [runtimeState.approval], evaluation_time: new Date().toISOString(),
-      })),
+    const value = await api('/api/sign', {
+      method: 'POST', body: JSON.stringify({package_uid: runtimeState.packageUid,
+        actor_uid: data.reviewer, key_uid: reviewer?.dataset.keyUid,
+        role: data.role, human_confirm: data.human_confirm === 'on'}),
     });
-    runtimeState.base = value.result_commit; runtimeState.configurationUid = value.configuration_uid;
-    runtimeState.approval = null; addResultConfiguration(value.configuration_uid);
-    document.querySelector('#sign-output span').textContent
-      = `${runtimeState.change.humanKey} 已保存到工程。`;
-    document.querySelector('#apply-candidate').disabled = true;
-    motion.step(3); audit('批准的变更已写入工程', value);
-    toast('变更已经写入工程。'); selectPanel('baseline');
-  } catch (error) { toast(error.message); }
+    runtimeState.approval = value.approval;
+    const output = document.querySelector('#sign-output'); output.classList.add('is-ready');
+    output.querySelector('span').textContent = '批准完成，正在写入…';
+    motion.step(2); motion.flash('.sign-zone', '#274a3d'); audit('人工批准已签名', value);
+    if (runtimeState.reviewPurpose === 'baseline') await applyApprovedBaseline();
+    else await applyApprovedCandidate();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = runtimeState.reviewPurpose === 'baseline'
+      ? '批准并发布基线' : '批准并写入工程';
+  }
 });
 
-document.querySelector('#baseline-prepare-form').addEventListener('submit', async (event) => {
+document.querySelector('#baseline-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target));
-  const actorOption = selectedOption('#workspace-open-form [name="actor"]');
+  const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
   if (!runtimeState.actor && actorOption?.value) {
     runtimeState.actor = actorOption.value;
     runtimeState.delegationUid = actorOption.dataset.delegationUid;
@@ -745,6 +884,9 @@ document.querySelector('#baseline-prepare-form').addEventListener('submit', asyn
     return toast('当前工程缺少可用的本机身份。');
   }
   try {
+    runtimeState.configurationUid = String(data.configuration_uid);
+    runtimeState.baselineTag = String(data.tag_name || '').trim();
+    runtimeState.workspaceUid = uid();
     const value = await api('/api/baseline/prepare', {
       method: 'POST', body: JSON.stringify(envelope({
         configuration_uid: data.configuration_uid, evaluation_time: new Date().toISOString(),
@@ -752,37 +894,11 @@ document.querySelector('#baseline-prepare-form').addEventListener('submit', asyn
     });
     runtimeState.packageUid = value.review_package.package_uid;
     runtimeState.reviewPurpose = 'baseline'; runtimeState.approval = null;
-    document.querySelector('#baseline-apply-form [name="review_package_uid"]')
-      .value = runtimeState.packageUid;
-    motion.stateChange('#baseline-state', '等待人工批准');
-    document.querySelector('#baseline-guidance').textContent
-      = '检查已完成。请到“审阅与批准”作出决定，然后返回发布。';
+    motion.stateChange('#baseline-state', '等待批准');
+    document.querySelector('#baseline-guidance').textContent = '内容已检查，正在进入批准。';
     document.querySelector('#baseline-output').replaceChildren(create('p', '',
-      '最近更新：基线内容已准备。'));
+      '发布内容已经汇总。'));
     await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
-  } catch (error) { toast(error.message); }
-});
-document.querySelector('#baseline-apply-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!runtimeState.approval || runtimeState.reviewPurpose !== 'baseline') {
-    return toast('请先在“审阅与批准”完成基线批准。');
-  }
-  const data = Object.fromEntries(new FormData(event.target));
-  try {
-    const value = await api('/api/baseline/apply', {
-      method: 'POST', body: JSON.stringify(envelope({
-        review_package_uid: data.review_package_uid,
-        signed_approvals: [runtimeState.approval], evaluation_time: new Date().toISOString(),
-        tag_name: data.tag_name || null,
-      })),
-    });
-    runtimeState.base = value.result_commit; runtimeState.approval = null;
-    motion.stateChange('#baseline-state', '已发布');
-    document.querySelector('#baseline-guidance').textContent
-      = '当前配置已经成为正式工程基线。';
-    document.querySelector('#baseline-output').replaceChildren(create('p', '',
-      data.tag_name ? `发布记录：基线“${data.tag_name}”已发布。` : '发布记录：基线已发布。'));
-    audit('工程基线已发布', value); toast('基线已经发布。');
   } catch (error) { toast(error.message); }
 });
 
@@ -807,7 +923,7 @@ document.querySelector('#gc-plan').addEventListener('click', async () => {
   try {
     const value = await api('/api/maintenance/gc', {method: 'POST', body: '{}'});
     document.querySelector('#maintenance-output').replaceChildren(create('p', '',
-      `已生成清理计划：${(value.candidates || value.removable_refs || []).length} 项可供检查。本次没有删除任何内容。`));
+      `清理清单包含 ${(value.candidates || value.removable_refs || []).length} 项。`));
   } catch (error) { toast(error.message); }
 });
 document.querySelector('#lock-button').addEventListener('click', async () => {

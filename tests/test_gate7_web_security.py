@@ -16,7 +16,12 @@ from tests.support.public_product import bootstrap_public_product
 
 def unlocked(tmp_path: Path) -> tuple[LocalWebRuntime, TestClient, str]:
     GitCanonicalRepository(tmp_path).initialize()
-    runtime = LocalWebRuntime(tmp_path, launch_token="one-time-launch-token")
+    runtime = LocalWebRuntime(
+        tmp_path,
+        launch_token="one-time-launch-token",
+        signer_key_root=tmp_path / "keys",
+        signer_password="test-only-local-signer-password",
+    )
     client = TestClient(runtime.app)
     response = client.get("/unlock?token=one-time-launch-token", follow_redirects=False)
     assert response.status_code == 303
@@ -78,6 +83,10 @@ def test_ui_covers_product_workflow_and_uses_no_remote_assets(tmp_path: Path) ->
     assert "Delegation UID" not in ordinary_page
     assert "Canonical Commit" not in ordinary_page
     assert "package_hash" not in ordinary_page
+    assert "Human Key" not in ordinary_page
+    assert "不影响工程状态" not in ordinary_page
+    assert "无需进入" not in ordinary_page
+    assert "不会出现在" not in ordinary_page
     assert 'src="http' not in page.casefold()
     assert 'href="http' not in page.casefold()
     assert client.get("/static/lesr.css").status_code == 200
@@ -103,7 +112,46 @@ def test_session_context_resolves_human_names_from_internal_identity(
     assert context["configurations"][0]["name"] == "public-product"
     assert context["actors"][0]["display_name"] == "Root owner"
     assert context["actors"][0]["delegation_uid"] == product.delegation_uid
+    assert {item["value"] for item in context["content_types"]} == {
+        "software_requirement",
+        "software_design",
+    }
+    assert {item["value"] for item in context["task_types"]} == {
+        "requirement_change",
+        "test_design",
+        "deviation_review",
+    }
+    assert "can_analysis" not in str(context)
+    assert "mqtt_change" not in str(context)
     assert context["audit"]["canonical_commit"] == product.domain.base
+
+
+def test_engineering_search_finds_working_drafts_by_partial_text(
+    tmp_path: Path,
+) -> None:
+    _, client, csrf = unlocked(tmp_path)
+    accepted = client.post(
+        "/api/intake/accept",
+        headers={"X-LESR-CSRF": csrf},
+        json={
+            "description": (
+                "建立本地 GPU 管理器，读取 NVIDIA 显存并提供低显存启动参数。"
+            ),
+            "project_name": "gpu-lab-manager",
+        },
+    )
+    assert accepted.status_code == 200
+    by_text = client.get("/api/query", params={"text": "NVIDIA 显存"}).json()
+    assert by_text["items"]
+    assert by_text["items"][0]["workspace_draft"] is True
+    assert by_text["items"][0]["resource_type"] == "working_copy"
+    number_fragment = accepted.json()["human_keys"][0][:5]
+    by_number = client.get("/api/query", params={"text": number_fragment}).json()
+    assert by_number["items"]
+    assert all(
+        item["resource_type"] in {"revision", "working_copy"}
+        for item in by_number["items"]
+    )
 
 
 def test_web_signing_refuses_caller_authored_package(tmp_path: Path) -> None:
