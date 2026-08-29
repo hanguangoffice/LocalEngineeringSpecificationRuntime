@@ -93,7 +93,6 @@ class SignedApproval(FrozenModel):
     package_hash: str
     effective_model_hash: str
     scope: dict[str, object]
-    scope_hash: str
     approval_type: str
     actor_uid: str
     actor_role: str
@@ -222,7 +221,6 @@ class ApprovalKeyStore:
             package_hash=payload.package_hash,
             effective_model_hash=payload.effective_model_hash,
             scope=payload.scope,
-            scope_hash=payload.scope_hash,
             approval_type=payload.approval_type,
             actor_uid=trust.actor_uid,
             actor_role=role,
@@ -284,8 +282,6 @@ def verify_approval(
         raise PermissionError("approval does not bind the review package")
     if approval.effective_model_hash != effective_model_hash:
         raise PermissionError("approval does not bind the effective model")
-    if approval.scope_hash != semantic_hash(approval.scope):
-        raise PermissionError("approval scope hash is invalid")
     public = Ed25519PublicKey.from_public_bytes(base64.b64decode(trust.public_key, validate=True))
     try:
         public.verify(

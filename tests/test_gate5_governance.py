@@ -51,6 +51,7 @@ def package() -> ReviewPackage:
 
 def test_partial_conditional_approvals_jointly_cover_scope_and_quorum(tmp_path: Path) -> None:
     review_package = package()
+    assert "subject_hash" not in review_package.model_dump(mode="json")
     store = ApprovalKeyStore(tmp_path / "keys")
     reviewers = (
         store.generate(UIDS[6], "Reviewer A", ("technical",)),

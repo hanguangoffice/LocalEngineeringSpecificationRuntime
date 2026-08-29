@@ -170,15 +170,6 @@ class WorkspaceCheckpoint(FrozenModel):
     created_at: datetime
     git_ref: str
     workspace_state: Workspace
-    checkpoint_hash: str = ""
-
-    @model_validator(mode="after")
-    def calculate_hash(self) -> WorkspaceCheckpoint:
-        expected = document_hash(self.model_dump(mode="json"), "checkpoint_hash")
-        if self.checkpoint_hash and self.checkpoint_hash != expected:
-            raise ValueError("checkpoint_hash is invalid")
-        object.__setattr__(self, "checkpoint_hash", expected)
-        return self
 
 
 class CandidateRevisionSet(FrozenModel):

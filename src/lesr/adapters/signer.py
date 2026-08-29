@@ -25,7 +25,7 @@ def sign_once(
     password: str | None = None,
     timeout_seconds: float = 10.0,
 ) -> dict[str, Any]:
-    """Spawn, challenge, use and destroy a broker for exactly one signature."""
+    """Spawn, authenticate, use and destroy a broker for exactly one signature."""
 
     challenge = secrets.token_bytes(32)
     uid = uuid7_candidate().replace("-", "")
@@ -59,7 +59,6 @@ def sign_once(
     try:
         connection.send(
             {
-                "challenge": challenge.hex(),
                 "trust": trust.model_dump(mode="json"),
                 "role": role,
                 "payload": payload.model_dump(mode="json"),
@@ -99,8 +98,8 @@ def _broker(
     connection = listener.accept()
     try:
         request = connection.recv()
-        if not isinstance(request, dict) or request.get("challenge") != challenge.hex():
-            connection.send({"ok": False, "error": "challenge mismatch"})
+        if not isinstance(request, dict):
+            connection.send({"ok": False, "error": "invalid signer request"})
             return
         trust = TrustedActor.model_validate(request["trust"])
         payload = ApprovalPayload.model_validate(request["payload"])

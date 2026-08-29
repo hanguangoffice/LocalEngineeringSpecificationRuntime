@@ -95,7 +95,7 @@ def test_atomic_multi_resource_apply_and_idempotency(tmp_path: Path) -> None:
     repo = authorization.repository
     plan = transaction(authorization)
     result = repo.apply(plan)
-    assert repo.verify_audit_chain(result.commit)
+    assert repo.verify_audit_records(result.commit)
     assert all(
         repo.read_json(result.commit, operation.relative_path) is not None
         for operation in plan.operations

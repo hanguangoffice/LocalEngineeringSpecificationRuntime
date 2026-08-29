@@ -91,6 +91,7 @@ def test_checkpoint_round_trip_restores_exact_state() -> None:
         edited, checkpoint_uid=UIDS[6], actor_uid="author", created_at=NOW
     )
     serialized = checkpoint.model_dump_json()
+    assert "checkpoint_hash" not in checkpoint.model_dump(mode="json")
     restored_checkpoint = WorkspaceCheckpoint.model_validate_json(serialized)
     restored = WorkspaceEngine.restore(restored_checkpoint)
     assert restored == edited
