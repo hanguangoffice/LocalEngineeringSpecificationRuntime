@@ -169,6 +169,31 @@ def test_projection_failure_does_not_rollback_and_projection_rebuilds(tmp_path: 
     assert f"canonical/revisions/{REVISION_UID}.json" in paths
 
 
+def test_projection_query_supports_partial_terms_and_content_filter(tmp_path: Path) -> None:
+    authorization = repository(tmp_path)
+    repo = authorization.repository
+    repo.apply(transaction(authorization))
+    database = tmp_path / "projection.db"
+    by_number, number_total = repo.query_projection(
+        database,
+        kind=None,
+        text="REQ-GIT",
+        offset=0,
+        page_size=20,
+        resource_type="revision",
+    )
+    by_statement, statement_total = repo.query_projection(
+        database,
+        kind="software_requirement",
+        text="reconnect",
+        offset=0,
+        page_size=20,
+        resource_type="revision",
+    )
+    assert number_total == 1 and by_number[0]["revision_uid"] == REVISION_UID
+    assert statement_total == 1 and by_statement[0]["human_key"] == "REQ-GIT-1"
+
+
 def test_both_checkpoint_strategies_are_git_recoverable(tmp_path: Path) -> None:
     repo = repository(tmp_path).repository
     isolated = repo.create_checkpoint(
