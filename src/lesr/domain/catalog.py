@@ -93,6 +93,7 @@ SCHEMA_CATALOG: tuple[str, ...] = (
 RUNTIME_SCHEMA_CATALOG: tuple[str, ...] = (
     "agent-run.schema.json",
     "decision-request.schema.json",
+    "decision-resolution.schema.json",
     "mission-mandate.schema.json",
     "mission.schema.json",
     "presentation-mapping.schema.json",
@@ -166,6 +167,46 @@ RUNTIME_CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
                 cli=True,
                 mcp=True,
                 persistent_task=False,
+            ),
+            RuntimeCapability(
+                name="mission.create",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.list",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.inspect",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.ready-work",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.claim-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.report-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="decision.list",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="decision.resolve",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
             ),
         ),
         key=lambda item: item.name,

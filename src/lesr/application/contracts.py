@@ -18,6 +18,8 @@ class CapabilityGroup(StrEnum):
     WORKSPACE = "workspace"
     GOVERNANCE = "governance"
     COMPLIANCE = "compliance"
+    MISSION = "mission"
+    DECISION = "decision"
 
 
 class ErrorCategory(StrEnum):
@@ -209,6 +211,37 @@ class LESRDomainPort(Protocol):
     def cancel_task(self, task_uid: str) -> DomainResult: ...
 
     def task_result(self, task_uid: str) -> DomainResult: ...
+
+    def create_mission(self, plan: dict[str, Any]) -> DomainResult: ...
+
+    def list_missions(self) -> DomainResult: ...
+
+    def inspect_mission(self, mission_uid: str) -> DomainResult: ...
+
+    def ready_mission_work(self, mission_uid: str) -> DomainResult: ...
+
+    def claim_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        agent_identity: str,
+        provider: str,
+        model_identifier: str,
+        client: str,
+    ) -> DomainResult: ...
+
+    def report_mission_work(self, report: dict[str, Any]) -> DomainResult: ...
+
+    def list_decisions(self, mission_uid: str | None = None) -> DomainResult: ...
+
+    def resolve_decision(
+        self,
+        decision_request_uid: str,
+        actor_uid: str,
+        reason: str,
+        selected_action: str | None = None,
+        selected_alternative: str | None = None,
+    ) -> DomainResult: ...
 
 
 class InMemoryDomainService:

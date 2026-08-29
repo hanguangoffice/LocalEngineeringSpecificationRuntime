@@ -26,8 +26,10 @@ from lesr.adapters.git import (
     SemanticOperation,
     SemanticTransaction,
 )
+from lesr.adapters.mission_store import MissionStore
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore, TaskWorker
 from lesr.adapters.schemas import SchemaCatalog
+from lesr.application.agent_broker import AgentReport
 from lesr.application.contracts import (
     CapabilityDescriptor,
     CapabilityGroup,
@@ -37,6 +39,7 @@ from lesr.application.contracts import (
     WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
+from lesr.application.mission_runtime import MissionCoordinator, MissionPlan
 from lesr.domain.approval import (
     SignedApproval,
     TrustedActor,
@@ -153,6 +156,8 @@ class LocalRuntimeService:
         self.repository = GitCanonicalRepository(self.project)
         self.base = self.repository.initialize()
         self.task_store = TaskStore(self.project)
+        self.mission_store = MissionStore(self.project)
+        self.missions = MissionCoordinator(self.mission_store)
         self.workspaces: dict[str, Workspace] = {}
         self.submissions: dict[str, Any] = {}
         self.reviews: dict[str, ReviewPackage] = {}
@@ -173,6 +178,8 @@ class LocalRuntimeService:
             CapabilityGroup.WORKSPACE: [],
             CapabilityGroup.GOVERNANCE: [],
             CapabilityGroup.COMPLIANCE: [],
+            CapabilityGroup.MISSION: [],
+            CapabilityGroup.DECISION: [],
         }
         for capability in RUNTIME_CAPABILITIES:
             prefix = capability.name.split(".", 1)[0]
@@ -189,6 +196,10 @@ class LocalRuntimeService:
                 if prefix == "workspace"
                 else CapabilityGroup.GOVERNANCE
                 if prefix in {"review", "apply", "baseline", "reconciliation"}
+                else CapabilityGroup.MISSION
+                if prefix == "mission"
+                else CapabilityGroup.DECISION
+                if prefix == "decision"
                 else CapabilityGroup.COMPLIANCE
             )
             groups[group].append(capability.name)
@@ -197,6 +208,160 @@ class LocalRuntimeService:
             for group, names in groups.items()
             if names
         )
+
+    def create_mission(self, plan: dict[str, Any]) -> DomainResult:
+        """Create local orchestration state without changing Canonical Git."""
+
+        try:
+            mission = self.missions.create(MissionPlan.model_validate(plan))
+            return DomainResult(mission.model_dump(mode="json"))
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-PLAN-INVALID",
+                ErrorCategory.VALIDATION,
+                str(error),
+            )
+
+    def list_missions(self) -> DomainResult:
+        return DomainResult(
+            tuple(item.model_dump(mode="json") for item in self.missions.list())
+        )
+
+    def inspect_mission(self, mission_uid: str) -> DomainResult:
+        try:
+            return DomainResult(
+                self.missions.inspect(mission_uid).model_dump(mode="json")
+            )
+        except KeyError:
+            return self._error(
+                "LESR-MISSION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "mission does not exist",
+                (mission_uid,),
+                suggested="mission.list",
+            )
+
+    def ready_mission_work(self, mission_uid: str) -> DomainResult:
+        try:
+            return DomainResult(
+                tuple(
+                    item.model_dump(mode="json")
+                    for item in self.missions.assignments(mission_uid)
+                )
+            )
+        except KeyError:
+            return self._error(
+                "LESR-MISSION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "mission does not exist",
+                (mission_uid,),
+                suggested="mission.list",
+            )
+
+    def claim_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        agent_identity: str,
+        provider: str,
+        model_identifier: str,
+        client: str,
+    ) -> DomainResult:
+        try:
+            claimed = self.missions.claim(
+                mission_uid,
+                work_package_uid,
+                agent_identity=agent_identity,
+                provider=provider,
+                model_identifier=model_identifier,
+                client=client,
+            )
+            return DomainResult(self._local_runtime_payload(claimed))
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (mission_uid, work_package_uid),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-READY",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (mission_uid, work_package_uid),
+                retryable=True,
+                suggested="mission.ready-work",
+            )
+
+    def report_mission_work(self, report: dict[str, Any]) -> DomainResult:
+        try:
+            result = self.missions.report(AgentReport.model_validate(report))
+            return DomainResult(self._local_runtime_payload(result))
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-RUN-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-REPORT-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+            )
+
+    def list_decisions(self, mission_uid: str | None = None) -> DomainResult:
+        return DomainResult(
+            tuple(
+                item.model_dump(mode="json")
+                for item in self.missions.decision_inbox(mission_uid)
+            )
+        )
+
+    def resolve_decision(
+        self,
+        decision_request_uid: str,
+        actor_uid: str,
+        reason: str,
+        selected_action: str | None = None,
+        selected_alternative: str | None = None,
+    ) -> DomainResult:
+        try:
+            result = self.missions.resolve_decision(
+                decision_request_uid,
+                actor_uid=actor_uid,
+                reason=reason,
+                selected_action=selected_action,
+                selected_alternative=selected_alternative,
+            )
+            return DomainResult(self._local_runtime_payload(result))
+        except KeyError as error:
+            return self._error(
+                "LESR-DECISION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (decision_request_uid,),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-DECISION-RESOLUTION-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (decision_request_uid,),
+            )
+
+    @classmethod
+    def _local_runtime_payload(cls, value: Any) -> Any:
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if isinstance(value, dict):
+            return {
+                key: cls._local_runtime_payload(item) for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._local_runtime_payload(item) for item in value)
+        return value
 
     def resolve(self, identifier: str) -> DomainResult:
         matches = [item for item in self.documents if identifier in self._identifiers(item)]

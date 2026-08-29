@@ -14,7 +14,7 @@ from lesr.application.contracts import (
     WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
-from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
+from lesr.domain.catalog import RUNTIME_CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import uuid7_candidate
 
 
@@ -44,7 +44,11 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Negotiate the versioned LESR domain capability groups."""
         return {
             "domain_contract": RUNTIME_CONTRACT_VERSION,
-            "capabilities": [item.model_dump(mode="json") for item in CAPABILITIES if item.mcp],
+            "capabilities": [
+                item.model_dump(mode="json")
+                for item in RUNTIME_CAPABILITIES
+                if item.mcp
+            ],
         }
 
     @server.tool(annotations=read_only, structured_output=True)
@@ -432,6 +436,72 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         if task_type not in {"full_validation", "deep_trace", "large_impact"}:
             return _capability_unavailable(f"task.{task_type}")
         return domain.start_task(task_type, request).payload()
+
+    @server.tool(name="mission_create", annotations=write, structured_output=True)
+    def create_mission(plan: dict[str, Any]) -> dict[str, Any]:
+        """Create a local engineering Mission and its dependency-ordered work packages."""
+        return domain.create_mission(plan).payload()
+
+    @server.tool(name="mission_list", annotations=read_only, structured_output=True)
+    def list_missions() -> dict[str, Any]:
+        """List local Missions with their current engineering progress."""
+        return domain.list_missions().payload()
+
+    @server.tool(name="mission_inspect", annotations=read_only, structured_output=True)
+    def inspect_mission(mission_uid: str) -> dict[str, Any]:
+        """Inspect one Mission and all of its work-package states."""
+        return domain.inspect_mission(mission_uid).payload()
+
+    @server.tool(name="mission_ready_work", annotations=read_only, structured_output=True)
+    def ready_mission_work(mission_uid: str) -> dict[str, Any]:
+        """List work packages that are ready for an Agent to claim."""
+        return domain.ready_mission_work(mission_uid).payload()
+
+    @server.tool(name="mission_claim_work", annotations=write, structured_output=True)
+    def claim_mission_work(
+        mission_uid: str,
+        work_package_uid: str,
+        agent_identity: str,
+        provider: str,
+        model_identifier: str,
+        client: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one ready work package for one Agent run."""
+        return domain.claim_mission_work(
+            mission_uid,
+            work_package_uid,
+            agent_identity,
+            provider,
+            model_identifier,
+            client,
+        ).payload()
+
+    @server.tool(name="mission_report_work", annotations=write, structured_output=True)
+    def report_mission_work(report: dict[str, Any]) -> dict[str, Any]:
+        """Record the terminal outcome of a claimed Agent run."""
+        return domain.report_mission_work(report).payload()
+
+    @server.tool(name="decision_list", annotations=read_only, structured_output=True)
+    def list_decisions(mission_uid: str | None = None) -> dict[str, Any]:
+        """List unresolved material decisions that need the local user."""
+        return domain.list_decisions(mission_uid).payload()
+
+    @server.tool(name="decision_resolve", annotations=write, structured_output=True)
+    def resolve_decision(
+        decision_request_uid: str,
+        actor_uid: str,
+        reason: str,
+        selected_action: str | None = None,
+        selected_alternative: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one material engineering choice and resume its work package."""
+        return domain.resolve_decision(
+            decision_request_uid,
+            actor_uid,
+            reason,
+            selected_action,
+            selected_alternative,
+        ).payload()
 
     @server.resource("lesr://objects/{uid}")
     def object_resource(uid: str) -> str:
