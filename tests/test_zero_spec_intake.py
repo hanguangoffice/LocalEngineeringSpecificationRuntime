@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from lesr.adapters.git import GitCanonicalRepository
 from lesr.adapters.web import LocalWebRuntime
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WriteEnvelope
 from lesr.domain.semantic import uuid7_candidate
 from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService
 
@@ -233,7 +233,6 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
             actor=value["actor_uid"],
             delegation_uid=value["delegation_uid"],
             dry_run=False,
-            risk_class=RiskClass.HIGH,
             operation={
                 "configuration_uid": value["configuration_uid"],
                 "evaluation_time": datetime.now(UTC).isoformat(),

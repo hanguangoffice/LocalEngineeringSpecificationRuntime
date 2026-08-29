@@ -11,7 +11,7 @@ from mcp.types import ToolAnnotations
 
 from lesr.application.contracts import (
     LESRDomainPort,
-    RiskClass,
+    WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
@@ -144,6 +144,21 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             dict[str, Any], starter(bundle_hash, start_uid, max_depth).payload()
         )
 
+    @server.tool(name="workspace_validate", annotations=read_only, structured_output=True)
+    def assess_workspace(
+        workspace_uid: str,
+        evaluation_time: str,
+        maximum_depth: int = 3,
+    ) -> dict[str, Any]:
+        """Evaluate an editable Workspace without freezing or submitting it."""
+        return domain.assess_workspace(
+            WorkspaceAssessmentRequest(
+                workspace_uid=workspace_uid,
+                evaluation_time=evaluation_time,
+                maximum_depth=maximum_depth,
+            )
+        ).payload()
+
     @server.tool(name="workspace_submit", annotations=write, structured_output=True)
     def prepare_review(
         workspace_uid: str,
@@ -152,7 +167,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Run Profile-derived validation and create an immutable review package."""
@@ -164,7 +178,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -177,7 +190,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Open an isolated workspace through the standard write envelope."""
@@ -189,7 +201,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -202,7 +213,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Propose a structured semantic operation; no raw file write is exposed."""
@@ -214,7 +224,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -228,7 +237,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         method = getattr(domain, method_name, None)
@@ -244,7 +252,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    risk_class,
                     operation,
                 )
             ).payload(),
@@ -263,7 +270,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Rebase Working Copies through the deterministic three-way semantic engine."""
         return invoke_write_capability(
             "rebase_workspace", "workspace.rebase", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="workspace_merge", annotations=write, structured_output=True)
@@ -279,7 +286,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Merge another Workspace without treating a Git merge as authority."""
         return invoke_write_capability(
             "merge_workspace", "workspace.merge", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="workspace_resolve", annotations=write, structured_output=True)
@@ -295,7 +302,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Resolve one structured semantic merge conflict."""
         return invoke_write_capability(
             "resolve_merge_conflict", "workspace.resolve", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="review_record", annotations=write, structured_output=True)
@@ -321,7 +328,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             return _capability_unavailable(f"review.{record_type}")
         return invoke_write_capability(
             selected[0], selected[1], workspace_uid, expected_base, idempotency_key,
-            actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="reconciliation_open", annotations=write, structured_output=True)
@@ -337,7 +344,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Open a non-authoritative Workspace for a detected foreign Canonical diff."""
         return invoke_write_capability(
             "begin_reconciliation", "reconciliation.open", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="apply", annotations=atomic_apply, structured_output=True)
@@ -348,7 +355,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Apply an approved transaction with base and idempotency checks."""
@@ -360,7 +366,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -388,7 +393,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    RiskClass.HIGH,
                     operation,
                 )
             ).payload(),
@@ -417,7 +421,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    RiskClass.HIGH,
                     operation,
                 )
             ).payload(),
@@ -470,7 +473,6 @@ def _write(
     actor: str,
     delegation_uid: str,
     dry_run: bool,
-    risk_class: RiskClass,
     operation: dict[str, Any],
 ) -> WriteEnvelope:
     return WriteEnvelope(
@@ -480,7 +482,6 @@ def _write(
         actor,
         delegation_uid,
         dry_run,
-        risk_class,
         operation,
     )
 

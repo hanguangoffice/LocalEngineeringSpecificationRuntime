@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.merge import ForeignDiff
 from lesr.domain.review import CommentResolution, ReviewPackage, ReviewPolicy, StageQuorum
@@ -23,7 +23,6 @@ def envelope(
         "human-reviewer",
         "delegation-1",
         False,
-        RiskClass.HIGH,
         operation,
     )
 

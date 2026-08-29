@@ -1,7 +1,7 @@
 /* LESR human interface: engineering meaning in front, machine identity in audit. */
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const runtimeState = {
-  workspaceUid: null, base: null, actor: null, delegationUid: null,
+  workspaceUid: null, base: null, actor: null,
   configurationUid: null, packageUid: null, approval: null,
   reviewPurpose: null, flowIndex: 0, context: null,
   intakeRequest: null, intakeWorkspace: false, selectedItem: null,
@@ -239,7 +239,6 @@ const populateSession = (value) => {
       const option = create('option', '', `${actor.display_name}${roles ? ` · ${roles}` : ''}`);
       option.value = actor.actor_uid;
       option.dataset.keyUid = actor.key_uid || '';
-      option.dataset.delegationUid = actor.delegation_uid || '';
       option.dataset.roles = JSON.stringify(actor.roles || []);
       select.append(option);
     });
@@ -271,7 +270,6 @@ const populateSession = (value) => {
   const firstActor = value.actors[0];
   if (firstActor && !runtimeState.actor) {
     runtimeState.actor = firstActor.actor_uid;
-    runtimeState.delegationUid = firstActor.delegation_uid;
   }
   suggestEngineeringNumber(false);
   audit('会话上下文已自动解析', value);
@@ -422,7 +420,6 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.workspaceUid = value.workspace_uid;
     runtimeState.base = value.base_commit;
     runtimeState.actor = value.actor_uid;
-    runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
     runtimeState.intakeWorkspace = true;
     runtimeState.change.humanKey = value.requirement_count === 1
@@ -431,7 +428,6 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.change.reason = '从自然语言需求建立初始工程规格';
     await loadSession();
     runtimeState.actor = value.actor_uid;
-    runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
     const changeForm = document.querySelector('#workspace-compose-form');
     changeForm.querySelector('[name="human_key"]').value = value.human_keys[0] || 'REQ-SW-0001';
@@ -647,8 +643,7 @@ const envelope = (operation, overrides = {}) => ({
   workspace_uid: runtimeState.workspaceUid || overrides.workspaceUid || uid(),
   expected_base: runtimeState.base || overrides.base, idempotency_key: uid(),
   actor: runtimeState.actor || overrides.actor,
-  delegation_uid: runtimeState.delegationUid || overrides.delegationUid,
-  dry_run: false, risk_class: overrides.riskClass || 'high', operation,
+  dry_run: false, operation,
 });
 const advanceWorkspace = (state, guidance, progress) => {
   motion.stateChange('#workspace-state', state);
@@ -693,13 +688,13 @@ const findExistingItem = async (humanKey) => {
 };
 const openChangeWorkspace = async (data, actorOption) => {
   runtimeState.workspaceUid = uid(); runtimeState.actor = String(data.actor);
-  runtimeState.delegationUid = actorOption.dataset.delegationUid;
   runtimeState.configurationUid = String(data.configuration_uid);
   const value = await api('/api/workspace/open', {
     method: 'POST', body: JSON.stringify(envelope({
       type: 'open_workspace', configuration_uid: data.configuration_uid,
     })),
   });
+  runtimeState.workspaceUid = value.workspace_uid;
   audit('工作副本已建立', value);
 };
 const saveChangeContent = async (data) => {
@@ -715,7 +710,6 @@ const saveChangeContent = async (data) => {
       base_revision_number: Number(existing?.revision_number || 0),
       human_key: runtimeState.change.humanKey, kind: runtimeState.change.kind,
       facets: existing?.facets || [], effective_model_hash: 'bound-by-runtime',
-      delegation_uid: runtimeState.delegationUid,
       draft_fields: [{path: '/statement', value: runtimeState.change.statement}],
       draft_fragments: existing?.fragments || [], relation_proposals: [], edit_log: [],
     },
@@ -763,28 +757,33 @@ const renderReview = (value) => {
 const loadReviewPackage = async (packageUid) => {
   renderReview(await api(`/api/review-package/${encodeURIComponent(packageUid)}`));
 };
-const submitChangeWorkspace = async () => {
-  const value = await api('/api/workspace/submit', {
-    method: 'POST', body: JSON.stringify(envelope({
-      configuration_uid: runtimeState.configurationUid,
+const assessChangeWorkspace = async () => {
+  const value = await api('/api/workspace/validate', {
+    method: 'POST', body: JSON.stringify({
+      workspace_uid: runtimeState.workspaceUid,
       evaluation_time: new Date().toISOString(), maximum_depth: 3,
-    })),
+    }),
   });
-  runtimeState.packageUid = value.review_package.package_uid;
-  runtimeState.reviewPurpose = 'candidate'; runtimeState.approval = null;
-  runtimeState.intakeWorkspace = false;
-  advanceWorkspace('等待批准', '校验完成，请确认范围和理由。', 1);
+  const disposition = value.decision?.disposition || 'BLOCK';
+  const state = disposition === 'HUMAN_DECISION_NOW' ? '需要决定'
+    : disposition === 'BLOCK' ? '正在修正' : '检查通过';
+  const guidance = disposition === 'HUMAN_DECISION_NOW'
+    ? '存在需要你选择的工程取舍。'
+    : disposition === 'BLOCK'
+      ? '代理将根据校验结论继续修正。'
+      : '变更仍可继续编辑，代理可进入下一项工作。';
+  advanceWorkspace(state, guidance, disposition === 'BLOCK' ? .65 : 1);
   paintDecision(value.validation);
   document.querySelector('#workspace-output').replaceChildren(create('p', '',
-    `${runtimeState.change.humanKey} 已送交审阅。`));
-  motion.step(1); await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
+    `${runtimeState.change.humanKey} 已完成后台评估。`));
+  audit('工作副本评估完成', value);
 };
 document.querySelector('#workspace-compose-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
   const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
-  if (!data.configuration_uid || !data.actor || !actorOption?.dataset.delegationUid) {
+  if (!data.configuration_uid || !data.actor || !actorOption) {
     return toast('当前工程还没有可用的配置和操作人。');
   }
   const button = form.querySelector('button[type="submit"], button:not([type])');
@@ -794,11 +793,11 @@ document.querySelector('#workspace-compose-form').addEventListener('submit', asy
       await openChangeWorkspace(data, actorOption);
       await saveChangeContent(data);
     }
-    await submitChangeWorkspace();
+    await assessChangeWorkspace();
   } catch (error) {
     toast(error.message);
   } finally {
-    button.disabled = false; button.textContent = '检查并送审';
+    button.disabled = false; button.textContent = '评估变更';
   }
 });
 const addResultConfiguration = (uidValue) => {
@@ -878,9 +877,8 @@ document.querySelector('#baseline-form').addEventListener('submit', async (event
   const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
   if (!runtimeState.actor && actorOption?.value) {
     runtimeState.actor = actorOption.value;
-    runtimeState.delegationUid = actorOption.dataset.delegationUid;
   }
-  if (!runtimeState.actor || !runtimeState.delegationUid) {
+  if (!runtimeState.actor) {
     return toast('当前工程缺少可用的本机身份。');
   }
   try {

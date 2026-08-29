@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WorkspaceAssessmentRequest, WriteEnvelope
 from lesr.domain.approval import ApprovalPayload
 from lesr.domain.model import (
     FacetDefinitionRevision,
@@ -133,9 +133,71 @@ def _write(
         product.actor_uid,
         product.delegation_uid,
         False,
-        RiskClass.HIGH,
         operation,
     )
+
+
+def test_workspace_assessment_is_repeatable_editable_and_non_freezing(
+    tmp_path: Path,
+) -> None:
+    product = bootstrap_public_product(tmp_path)
+    opened = product.domain.open_workspace(
+        _write(product, "assessment-open", {"configuration_uid": product.configuration_uid})
+    )
+    assert opened.ok, opened.payload()
+    copy = WorkingCopy(
+        workspace_uid=product.workspace_uid,
+        object_uid="018f0000-0000-7000-8000-000000000989",
+        base_revision_uid=None,
+        human_key="DES-ASSESS-1",
+        kind="software_design",
+        effective_model_hash=str(opened.value["effective_model_hash"]),
+        delegation_uid=product.delegation_uid,
+        draft_fields=(SemanticField(path="/statement", value="Draft design"),),
+    )
+    edited = product.domain.propose_operation(
+        _write(
+            product,
+            "assessment-create",
+            {
+                "operation_type": "create_object",
+                "working_copy": copy.model_dump(mode="json"),
+            },
+        )
+    )
+    assert edited.ok, edited.payload()
+    evaluated_at = "2026-08-30T08:00:00Z"
+    request = WorkspaceAssessmentRequest(
+        workspace_uid=product.workspace_uid,
+        evaluation_time=evaluated_at,
+        maximum_depth=3,
+    )
+    first = product.domain.assess_workspace(request)
+    second = product.domain.assess_workspace(request)
+    assert first.ok, first.payload()
+    assert second.ok, second.payload()
+    assert first.value["candidate_frozen"] is False
+    assert first.value["workspace_state"] == "editable"
+    assert first.value["changes"] == second.value["changes"]
+    assert first.value["validation"]["outcome"] == second.value["validation"]["outcome"]
+    assert first.value["impact_report"]["paths"] == second.value["impact_report"]["paths"]
+    assert product.domain.workspaces[product.workspace_uid].state.value == "editable"
+    assert product.workspace_uid not in product.domain.submissions
+    assert not product.domain.reviews
+
+    continued = product.domain.propose_operation(
+        _write(
+            product,
+            "assessment-continue",
+            {
+                "operation_type": "set_field",
+                "object_uid": copy.object_uid,
+                "path": "/statement",
+                "value": "Refined after background assessment",
+            },
+        )
+    )
+    assert continued.ok, continued.payload()
 
 
 @pytest.mark.parametrize(

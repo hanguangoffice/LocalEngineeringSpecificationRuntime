@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 
 from lesr.adapters.git import GitCanonicalRepository
 from lesr.adapters.signer import sign_once
-from lesr.adapters.web import LocalWebRuntime
+from lesr.adapters.web import LocalWebRuntime, WebWriteRequest
+from lesr.application.contracts import (
+    DomainResult,
+    WorkspaceAssessmentRequest,
+    WriteEnvelope,
+)
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.semantic import semantic_hash
 from tests.support.public_product import bootstrap_public_product
@@ -111,7 +116,7 @@ def test_session_context_resolves_human_names_from_internal_identity(
     context = client.get("/api/session-context").json()
     assert context["configurations"][0]["name"] == "public-product"
     assert context["actors"][0]["display_name"] == "Root owner"
-    assert context["actors"][0]["delegation_uid"] == product.delegation_uid
+    assert "delegation_uid" not in context["actors"][0]
     assert {item["value"] for item in context["content_types"]} == {
         "software_requirement",
         "software_design",
@@ -124,6 +129,105 @@ def test_session_context_resolves_human_names_from_internal_identity(
     assert "can_analysis" not in str(context)
     assert "mqtt_change" not in str(context)
     assert context["audit"]["canonical_commit"] == product.domain.base
+
+
+def test_web_write_request_uses_server_resolved_delegation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = bootstrap_public_product(tmp_path)
+    received: list[WriteEnvelope] = []
+
+    def open_workspace(request: WriteEnvelope) -> DomainResult:
+        received.append(request)
+        return DomainResult({"workspace_uid": request.workspace_uid})
+
+    monkeypatch.setattr(product.domain, "open_workspace", open_workspace)
+    runtime = LocalWebRuntime(
+        product.domain.project,
+        product.domain,
+        launch_token="server-delegation-token",
+    )
+    client = TestClient(runtime.app)
+    unlocked_response = client.get(
+        "/unlock?token=server-delegation-token", follow_redirects=False
+    )
+    assert unlocked_response.status_code == 303
+    page = client.get("/")
+    csrf_match = re.search(r'name="csrf-token" content="([^"]+)"', page.text)
+    assert csrf_match is not None
+
+    assert "risk_class" not in WebWriteRequest.model_fields
+    assert "delegation_uid" not in WebWriteRequest.model_fields
+    response = client.post(
+        "/api/workspace/open",
+        headers={"X-LESR-CSRF": csrf_match.group(1)},
+        json={
+            "workspace_uid": product.workspace_uid,
+            "expected_base": product.domain.base,
+            "idempotency_key": "web-open-with-server-delegation",
+            "actor": product.actor_uid,
+            "dry_run": True,
+            "operation": {"configuration_uid": product.configuration_uid},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"workspace_uid": product.workspace_uid}
+    assert received[0].delegation_uid == product.delegation_uid
+
+
+def test_workspace_validate_calls_read_only_assessment_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = bootstrap_public_product(tmp_path)
+    received: list[WorkspaceAssessmentRequest] = []
+
+    def assess_workspace(request: WorkspaceAssessmentRequest) -> DomainResult:
+        received.append(request)
+        return DomainResult(
+            {
+                "workspace_uid": request.workspace_uid,
+                "assessment_mode": "preview",
+            }
+        )
+
+    monkeypatch.setattr(product.domain, "assess_workspace", assess_workspace)
+    runtime = LocalWebRuntime(
+        product.domain.project,
+        product.domain,
+        launch_token="workspace-assessment-token",
+    )
+    client = TestClient(runtime.app)
+    unlocked_response = client.get(
+        "/unlock?token=workspace-assessment-token", follow_redirects=False
+    )
+    assert unlocked_response.status_code == 303
+    page = client.get("/")
+    csrf_match = re.search(r'name="csrf-token" content="([^"]+)"', page.text)
+    assert csrf_match is not None
+
+    response = client.post(
+        "/api/workspace/validate",
+        headers={"X-LESR-CSRF": csrf_match.group(1)},
+        json={
+            "workspace_uid": product.workspace_uid,
+            "evaluation_time": "2026-08-30T12:00:00Z",
+            "maximum_depth": 5,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "workspace_uid": product.workspace_uid,
+        "assessment_mode": "preview",
+    }
+    assert received == [
+        WorkspaceAssessmentRequest(
+            workspace_uid=product.workspace_uid,
+            evaluation_time="2026-08-30T12:00:00Z",
+            maximum_depth=5,
+        )
+    ]
 
 
 def test_engineering_search_finds_working_drafts_by_partial_text(

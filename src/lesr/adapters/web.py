@@ -27,7 +27,11 @@ from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.pdf_import import preview_pdf
 from lesr.adapters.signer import sign_once
-from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
+from lesr.application.contracts import (
+    LESRDomainPort,
+    WorkspaceAssessmentRequest,
+    WriteEnvelope,
+)
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalPayload, TrustedActor
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
@@ -78,22 +82,14 @@ class WebWriteRequest(BaseModel):
     expected_base: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
     actor: str = Field(min_length=1)
-    delegation_uid: str = Field(min_length=1)
     dry_run: bool = False
-    risk_class: RiskClass
     operation: dict[str, Any]
 
-    def envelope(self) -> WriteEnvelope:
-        return WriteEnvelope(
-            self.workspace_uid,
-            self.expected_base,
-            self.idempotency_key,
-            self.actor,
-            self.delegation_uid,
-            self.dry_run,
-            self.risk_class,
-            self.operation,
-        )
+
+class WorkspaceValidateRequest(BaseModel):
+    workspace_uid: str = Field(min_length=1)
+    evaluation_time: str = Field(min_length=1)
+    maximum_depth: int = Field(default=3, ge=1, le=16)
 
 
 class LocalWebRuntime:
@@ -367,7 +363,9 @@ class LocalWebRuntime:
             request: Request, value: WebWriteRequest
         ) -> dict[str, Any]:
             self._mutation_session(request)
-            return self._value_or_error(self.domain.open_workspace(value.envelope()).payload())
+            return self._value_or_error(
+                self.domain.open_workspace(self._write_envelope(value)).payload()
+            )
 
         @app.post("/api/workspace/edit")
         async def workspace_edit(
@@ -375,15 +373,29 @@ class LocalWebRuntime:
         ) -> dict[str, Any]:
             self._mutation_session(request)
             return self._value_or_error(
-                self.domain.propose_operation(value.envelope()).payload()
+                self.domain.propose_operation(self._write_envelope(value)).payload()
             )
+
+        @app.post("/api/workspace/validate")
+        async def workspace_validate(
+            request: Request, value: WorkspaceValidateRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            assessment = WorkspaceAssessmentRequest(
+                workspace_uid=value.workspace_uid,
+                evaluation_time=value.evaluation_time,
+                maximum_depth=value.maximum_depth,
+            )
+            return self._value_or_error(self.domain.assess_workspace(assessment).payload())
 
         @app.post("/api/workspace/submit")
         async def workspace_submit(
             request: Request, value: WebWriteRequest
         ) -> dict[str, Any]:
             self._mutation_session(request)
-            return self._value_or_error(self.domain.prepare_review(value.envelope()).payload())
+            return self._value_or_error(
+                self.domain.prepare_review(self._write_envelope(value)).payload()
+            )
 
         @app.post("/api/workspace/rebase")
         async def workspace_rebase(
@@ -443,7 +455,7 @@ class LocalWebRuntime:
         async def apply(request: Request, value: WebWriteRequest) -> dict[str, Any]:
             self._mutation_session(request)
             return self._value_or_error(
-                self.domain.apply_transaction(value.envelope()).payload()
+                self.domain.apply_transaction(self._write_envelope(value)).payload()
             )
 
         @app.post("/api/baseline/prepare")
@@ -454,7 +466,7 @@ class LocalWebRuntime:
             capability = getattr(self.domain, "prepare_baseline", None)
             if not callable(capability):
                 raise HTTPException(status_code=404, detail="baseline.prepare unavailable")
-            return self._value_or_error(capability(value.envelope()).payload())
+            return self._value_or_error(capability(self._write_envelope(value)).payload())
 
         @app.post("/api/baseline/apply")
         async def baseline_apply(
@@ -464,7 +476,7 @@ class LocalWebRuntime:
             capability = getattr(self.domain, "apply_baseline", None)
             if not callable(capability):
                 raise HTTPException(status_code=404, detail="baseline.apply unavailable")
-            return self._value_or_error(capability(value.envelope()).payload())
+            return self._value_or_error(capability(self._write_envelope(value)).payload())
 
         @app.get("/api/tasks")
         async def tasks(request: Request) -> list[dict[str, Any]]:
@@ -541,7 +553,45 @@ class LocalWebRuntime:
         method = getattr(self.domain, method_name, None)
         if not callable(method):
             raise HTTPException(status_code=404, detail=f"{capability} unavailable")
-        return self._value_or_error(method(value.envelope()).payload())
+        return self._value_or_error(method(self._write_envelope(value)).payload())
+
+    def _write_envelope(self, value: WebWriteRequest) -> WriteEnvelope:
+        return WriteEnvelope(
+            workspace_uid=value.workspace_uid,
+            expected_base=value.expected_base,
+            idempotency_key=value.idempotency_key,
+            actor=value.actor,
+            delegation_uid=self._delegation_uid(value.actor, value.workspace_uid),
+            dry_run=value.dry_run,
+            operation=value.operation,
+        )
+
+    def _delegation_uid(self, actor_uid: str, workspace_uid: str) -> str:
+        # The browser names the work it is editing, not an authority token.
+        # Repository/Mission authority is resolved here from the authenticated
+        # local actor.  The legacy Grant workspace field remains a bootstrap
+        # anchor until MissionMandate becomes the active execution authority.
+        del workspace_uid
+        try:
+            documents = GitCanonicalRepository(self.project).documents()
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        grants = sorted(
+            (
+                value
+                for _, value in documents
+                if value.get("resource_type") == "delegation_grant"
+                and value.get("principal_uid") == actor_uid
+            ),
+            key=lambda value: str(value.get("issued_at", "")),
+            reverse=True,
+        )
+        if not grants:
+            raise HTTPException(
+                status_code=403,
+                detail="当前身份没有此工作区的自动执行授权",
+            )
+        return str(grants[0]["delegation_uid"])
 
     def _mutation_session(self, request: Request) -> WebSession:
         session = self._session(request)
@@ -639,12 +689,6 @@ class LocalWebRuntime:
             ),
             reverse=True,
         )
-        delegations = tuple(
-            value
-            for value in documents
-            if value.get("resource_type") == "delegation_grant"
-            and not value.get("stop_conditions")
-        )
         actors: list[dict[str, Any]] = []
         for value in documents:
             if value.get("resource_type") != "trusted_actor" or value.get(
@@ -652,23 +696,12 @@ class LocalWebRuntime:
             ):
                 continue
             actor_uid = str(value.get("actor_uid", ""))
-            delegation = next(
-                (
-                    item
-                    for item in delegations
-                    if item.get("principal_uid") == actor_uid
-                ),
-                None,
-            )
             actors.append(
                 {
                     "display_name": value.get("display_name") or "本机用户",
                     "roles": value.get("roles", []),
                     "actor_uid": actor_uid,
                     "key_uid": value.get("key_uid"),
-                    "delegation_uid": (
-                        delegation.get("delegation_uid") if delegation is not None else None
-                    ),
                 }
             )
         kinds_by_name: dict[str, dict[str, str]] = {}
@@ -747,7 +780,7 @@ class LocalWebRuntime:
                 key_root=self.signer_key_root,
                 key_password=self.signer_password,
             ).ensure(value.display_name)
-            workspace_uid = uuid7_candidate()
+            workspace_uid = str(identity["workspace_uid"])
             actor_uid = str(identity["actor_uid"])
             delegation_uid = str(identity["delegation_uid"])
             configuration_uid = str(identity["configuration_uid"])
@@ -759,7 +792,6 @@ class LocalWebRuntime:
                     actor=actor_uid,
                     delegation_uid=delegation_uid,
                     dry_run=False,
-                    risk_class=RiskClass.MEDIUM,
                     operation={
                         "type": "open_workspace",
                         "configuration_uid": configuration_uid,
@@ -791,7 +823,6 @@ class LocalWebRuntime:
                         actor=actor_uid,
                         delegation_uid=delegation_uid,
                         dry_run=False,
-                        risk_class=RiskClass.MEDIUM,
                         operation={
                             "operation_type": "create_object",
                             "working_copy": working_copy.model_dump(mode="json"),

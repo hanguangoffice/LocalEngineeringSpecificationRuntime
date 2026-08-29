@@ -63,9 +63,9 @@ class DomainErrorContract:
 
     def __post_init__(self) -> None:
         if self.suggested_capability is not None:
-            from lesr.domain.catalog import CAPABILITIES
+            from lesr.domain.catalog import RUNTIME_CAPABILITIES
 
-            names = {item.name for item in CAPABILITIES}
+            names = {item.name for item in RUNTIME_CAPABILITIES}
             if self.suggested_capability not in names:
                 raise ValueError(
                     f"unknown suggested capability: {self.suggested_capability}"
@@ -95,8 +95,16 @@ class WriteEnvelope:
     actor: str
     delegation_uid: str
     dry_run: bool
-    risk_class: RiskClass
     operation: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceAssessmentRequest:
+    """Read-only request for evaluating an editable Workspace in place."""
+
+    workspace_uid: str
+    evaluation_time: str
+    maximum_depth: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +157,8 @@ class LESRDomainPort(Protocol):
     def open_workspace(self, request: WriteEnvelope) -> DomainResult: ...
 
     def propose_operation(self, request: WriteEnvelope) -> DomainResult: ...
+
+    def assess_workspace(self, request: WorkspaceAssessmentRequest) -> DomainResult: ...
 
     def prepare_review(self, request: WriteEnvelope) -> DomainResult: ...
 
@@ -395,12 +405,34 @@ class InMemoryDomainService:
         proposal = {
             "workspace_uid": request.workspace_uid,
             "operation": request.operation,
-            "risk_class": request.risk_class,
             "dry_run": request.dry_run,
         }
         if not request.dry_run:
             self.workspaces[request.workspace_uid]["operations"].append(request.operation)
         return DomainResult(proposal)
+
+    def assess_workspace(self, request: WorkspaceAssessmentRequest) -> DomainResult:
+        if request.workspace_uid not in self.workspaces:
+            return self._error(
+                "LESR-WORKSPACE-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "workspace does not exist",
+                (request.workspace_uid,),
+                suggested="workspace.open",
+            )
+        if not request.evaluation_time or not 0 <= request.maximum_depth <= 16:
+            return self._error(
+                "LESR-WORKSPACE-ASSESSMENT-INVALID",
+                ErrorCategory.VALIDATION,
+                "evaluation_time is required and maximum_depth must be between 0 and 16",
+                (request.workspace_uid,),
+            )
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot produce authoritative workspace assessment evidence",
+            (request.workspace_uid,),
+        )
 
     def prepare_review(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=True)
@@ -441,6 +473,51 @@ class InMemoryDomainService:
             "LESR-ADAPTER-ONLY",
             ErrorCategory.INDETERMINATE,
             "the in-memory adapter cannot initialize Canonical governance",
+        )
+
+    def create_configuration(
+        self,
+        configuration: dict[str, Any],
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+        supporting_approvals: tuple[dict[str, Any], ...] = (),
+    ) -> DomainResult:
+        del (
+            configuration,
+            approval,
+            actor_uid,
+            delegation_uid,
+            idempotency_key,
+            supporting_approvals,
+        )
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot create Canonical configurations",
+        )
+
+    def plan_configuration(self, configuration: dict[str, Any]) -> DomainResult:
+        del configuration
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot plan Canonical configurations",
+        )
+
+    def record_governance_approval(
+        self,
+        approval: dict[str, Any],
+        actor_uid: str,
+        delegation_uid: str,
+        idempotency_key: str,
+    ) -> DomainResult:
+        del approval, actor_uid, delegation_uid, idempotency_key
+        return self._error(
+            "LESR-ADAPTER-ONLY",
+            ErrorCategory.INDETERMINATE,
+            "the in-memory adapter cannot record Canonical governance approvals",
         )
 
     def apply_transaction(self, request: WriteEnvelope) -> DomainResult:

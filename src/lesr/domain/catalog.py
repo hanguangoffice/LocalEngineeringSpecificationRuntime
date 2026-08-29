@@ -153,6 +153,25 @@ CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
     )
 )
 
+# RepositoryManifest.capabilities is the frozen 1.0 Canonical repository
+# contract above.  Runtime-only capabilities may evolve without rewriting a
+# project's engineering history or invalidating its existing Manifest.
+RUNTIME_CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
+    sorted(
+        (
+            *CAPABILITIES,
+            RuntimeCapability(
+                name="workspace.validate",
+                access=CapabilityAccess.READ,
+                cli=True,
+                mcp=True,
+                persistent_task=False,
+            ),
+        ),
+        key=lambda item: item.name,
+    )
+)
+
 
 class RepositoryManifest(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"

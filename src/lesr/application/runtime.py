@@ -34,6 +34,7 @@ from lesr.application.contracts import (
     DomainErrorContract,
     DomainResult,
     ErrorCategory,
+    WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
 from lesr.domain.approval import (
@@ -42,7 +43,8 @@ from lesr.domain.approval import (
     verify_approval,
     verify_bound_approval,
 )
-from lesr.domain.catalog import CAPABILITIES
+from lesr.domain.catalog import RUNTIME_CAPABILITIES
+from lesr.domain.decision import DecisionDisposition
 from lesr.domain.evaluation import (
     ConstraintEnvironment,
     ConstraintExpression,
@@ -139,6 +141,7 @@ from lesr.domain.workspace import (
     Workspace,
     WorkspaceCheckpoint,
     WorkspaceEngine,
+    WorkspacePreview,
 )
 
 
@@ -171,7 +174,7 @@ class LocalRuntimeService:
             CapabilityGroup.GOVERNANCE: [],
             CapabilityGroup.COMPLIANCE: [],
         }
-        for capability in CAPABILITIES:
+        for capability in RUNTIME_CAPABILITIES:
             prefix = capability.name.split(".", 1)[0]
             group = (
                 CapabilityGroup.RESOLVE
@@ -803,6 +806,91 @@ class LocalRuntimeService:
                 str(error),
             )
 
+    def assess_workspace(self, request: WorkspaceAssessmentRequest) -> DomainResult:
+        """Evaluate an editable Working Copy without freezing or checkpointing it."""
+
+        workspace = self.workspaces.get(request.workspace_uid)
+        if workspace is None:
+            return self._error(
+                "LESR-WORKSPACE-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "workspace does not exist",
+                (request.workspace_uid,),
+                suggested="workspace.open",
+            )
+        if not 1 <= request.maximum_depth <= 16:
+            return self._error(
+                "LESR-WORKSPACE-ASSESSMENT-INVALID",
+                ErrorCategory.VALIDATION,
+                "maximum_depth must be between 1 and 16",
+                (request.workspace_uid,),
+            )
+        try:
+            evaluation_time = self._parse_evaluation_time(request.evaluation_time)
+            canonical_evaluator = self._evaluator(
+                workspace.configuration_uid, evaluation_time
+            )
+            self._validate_requested_transitions(
+                workspace, canonical_evaluator, workspace.actor_uid
+            )
+            lifecycle_states = self._workspace_lifecycle_states(
+                workspace, canonical_evaluator
+            )
+            preview = WorkspaceEngine.preview(
+                workspace,
+                actor_uid=workspace.actor_uid,
+                previewed_at=evaluation_time,
+                base_revisions=self._canonical_revisions(),
+                lifecycle_states=lifecycle_states,
+            )
+            transient = self._submission_from_preview(preview)
+            evaluator = self._evaluator(
+                workspace.configuration_uid,
+                evaluation_time,
+                submission=transient,
+            )
+            context = self._candidate_context(transient, evaluator)
+            impact = analyze_impact(
+                evaluator,
+                preview.scope,
+                maximum_depth=request.maximum_depth,
+            )
+            validation = self._validate_submission(transient, evaluator)
+            decision = self._assessment_decision(validation, impact.completeness.value)
+            return DomainResult(
+                {
+                    "workspace_uid": workspace.workspace_uid,
+                    "workspace_state": workspace.state.value,
+                    "candidate_frozen": False,
+                    "evaluation_time": evaluation_time.isoformat().replace("+00:00", "Z"),
+                    "change_scope": preview.scope,
+                    "changes": tuple(
+                        item.model_dump(mode="json") for item in preview.changes
+                    ),
+                    "context_bundle": context.model_dump(mode="json"),
+                    "impact_report": impact.model_dump(mode="json"),
+                    "validation": validation,
+                    "decision": decision,
+                    "audit": {
+                        "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                        "working_state": tuple(
+                            {
+                                "human_key": item.human_key,
+                                "working_state_hash": item.working_state_hash,
+                            }
+                            for item in workspace.working_copies
+                        ),
+                    },
+                }
+            )
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
+            return self._error(
+                "LESR-WORKSPACE-ASSESSMENT-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (request.workspace_uid,),
+            )
+
     def prepare_review(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=True)
         if error:
@@ -816,25 +904,15 @@ class LocalRuntimeService:
             self._validate_requested_transitions(
                 workspace, canonical_evaluator, request.actor
             )
-            lifecycle_states = tuple(
-                (
-                    copy.object_uid,
-                    canonical_evaluator.nodes[copy.object_uid].lifecycle_state
-                    if copy.object_uid in canonical_evaluator.nodes
-                    else self._initial_state_for_kind(copy.kind),
-                )
-                for copy in workspace.working_copies
+            lifecycle_states = self._workspace_lifecycle_states(
+                workspace, canonical_evaluator
             )
             submission = WorkspaceEngine.submit(
                 workspace,
                 checkpoint_uid=uuid7_candidate(),
                 actor_uid=request.actor,
                 submitted_at=evaluation_time,
-                base_revisions=tuple(
-                    Revision.model_validate(value)
-                    for value in self.documents
-                    if value.get("resource_type") == "revision"
-                ),
+                base_revisions=self._canonical_revisions(),
                 lifecycle_states=lifecycle_states,
             )
             evaluator = self._evaluator(
@@ -842,29 +920,7 @@ class LocalRuntimeService:
                 evaluation_time,
                 submission=submission,
             )
-            model = self._effective_model(submission.workspace.configuration_uid)
-            review_context_policies = [
-                item for item in model.context_policies if item.task_type in {"review", "*"}
-            ]
-            exact_review_context = [
-                item for item in review_context_policies if item.task_type == "review"
-            ]
-            selected_review_context = exact_review_context or [
-                item for item in review_context_policies if item.task_type == "*"
-            ]
-            if len(selected_review_context) != 1:
-                raise ValueError(
-                    "Effective Model must define exactly one review Context Policy"
-                )
-            context = plan_context(
-                evaluator,
-                (submission.candidate.revisions[0].object_uid,),
-                selected_review_context[0].mandatory_predicates,
-                token_limit=500,
-                conditional_predicates=selected_review_context[0].conditional_predicates,
-                mandatory_formal_trace=selected_review_context[0].mandatory_formal_trace,
-                forbidden_sensitivities=selected_review_context[0].forbidden_sensitivities,
-            )
+            context = self._candidate_context(submission, evaluator)
             self.task_store.put_artifact(
                 context.bundle_hash,
                 {
@@ -2402,6 +2458,146 @@ class LocalRuntimeService:
         value["content_hash"] = semantic_hash(value)
         return value
 
+    def _canonical_revisions(self) -> tuple[Revision, ...]:
+        return tuple(
+            Revision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "revision"
+        )
+
+    def _workspace_lifecycle_states(
+        self,
+        workspace: Workspace,
+        canonical_evaluator: SemanticEvaluator,
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (
+                copy.object_uid,
+                canonical_evaluator.nodes[copy.object_uid].lifecycle_state
+                if copy.object_uid in canonical_evaluator.nodes
+                else self._initial_state_for_kind(copy.kind),
+            )
+            for copy in workspace.working_copies
+        )
+
+    def _submission_from_preview(self, preview: WorkspacePreview) -> Any:
+        """Adapt transient preview content to the existing pure evaluator.
+
+        The evaluator currently consumes Revision-shaped nodes.  These stable,
+        process-local identities are never returned as candidate resources and
+        never enter a Workspace ref or Canonical Git.
+        """
+
+        state_by_object = {
+            item.object_uid: item.working_state_hash
+            for item in preview.workspace.working_copies
+        }
+        revisions = tuple(
+            Revision.model_validate(
+                item.model_dump(mode="python")
+                | {
+                    "revision_uid": self._stable_uuid7(
+                        "preview:revision:"
+                        f"{preview.workspace.workspace_uid}:{item.object_uid}:"
+                        f"{state_by_object[item.object_uid]}",
+                        preview.previewed_at,
+                    )
+                }
+            )
+            for item in preview.revision_previews
+        )
+        lifecycle_records = tuple(
+            ImmutableRecord.model_validate(
+                item.model_dump(mode="python")
+                | {
+                    "record_uid": self._stable_uuid7(
+                        "preview:lifecycle:"
+                        f"{preview.workspace.workspace_uid}:{item.subject_uid}:"
+                        f"{state_by_object[item.subject_uid]}",
+                        preview.previewed_at,
+                    )
+                }
+            )
+            for item in preview.lifecycle_record_previews
+        )
+        overlay_hash = semantic_hash(
+            {
+                "workspace_uid": preview.workspace.workspace_uid,
+                "previewed_at": preview.previewed_at.isoformat(),
+                "working_states": tuple(sorted(state_by_object.items())),
+            }
+        )
+        candidate = SimpleNamespace(
+            revisions=revisions,
+            relation_revisions=preview.relation_proposals,
+            lifecycle_records=lifecycle_records,
+            candidate_hash=overlay_hash,
+            checkpoint_uid=f"preview:{preview.workspace.workspace_uid}",
+        )
+        diff = SimpleNamespace(
+            changes=preview.changes,
+            scope=preview.scope,
+        )
+        return SimpleNamespace(
+            workspace=preview.workspace,
+            candidate=candidate,
+            semantic_diff=diff,
+        )
+
+    def _candidate_context(
+        self,
+        submission: Any,
+        evaluator: SemanticEvaluator,
+    ) -> Any:
+        model = self._effective_model(submission.workspace.configuration_uid)
+        policies = [
+            item for item in model.context_policies if item.task_type in {"review", "*"}
+        ]
+        exact = [item for item in policies if item.task_type == "review"]
+        selected = exact or [item for item in policies if item.task_type == "*"]
+        if len(selected) != 1:
+            raise ValueError("Effective Model must define exactly one review Context Policy")
+        if not submission.candidate.revisions:
+            raise ValueError("Workspace assessment requires at least one Working Copy")
+        policy = selected[0]
+        return plan_context(
+            evaluator,
+            (submission.candidate.revisions[0].object_uid,),
+            policy.mandatory_predicates,
+            token_limit=500,
+            conditional_predicates=policy.conditional_predicates,
+            mandatory_formal_trace=policy.mandatory_formal_trace,
+            forbidden_sensitivities=policy.forbidden_sensitivities,
+        )
+
+    @staticmethod
+    def _assessment_decision(
+        validation: dict[str, Any],
+        impact_completeness: str,
+    ) -> dict[str, Any]:
+        operation = validation.get("operation_decision", {})
+        operation_disposition = str(operation.get("disposition", "indeterminate"))
+        reasons = [str(item) for item in operation.get("reasons", ())]
+        if validation.get("outcome") != "pass" or operation_disposition in {
+            "block",
+            "indeterminate",
+        }:
+            disposition = DecisionDisposition.BLOCK
+            reasons.append("WORKSPACE_REQUIRES_AGENT_REPAIR")
+        elif impact_completeness != "COMPLETE":
+            disposition = DecisionDisposition.BLOCK
+            reasons.append(f"IMPACT_{impact_completeness}")
+        elif operation_disposition == "requires_governance":
+            disposition = DecisionDisposition.HUMAN_DECISION_NOW
+            reasons.append("ENGINEERING_POLICY_REQUIRES_HUMAN_DECISION")
+        else:
+            disposition = DecisionDisposition.AUTO_EXECUTE
+            reasons.append("WITHIN_ACTIVE_ENGINEERING_POLICY")
+        return {
+            "disposition": disposition.value,
+            "reasons": tuple(sorted(set(reasons))),
+        }
+
     def _evaluator(
         self,
         configuration_uid: str,
@@ -3153,7 +3349,15 @@ class LocalRuntimeService:
                     submission.workspace.workspace_uid,
                     {
                         "operation": ValueCell.present("apply_transaction"),
-                        "risk_class": ValueCell.present("high"),
+                        "risk_class": ValueCell.present(
+                            self._derived_impact_class(submission)
+                        ),
+                        "changed_resource_count": ValueCell.present(
+                            len(submission.candidate.revisions)
+                        ),
+                        "changed_relation_count": ValueCell.present(
+                            len(submission.candidate.relation_revisions)
+                        ),
                     },
                 ),
             )
@@ -3385,6 +3589,34 @@ class LocalRuntimeService:
             "validation_hash": run.content_hash,
             "validation_run": run.model_dump(mode="json"),
         }
+
+    @staticmethod
+    def _derived_impact_class(submission: Any) -> str:
+        """Classify semantic impact without accepting an adapter-provided label."""
+
+        semantic_diff = getattr(submission, "semantic_diff", None)
+        changes = tuple(getattr(semantic_diff, "changes", ()))
+        governed_definition_kinds = {
+            "kind_definition",
+            "facet_definition",
+            "relation_type_definition",
+            "workflow_definition",
+            "normative_profile",
+            "rule_definition",
+            "deviation",
+        }
+        if (
+            any(item.change_type in {"delete", "transition"} for item in changes)
+            or any(
+                item.kind in governed_definition_kinds
+                for item in submission.candidate.revisions
+            )
+            or len(submission.candidate.revisions) > 25
+        ):
+            return "high"
+        if submission.candidate.relation_revisions or len(submission.candidate.revisions) > 5:
+            return "medium"
+        return "low"
 
     @staticmethod
     def _stable_uuid7(seed: str, occurred_at: datetime) -> str:

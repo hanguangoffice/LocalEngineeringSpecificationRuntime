@@ -5,6 +5,7 @@ import inspect
 import sys
 from pathlib import Path
 
+import pytest
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -12,7 +13,7 @@ from lesr.adapters.mcp import create_server
 from lesr.application import contracts
 from lesr.application.contracts import (
     InMemoryDomainService,
-    RiskClass,
+    WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
 
@@ -23,7 +24,6 @@ REQUIRED_WRITE_FIELDS = {
     "actor",
     "delegation_uid",
     "dry_run",
-    "risk_class",
     "operation",
 }
 
@@ -41,7 +41,6 @@ def write(
         actor="USER-1",
         delegation_uid="DEL-1",
         dry_run=False,
-        risk_class=RiskClass.HIGH,
         operation=operation or {"type": "create_revision"},
     )
 
@@ -81,7 +80,9 @@ def test_workspace_apply_requires_review_and_is_idempotent() -> None:
     domain = InMemoryDomainService()
     opened = domain.open_workspace(write()).payload()
     assert opened["ok"]
-    assert domain.propose_operation(write(key="KEY-2")).ok
+    proposal = domain.propose_operation(write(key="KEY-2"))
+    assert proposal.ok
+    assert "risk_class" not in proposal.value
     missing_approval = domain.apply_transaction(write(key="KEY-3")).payload()
     assert missing_approval["error"]["code"] == "LESR-APPROVAL-REQUIRED"
     approved = write(
@@ -96,6 +97,39 @@ def test_workspace_apply_requires_review_and_is_idempotent() -> None:
     assert result["result_commit"] == "commit-2"
     replay = domain.apply_transaction(approved).payload()["value"]
     assert replay["idempotent_replay"]
+
+
+def test_workspace_assessment_contract_is_read_only_and_has_no_caller_authority() -> None:
+    domain = InMemoryDomainService()
+    domain.open_workspace(write())
+    before = dict(domain.workspaces["WS-1"])
+    request = WorkspaceAssessmentRequest(
+        workspace_uid="WS-1",
+        evaluation_time="2026-08-05T00:00:00Z",
+        maximum_depth=3,
+    )
+
+    result = domain.assess_workspace(request)
+
+    assert result.payload()["error"]["code"] == "LESR-ADAPTER-ONLY"
+    assert domain.workspaces["WS-1"] == before
+    assert set(inspect.signature(WorkspaceAssessmentRequest).parameters) == {
+        "workspace_uid",
+        "evaluation_time",
+        "maximum_depth",
+    }
+    assert "risk_class" not in inspect.signature(WriteEnvelope).parameters
+    with pytest.raises(TypeError, match="risk_class"):
+        WriteEnvelope(  # type: ignore[call-arg]
+            workspace_uid="WS-2",
+            expected_base="commit-1",
+            idempotency_key="KEY-RISK",
+            actor="USER-1",
+            delegation_uid="DEL-1",
+            dry_run=False,
+            risk_class="high",
+            operation={"type": "create_revision"},
+        )
 
 
 def test_long_task_contract_is_protocol_independent() -> None:
@@ -117,6 +151,7 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
         "traverse",
         "impact",
         "context_plan",
+        "workspace_validate",
         "workspace_open",
         "workspace_edit",
         "workspace_submit",
@@ -140,7 +175,16 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
     ):
         properties = set(tools[name].inputSchema["properties"])
         assert REQUIRED_WRITE_FIELDS <= properties
+        assert "risk_class" not in properties
         assert not {"sql", "path", "shell", "command"} & properties
+    assessment = tools["workspace_validate"]
+    assert set(assessment.inputSchema["properties"]) == {
+        "workspace_uid",
+        "evaluation_time",
+        "maximum_depth",
+    }
+    assert assessment.annotations is not None
+    assert assessment.annotations.readOnlyHint is True
     templates = asyncio.run(server.list_resource_templates())
     assert any(str(item.uriTemplate).startswith("lesr://objects/") for item in templates)
 
