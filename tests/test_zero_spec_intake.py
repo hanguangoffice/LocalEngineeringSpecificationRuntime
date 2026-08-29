@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lesr.adapters.git import GitCanonicalRepository
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.web import LocalWebRuntime
 from lesr.application.contracts import WriteEnvelope
 from lesr.domain.semantic import uuid7_candidate
@@ -225,6 +226,30 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
     assert "configuration_snapshot" in canonical_types
     assert not any(item.get("resource_type") == "revision" for item in runtime.domain.documents)
     assert all(item.state.value == "editable" for item in workspace.working_copies)
+    assert {item.kind for item in workspace.working_copies} == {
+        "functional_requirement",
+        "constraint_requirement",
+        "test_case",
+        "safety_requirement",
+    }
+    kind_definitions = {
+        str(item["name"]): str(item["revision_uid"])
+        for item in runtime.domain.documents
+        if item.get("resource_type") == "kind_definition_revision"
+    }
+    assert set(value["content_types"]) == set(kind_definitions)
+    mapping = PresentationMappingStore(runtime.project).latest_for_pack(
+        "local-ai-runtime"
+    )
+    assert mapping is not None
+    assert value["engineering_areas"] == [
+        item.label for item in mapping.engineering_areas
+    ]
+    assert {
+        uid
+        for area in mapping.engineering_areas
+        for uid in area.selector.kind_definition_revision_uids
+    } == set(kind_definitions.values())
     review = runtime.domain.prepare_review(
         WriteEnvelope(
             workspace_uid=value["workspace_uid"],

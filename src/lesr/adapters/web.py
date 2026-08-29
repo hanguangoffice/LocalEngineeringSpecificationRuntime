@@ -26,6 +26,7 @@ from lesr.adapters.git import GitCanonicalRepository, IntegrityError
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.pdf_import import preview_pdf
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.signer import sign_once
 from lesr.application.contracts import (
     LESRDomainPort,
@@ -38,6 +39,7 @@ from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import SemanticField, uuid7_candidate
 from lesr.domain.workspace import WorkingCopy
 from lesr.intake.bootstrap import IntakeBootstrapper
+from lesr.intake.engineering_model import engineering_model_for
 from lesr.intake.models import IntakeRequest
 from lesr.intake.service import IntakeService
 
@@ -775,11 +777,20 @@ class LocalWebRuntime:
         )
         runtime = self.domain
         try:
-            identity = IntakeBootstrapper(
+            bootstrapper = IntakeBootstrapper(
                 runtime,
                 key_root=self.signer_key_root,
                 key_password=self.signer_password,
-            ).ensure(value.display_name)
+            )
+            identity = bootstrapper.ensure(value.display_name, analysis.selected_pack)
+            engineering_model = engineering_model_for(analysis.selected_pack)
+            presentation_mapping = bootstrapper.presentation_mapping(
+                analysis.selected_pack
+            )
+            PresentationMappingStore(self.project).put(
+                analysis.selected_pack.pack_uid,
+                presentation_mapping,
+            )
             workspace_uid = str(identity["workspace_uid"])
             actor_uid = str(identity["actor_uid"])
             delegation_uid = str(identity["delegation_uid"])
@@ -808,7 +819,7 @@ class LocalWebRuntime:
                     object_uid=object_uid,
                     base_revision_uid=None,
                     human_key=requirement.human_key,
-                    kind="software_requirement",
+                    kind=engineering_model.kind_for(requirement.category),
                     effective_model_hash=runtime.workspaces[workspace_uid].effective_model_hash,
                     delegation_uid=delegation_uid,
                     draft_fields=(
@@ -840,6 +851,10 @@ class LocalWebRuntime:
                 "configuration_uid": configuration_uid,
                 "identity_created": bool(identity["created"]),
                 "selected_template": analysis.selected_pack.display_name,
+                "engineering_areas": [
+                    item.label for item in presentation_mapping.engineering_areas
+                ],
+                "content_types": list(engineering_model.kind_names),
                 "requirement_count": len(analysis.requirements),
                 "human_keys": [item.human_key for item in analysis.requirements],
                 "next_step": "review_draft",
