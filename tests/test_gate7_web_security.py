@@ -16,7 +16,12 @@ from tests.support.public_product import bootstrap_public_product
 
 def unlocked(tmp_path: Path) -> tuple[LocalWebRuntime, TestClient, str]:
     GitCanonicalRepository(tmp_path).initialize()
-    runtime = LocalWebRuntime(tmp_path, launch_token="one-time-launch-token")
+    runtime = LocalWebRuntime(
+        tmp_path,
+        launch_token="one-time-launch-token",
+        signer_key_root=tmp_path / "keys",
+        signer_password="test-only-local-signer-password",
+    )
     client = TestClient(runtime.app)
     response = client.get("/unlock?token=one-time-launch-token", follow_redirects=False)
     assert response.status_code == 303
