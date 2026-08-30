@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
-    "work_package_uid", "mission_uid", "title", "objective", "role", "state",
+    "work_package_uid", "mission_uid", "title", "objective", "role", "engineering_area", "state",
     "dependency_uids", "blocked_by_uids", "workspace_uid", "agent_run_uids",
     "failure_reason", "created_at", "updated_at"
   ],
@@ -21,6 +21,7 @@
     "title": {"type": "string", "minLength": 1},
     "objective": {"type": "string", "minLength": 1},
     "role": {"type": "string", "minLength": 1},
+    "engineering_area": {"type": ["string", "null"], "minLength": 1},
     "state": {"enum": ["planned", "ready", "running", "waiting_for_decision", "blocked", "completed", "failed", "cancelled"]},
     "dependency_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},
     "blocked_by_uids": {"type": "array", "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/uuid7"}},

@@ -95,7 +95,7 @@ def test_all_production_adapters_share_the_local_runtime(tmp_path: Path) -> None
     web = LocalWebRuntime(tmp_path / "project", runtime)
     mcp = create_server(runtime)
     assert web.domain is runtime
-    assert mcp.name == "LESR v1"
+    assert mcp.name == "LESR Runtime 2"
 
 
 def test_legacy_application_service_is_absent() -> None:
