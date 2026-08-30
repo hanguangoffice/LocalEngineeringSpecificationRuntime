@@ -4,6 +4,8 @@
 只适用于报告注明的契约、提交和测试范围，不表示当前 2.0 工作版本已经完成发布验证。
 当前产品交互契约见 `../AGENTIC-PRODUCT-CONTRACT.md`，版本关系见 `../versioning.md`。
 
+Runtime 2.0 当前发布证据记录在 `GATE-RUNTIME-2.0.md`。
+
 Gate reports use the fixed state vocabulary `PLANNED/IN_PROGRESS/PASS/FAIL/DEFERRED`
 and separately identify contract version, tests and measurements, injected failure
 modes, retained limitations, and commit scope. A design decision is not reported as
