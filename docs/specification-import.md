@@ -1,37 +1,34 @@
-# Specification import boundary
+# 自定义规范导入边界
 
-Import is a preview-only adapter. It produces structured semantic operations for
-a Change Workspace and never writes Canonical State, approves content, creates a
-Baseline or updates the query projection.
+导入适配器把用户已有规范变成可编辑的工程候选。它保留来源位置，并把内容放进当前模板
+与 Profile 定义的工程结构。导入本身不直接写入 Canonical State，也不代表内容已经批准
+或形成基线。
 
-## Supported preview inputs
+## 支持的输入
 
-- UTF-8 Markdown: one candidate per non-empty heading section.
-- Text PDFs that the operator is entitled to process: one candidate per selected
-  page, with page number and source hash provenance.
+- UTF-8 Markdown：按非空标题章节形成候选内容。
+- 可提取文本的本地 PDF：按选定页面形成候选内容，并记录页码与来源。
 
-Encrypted/restricted PDFs are rejected before text extraction. OCR, password
-handling and permission bypass are not features. Source PDFs and extracted
-licensed standard text must not be committed.
+加密或受限制 PDF 在提取前停止；当前导入不处理 OCR 或密码。受许可限制的标准正文不会
+进入仓库。
 
-Each candidate contains exactly two schema-valid operations:
+每个候选包含两类结构化操作：
 
-1. `create_logical_object` with a new Internal UID and Human Key;
-2. `create_revision` with imported provenance and source anchors.
+1. 建立可长期引用的工程对象；
+2. 建立带导入来源和章节/页码定位的候选 Revision。
 
-The candidate must then pass ordinary Workspace, review-package, human approval,
-Delegation and atomic Apply controls. There is no import-specific authority path.
+候选进入普通 Mission 与 Workspace 流程。模板映射、校验、影响分析和代理修复按后台策略
+执行；是否需要人工决定由实际变化和 Profile 决定，导入不会为每个章节单独制造审批。
+正式写入仍使用统一 Git 事务，不存在导入专用权威通道。
 
-## Determinism and provenance
+## 来源与复现
 
-The source content hash, local filename, section/page anchor and extractor
-identity are fields of the candidate Revision. Re-running preview may allocate
-new candidate UIDs; accepting a candidate therefore binds the reviewed semantic
-operation hashes and exact source hash in the Review Package.
+候选 Revision 记录来源文件、章节或页码、提取器和外部源内容摘要。这里的摘要跨越外部
+文件与 Git 工程边界，用于确认后来审阅的内容来自同一输入。再次导入可能形成新的候选；
+进入正式工程前，Review Package 绑定本次候选与评审证据。
 
-## Local evaluation corpus
+## 本地评估材料
 
-`测试文档/` is ignored by Git. The unencrypted local ASPICE-like document is used
-for page-anchor integration tests. The encrypted MISRA document is used solely
-to verify fail-closed refusal. Executable MISRA-like rules in the committed test
-suite are synthetic and do not reproduce protected standard text.
+`测试文档/` 不进入 Git。未加密的 ASPICE-like 文档可用于页码定位测试；加密的 MISRA
+文档只用于检查受限文件处理。仓库中的 MISRA-like 可执行规则是合成数据，不复刻受保护
+标准正文。

@@ -1,28 +1,37 @@
 # LESR Runtime 1.2.0
 
-Local Engineering Specification Runtime (LESR) is a local, single-user semantic
-runtime for governed engineering specifications. Git commit trees are the authority;
-SQLite/FTS5 is a disposable projection. The requirements authority is
-`LESR_Solution_Design_Baseline_v1.0/`, while
-`docs/LESR_Codex_Construction_Spec_v1.0.md` freezes the implementation contract.
+Local Engineering Specification Runtime（LESR）是面向单个本地 Git 工程的 **AI
+工程控制平面**。用户给出目标、已有规范和验收要求；LESR 把它们组织成可查看的工程
+结构，为专业代理准备上下文、分配工作包、验证结果并管理正式发布边界。它不是要求用户
+逐项维护对象和逐步点击批准的本地 ALM 复刻。
 
-This is the stable local runtime. Architecture validation, feature implementation,
-integration, and release qualification are reported separately in `docs/gates/`. The
-recovery point for the previous runtime is `runtime-0.5.0a2`.
+Git commit tree 保存正式工程状态，SQLite/FTS5 只是可重建的查询视图。需求权威仍是
+`LESR_Solution_Design_Baseline_v1.0/`。当前 Python 包版本为 `1.2.0`，Canonical
+Format 仍为 `1.0`；历史 1.0 Gate 是当时的验证记录，不自动证明当前工作版本已经发布。
+版本含义见 [`docs/versioning.md`](docs/versioning.md)。
 
-## Runtime model
+## 产品工作方式
 
-The 1.0 runtime separates Logical Objects, immutable Revisions and Records,
-versioned Relation Assertions, exact Profile/Workflow/Relation Type revisions,
-configuration-bound Graph Snapshots, typed rules, Working Copies, reviewed Candidate
-Revisions, signed approvals, atomic semantic transactions, and Baselines.
+一次工作从 Mission 开始。LESR 根据自然语言需求或导入的自定义规范选择固定版本的
+上游模板，结合项目 Profile 建立工程地图，再把目标拆成有依赖关系的工作包。需求、
+架构、实现、验证、证据和交付物由不同代理处理，控制平面负责上下文、工作区、校验、
+影响分析、合并与恢复。
 
-There is no implicit `current`: evaluation requires an exact Configuration, Effective
-Model, Canonical Commit, and Evaluation Time. External endpoints are never resolved
-over the network during evaluation. Candidate Apply recomputes governance and rule
-validation at the Git transaction boundary before an expected-old-value ref update.
+工程地图的栏目由 Profile 和模板决定：ASPICE-like 工程可以显示 SYS、SWE、SUP；
+通用软件工程可以显示目标、需求、架构、实现、验证和发布；API、数据科学、嵌入式等
+方向使用各自的名称。栏目下面展示真实工程内容、关系、覆盖情况和当前变化，不把内部
+UID、Hash 或 Git 引用当作导航。
 
-## Development and release gates
+后台决策路由分为四种结果：自动继续、汇总到里程碑、立即请求人工决定、阻止当前方案。
+普通编辑、上下文收集、校验、测试、修复、检查点和无冲突合并不会逐步请求批准。人工
+只处理会改变材料工程取舍或验收结果的分歧，以及 Profile 明确指定的正式基线、发布、
+偏离和例外责任。
+
+完整产品契约见
+[`docs/AGENTIC-PRODUCT-CONTRACT.md`](docs/AGENTIC-PRODUCT-CONTRACT.md)，工程状态
+与签名边界见 [`docs/integrity-boundaries.md`](docs/integrity-boundaries.md)。
+
+## 开发验证入口
 
 ```powershell
 py -m uv sync --all-extras
@@ -35,10 +44,8 @@ py -m uv build --wheel --sdist --out-dir release-dist
 py -m uv run python scripts/verify_distribution.py release-dist
 ```
 
-CI runs on Python 3.12 for Windows and Ubuntu. It verifies the 81-entry baseline
-Manifest, all construction schemas, deterministic serialization, the fixed small
-performance dataset, HTTP/Playwright UI flow, and isolated wheel/sdist installation.
-The medium and large performance protocols are fixed in `docs/performance/README.md`.
+这些命令是当前仓库的验证入口。某个版本是否已通过，以该次实际执行结果和发布记录为准。
+中型和大型性能协议见 `docs/performance/README.md`。
 
 ## 普通用户：从网页开始
 
@@ -54,25 +61,19 @@ lesr web PROJECT
 .venv\Scripts\python.exe -m lesr.cli.main web PROJECT
 ```
 
-终端会显示一个本机地址。复制到浏览器打开后，进入“从需求开始”：可以直接粘贴自然语言需求，也可以导入自己的 Markdown 或 PDF 规范文件。LESR 会从固定上游版本中选择适合当前方向的模板组合：通用需求使用 GitHub Spec Kit，架构、API、消息、数据科学、模型说明、嵌入式实时需求、安全威胁模型和架构决策分别采用 arc42、OpenAPI、AsyncAPI、Cookiecutter Data Science、TensorFlow Model Card、NASA FRET、OWASP Threat Model Library 与 MADR。运行策略、本机身份和初始配置在后台完成；只有会改变产品范围或预期结果、且无法从已有内容判断的选择才会交给用户。
+终端会显示一个本机地址。打开后可以直接描述目标，也可以导入自己的 Markdown 或 PDF
+规范。LESR 从固定上游版本中组合 GitHub Spec Kit、arc42、OpenAPI、AsyncAPI、
+Cookiecutter Data Science、TensorFlow Model Card、NASA FRET、OWASP Threat Model
+Library 和 MADR 等结构，再建立可浏览的工程地图。
 
-已有规范的日常工作只需要：
-
-1. 用 Human Key 或关键词查找工程内容；
-2. 按名称选择工程配置和本机身份；
-3. 填写 Human Key、内容和变更理由，检查影响与问题；
-4. 批准人阅读变更范围、批准理由和校验结论后签名；
-5. 将已批准变更写入工程，必要时再发布基线。
-
-Commit、UID、Hash、Delegation UID 和原始协议返回不会出现在普通流程中。
-只有审计或故障排查时才需要打开左侧的“审计详情”。页面使用更大的正文字号，
-GSAP 动效只表达页面切换、流程推进、状态改变和确认反馈；系统偏好减少动态效果时，
-所有状态仍会直接显示。
+进入已有工程后，用户主要看到当前 Mission、工程地图、代理工作进展、待处理的材料
+取舍和版本结果。系统用可读的内容名称和工程区域解释变化；内部标识集中在审计详情。
+具体操作见 [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)。
 
 模板来源、精确提交、许可证和 `grill-me` 行为选取记录见
 [`docs/zero-spec-intake-sources.md`](docs/zero-spec-intake-sources.md)。
 
-## Advanced product entry points
+## 工程维护与适配器入口
 
 ```powershell
 lesr init PROJECT
@@ -103,34 +104,23 @@ lesr mcp serve PROJECT
 lesr web PROJECT
 ```
 
-`lesr init` creates the format-1.0 repository Manifest. The explicit bootstrap-plan /
-bootstrap-root proof-of-possession flow installs the first human trust root and exact
-Profile/Rule governance; configuration-plan / configuration-init then creates the first
-Configuration. Successor Configurations are planned and human-approved explicitly;
-Deviation, Exception, and Rule-conflict approvals are independently recorded before an
-exact successor Configuration selects them. A missing 1.0 Manifest is rejected rather
-than treated as a legacy repository. Workspace candidates and review evidence live on
-recoverable Workspace refs before Apply, so separate CLI invocations can complete one
-workflow. Private-key signing is never available through MCP. The MCP adapter
-advertises only tools it actually exposes; admin maintenance remains CLI/local UI only.
+这些命令暴露控制平面的细粒度能力，供维护、适配器开发和审计复现使用，不是普通用户要
+手工走完的流程。Mission 协调器和代理运行器组合这些能力；本机引导、配置解析、上下文、
+工作区和恢复由后台处理。偏离、例外、规则冲突以及正式发布责任仍按 Profile 进入治理。
+候选和评审材料在 Apply 前保存在可恢复的 Workspace ref 中。MCP 不提供私钥签名；迁移、
+恢复和清理等管理能力留在本机 CLI 或维护界面。
 
-The local Web adapter binds to `127.0.0.1`, has no CDN or runtime Node build, and uses a one-time launch
-token, idle locking, Host/Origin/CSRF checks, and a short-lived signer broker. Windows
-keys use DPAPI; Linux prefers Secret Service; the fallback is an scrypt/AES-GCM
-encrypted PKCS#8 file and never plaintext. Its HTTP capability layer and engineering
-console complete Context, Workspace Open/Edit/Submit/Rebase/Merge, conflict governance,
-human signing, atomic Apply, and Baseline Prepare/Apply. The real Playwright product test
-executes the full Edit -> Review -> Sign -> Apply -> Baseline path against Git and SQLite.
-The packaged UI vendors GSAP Core 3.15.0 locally. Timelines visualize panel focus,
-Workspace/Candidate progression, operation decisions, human governance and atomic Apply;
-`prefers-reduced-motion` removes motion without hiding state or capability.
+本地 Web 适配器监听 `127.0.0.1`，使用一次性启动入口、会话锁定和短生命周期签名进程。
+Windows 私钥由 DPAPI 保护；Linux 优先使用 Secret Service；回退方案使用加密 PKCS#8。
+Web、CLI 与 MCP 复用同一领域能力。仓库包含 HTTP、浏览器和 Git/SQLite 事务路径的测试；
+当前工作版本的实际结论以对应测试运行和发布记录为准。
 
 ## Compatibility and deferred scope
 
-This is a breaking upgrade. It does not migrate the 0.5 Canonical State, Workspace,
-YAML, CLI, or MCP contracts. ReqIF, SARIF, Excel, Codebeamer, OSLC, OCR,
-Chinese-specific tokenization, a general plugin sandbox, SHACL/Rego execution,
-multi-repository operation, and multi-user service deployment remain deferred.
+Canonical Format 1.0 不迁移 0.5 Canonical State、Workspace、YAML、CLI 或 MCP 契约。
+Runtime 1.2 的 Mission 与工程地图改变默认交互方式，但不要求把运行中的代理任务写入
+Canonical Git。ReqIF、SARIF、Excel、Codebeamer、OSLC、OCR、中文专用分词、通用插件
+沙箱、SHACL/Rego、多仓库和多用户服务仍在当前范围之外。
 
 Local rights-cleared Markdown/PDF import produces reviewable Workspace candidates with
 provenance. Restricted source documents and extracted standards text are not committed.

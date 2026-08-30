@@ -4,10 +4,12 @@
 - State: `PASS`
 
 Review Comment, Comment Resolution, Condition Satisfaction and Approval Revocation
-are immutable hash records locatable to resource, field or Fragment. Review Policy
-defines Quorum separately by stage and role. Partial Approval is valid only when the
-union equals the complete Candidate Scope; Conditional Approval is inert until each
-condition hash has a structured evidence-bearing Satisfaction record.
+are immutable records with UUIDv7 identity and explicit references. Comment Resolution
+references `comment_uid`; Condition Satisfaction retains the original condition value
+and evidence; Approval Revocation references the approval UID. Review Policy defines
+Quorum separately by stage and role. Partial Approval is valid only when the union
+equals the complete Candidate Scope; Conditional Approval remains inert until each
+condition has an evidence-bearing Satisfaction record.
 
 `GovernanceEvaluator.evaluate` is a pure function accepting the exact Review Package
 and governance records. It verifies Ed25519 signatures, Package/Model binding,
@@ -25,3 +27,8 @@ Canonical State.
 
 Tests cover combined partial scope, multi-reviewer quorum, conditions, open comments,
 revocation on both sides of Apply and baseline completeness prerequisites.
+
+This is historical Gate evidence for Contract 1.0. Later Runtime simplification removed
+redundant per-record auxiliary hashes without changing the Review Package evidence
+binding or Ed25519 approval boundary; see `../integrity-boundaries.md`. Current release
+status must be established by the current version's own verification record.
