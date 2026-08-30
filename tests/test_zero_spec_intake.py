@@ -320,6 +320,16 @@ def test_template_driven_engineering_map_includes_the_editable_intake(
     assert "snapshot_hash" not in serialized
     assert "delegation_uid" not in serialized
 
+    web_map = client.get("/api/engineering/map")
+    assert web_map.status_code == 200, web_map.text
+    assert {
+        item["human_key"]
+        for area in web_map.json()["areas"]
+        for item in area["items"]
+    } >= set(accepted["human_keys"])
+    assert client.get("/api/missions").json() == {"items": []}
+    assert client.get("/api/decisions").json() == {"items": []}
+
 
 def test_web_intake_imports_a_custom_markdown_specification(tmp_path: Path) -> None:
     _, client, csrf = unlocked_runtime(tmp_path)

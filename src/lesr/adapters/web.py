@@ -94,6 +94,13 @@ class WorkspaceValidateRequest(BaseModel):
     maximum_depth: int = Field(default=3, ge=1, le=16)
 
 
+class DecisionResolveRequest(BaseModel):
+    actor_uid: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=4000)
+    selected_action: str | None = Field(default=None, max_length=240)
+    selected_alternative: str | None = Field(default=None, max_length=240)
+
+
 class LocalWebRuntime:
     def __init__(
         self,
@@ -233,6 +240,73 @@ class LocalWebRuntime:
         async def session_context(request: Request) -> dict[str, Any]:
             self._session(request)
             return self._session_context()
+
+        @app.get("/api/engineering/map")
+        async def engineering_map(
+            request: Request,
+            configuration_uid: str | None = None,
+            workspace_uid: str | None = None,
+        ) -> dict[str, Any]:
+            self._session(request)
+            selected_configuration = configuration_uid or self._default_configuration_uid()
+            if selected_configuration is None:
+                return {"mapping_name": "工程内容", "areas": []}
+            selected_workspace = workspace_uid or self._editable_workspace_uid(
+                selected_configuration
+            )
+            method = getattr(self.domain, "engineering_map", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="工程地图不可用")
+            result = method(
+                selected_configuration,
+                datetime.now(UTC).isoformat(),
+                selected_workspace,
+            )
+            return self._value_or_error(result.payload())
+
+        @app.get("/api/missions")
+        async def missions(request: Request) -> Any:
+            self._session(request)
+            method = getattr(self.domain, "list_missions", None)
+            if not callable(method):
+                return []
+            return self._value_or_error(method().payload())
+
+        @app.get("/api/missions/{mission_uid}")
+        async def mission(request: Request, mission_uid: str) -> dict[str, Any]:
+            self._session(request)
+            method = getattr(self.domain, "inspect_mission", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="任务不可用")
+            return self._value_or_error(method(mission_uid).payload())
+
+        @app.get("/api/decisions")
+        async def decisions(request: Request, mission_uid: str | None = None) -> Any:
+            self._session(request)
+            method = getattr(self.domain, "list_decisions", None)
+            if not callable(method):
+                return []
+            return self._value_or_error(method(mission_uid).payload())
+
+        @app.post("/api/decisions/{decision_request_uid}/resolve")
+        async def decision_resolve(
+            request: Request,
+            decision_request_uid: str,
+            value: DecisionResolveRequest,
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            method = getattr(self.domain, "resolve_decision", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="工程决策不可用")
+            return self._value_or_error(
+                method(
+                    decision_request_uid,
+                    value.actor_uid,
+                    value.reason,
+                    value.selected_action,
+                    value.selected_alternative,
+                ).payload()
+            )
 
         @app.get("/api/intake/templates")
         async def intake_templates(request: Request) -> dict[str, Any]:
@@ -674,6 +748,26 @@ class LocalWebRuntime:
                 key=lambda item: str(item.get("human_key", "")).casefold(),
             )
         )
+
+    def _default_configuration_uid(self) -> str | None:
+        configurations = self._session_context().get("configurations", [])
+        if not configurations:
+            return None
+        value = configurations[0].get("configuration_uid")
+        return str(value) if value else None
+
+    def _editable_workspace_uid(self, configuration_uid: str) -> str | None:
+        workspaces = getattr(self.domain, "workspaces", {})
+        if not isinstance(workspaces, dict):
+            return None
+        for uid, workspace in reversed(tuple(workspaces.items())):
+            state = getattr(getattr(workspace, "state", None), "value", None)
+            if (
+                getattr(workspace, "configuration_uid", None) == configuration_uid
+                and state == "editable"
+            ):
+                return str(uid)
+        return None
 
     def _session_context(self) -> dict[str, Any]:
         repository = GitCanonicalRepository(self.project)
