@@ -1,4 +1,4 @@
-# LESR Runtime 1.2.0
+# LESR Runtime 2.0.0
 
 Local Engineering Specification Runtime（LESR）是面向单个本地 Git 工程的 **AI
 工程控制平面**。用户给出目标、已有规范和验收要求；LESR 把它们组织成可查看的工程
@@ -6,7 +6,7 @@ Local Engineering Specification Runtime（LESR）是面向单个本地 Git 工�
 逐项维护对象和逐步点击批准的本地 ALM 复刻。
 
 Git commit tree 保存正式工程状态，SQLite/FTS5 只是可重建的查询视图。需求权威仍是
-`LESR_Solution_Design_Baseline_v1.0/`。当前 Python 包版本为 `1.2.0`，Canonical
+`LESR_Solution_Design_Baseline_v1.0/`。当前 Python 包版本为 `2.0.0`，Canonical
 Format 仍为 `1.0`；历史 1.0 Gate 是当时的验证记录，不自动证明当前工作版本已经发布。
 版本含义见 [`docs/versioning.md`](docs/versioning.md)。
 
@@ -118,7 +118,7 @@ Web、CLI 与 MCP 复用同一领域能力。仓库包含 HTTP、浏览器和 Gi
 ## Compatibility and deferred scope
 
 Canonical Format 1.0 不迁移 0.5 Canonical State、Workspace、YAML、CLI 或 MCP 契约。
-Runtime 1.2 的 Mission 与工程地图改变默认交互方式，但不要求把运行中的代理任务写入
+Runtime 2.0 的 Mission 与工程地图改变默认交互方式，但不要求把运行中的代理任务写入
 Canonical Git。ReqIF、SARIF、Excel、Codebeamer、OSLC、OCR、中文专用分词、通用插件
 沙箱、SHACL/Rego、多仓库和多用户服务仍在当前范围之外。
 

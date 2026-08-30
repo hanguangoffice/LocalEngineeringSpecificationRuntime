@@ -44,7 +44,7 @@ Delegation 表示代理在授权范围内自动执行，不等于人类 Approval
 
 ## 当前边界
 
-LESR 1.2 产品线定位为本地、单 Git 仓库、单用户。MCP 和 Agent Runner 是可替换适配器，
+LESR 2.0 产品线定位为本地、单 Git 仓库、单用户。MCP 和 Agent Runner 是可替换适配器，
 不获得任意文件、SQL 或 Shell 权限，也不能取得人类私钥。ReqIF、SARIF、Excel、
 Codebeamer、OSLC、OCR、多仓库、多用户服务和通用插件执行不在当前范围内。
 

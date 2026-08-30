@@ -1,4 +1,4 @@
-"""LESR v1 MCP adapter. Only this module imports the replaceable MCP SDK."""
+"""LESR MCP adapter. Only this module imports the replaceable MCP SDK."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from lesr.domain.semantic import uuid7_candidate
 
 
 def create_server(domain: LESRDomainPort) -> FastMCP:
-    server = FastMCP("LESR v1")
+    server = FastMCP("LESR Runtime 2")
     read_only = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,

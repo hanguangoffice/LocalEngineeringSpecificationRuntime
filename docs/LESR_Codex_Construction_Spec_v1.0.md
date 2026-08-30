@@ -2,7 +2,7 @@
 
 **状态：1.0 历史施工规格（保留用于解释 Canonical Format 1.0）**
 
-> 当前 Runtime 版本与 1.2 产品交互契约见 `versioning.md` 和
+> 当前 Runtime 版本与 2.0 产品交互契约见 `versioning.md` 和
 > `AGENTIC-PRODUCT-CONTRACT.md`。本文记录 1.0 语义内核的施工决定，不表示当前
 > 工作版本已经完成发布验证。后续精简的完整性边界见 `integrity-boundaries.md`。
 

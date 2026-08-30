@@ -1,4 +1,4 @@
-"""LESR v1 capability-oriented command line interface."""
+"""LESR Runtime 2 capability-oriented command line interface."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import uuid7_candidate
 from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService
 
-app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
+app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime 2")
 context_app = typer.Typer(no_args_is_help=True)
 workspace_app = typer.Typer(no_args_is_help=True)
 approval_app = typer.Typer(no_args_is_help=True)
