@@ -1,8 +1,8 @@
 # Runtime 2.0 release gate
 
 - Contract version: Runtime `2.0.0`; Canonical Format `1.0`
-- State: `IN_PROGRESS`
-- Commit scope: `origin/main..codex/lesr-agentic-runtime`
+- State: `PASS`
+- Verified code scope: `52fd494..17cb104` in PR #21
 
 ## Product result
 
@@ -59,9 +59,16 @@ modified.
 
 ## Remote release evidence
 
-The final `PASS` state requires the PR head to pass the locked-dependency Windows and Ubuntu
-GitHub Actions matrix. The successful run and final PR/merge commit will be recorded here
-before the release tag is created.
+PR [#21](https://github.com/hanguangoffice/LocalEngineeringSpecificationRuntime/pull/21)
+ran the locked-dependency matrix against code head `17cb104`:
+
+- [Ubuntu](https://github.com/hanguangoffice/LocalEngineeringSpecificationRuntime/actions/runs/33288288666/job/99195302278): `PASS`, 2m08s.
+- [Windows](https://github.com/hanguangoffice/LocalEngineeringSpecificationRuntime/actions/runs/33288288666/job/99195302402): `PASS`, 10m28s.
+
+Both jobs executed manifest and schema verification, Ruff, strict mypy, the complete Pytest
+suite, wheel/sdist build, exact package-content checks, and isolated installation. The
+evidence-closing documentation commit contains no runtime or contract change; its own PR
+checks must also pass before merge.
 
 ## Retained limitation
 
