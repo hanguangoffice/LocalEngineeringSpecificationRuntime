@@ -170,6 +170,19 @@ class WorkspaceCheckpoint(FrozenModel):
     created_at: datetime
     git_ref: str
     workspace_state: Workspace
+    # Read-only compatibility with Runtime 1.x. Git already authenticates the
+    # checkpoint document, so Runtime 2 omits this duplicate field on writes.
+    checkpoint_hash: str | None = Field(default=None, exclude=True, repr=False)
+
+    @model_validator(mode="after")
+    def validate_legacy_hash(self) -> WorkspaceCheckpoint:
+        if (
+            self.checkpoint_hash is not None
+            and self.checkpoint_hash
+            != document_hash(self.model_dump(mode="json"), "checkpoint_hash")
+        ):
+            raise ValueError("checkpoint_hash is invalid")
+        return self
 
 
 class CandidateRevisionSet(FrozenModel):

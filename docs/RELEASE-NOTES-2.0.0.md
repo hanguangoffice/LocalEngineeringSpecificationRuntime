@@ -19,6 +19,7 @@ Canonical Format 继续使用 1.0；升级 Runtime 不会改写既有工程事�
 
 - Python 包和默认 Web/MCP 交互升级为 2.0.0。
 - Canonical Format、Schema Catalog 和既有 Git 权威状态保持 1.0。
+- Runtime 1.x 已保存的辅助摘要字段保持只读兼容；Runtime 2 读取并校验，但新记录不再写入。
 - 1.0/1.2 的细粒度 CLI 能力仍可用于维护和适配器开发，但不再代表普通用户流程。
 - Mission、Agent Run 和 Decision Request 位于本地运行数据库，不写入 Canonical Git。
 

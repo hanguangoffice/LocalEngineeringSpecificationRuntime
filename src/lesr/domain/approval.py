@@ -93,6 +93,9 @@ class SignedApproval(FrozenModel):
     package_hash: str
     effective_model_hash: str
     scope: dict[str, object]
+    # Runtime 1.x persisted this derived value. Runtime 2 accepts and verifies it
+    # when reading old Canonical State, but does not emit it for new approvals.
+    scope_hash: str | None = Field(default=None, exclude=True, repr=False)
     approval_type: str
     actor_uid: str
     actor_role: str
@@ -109,6 +112,8 @@ class SignedApproval(FrozenModel):
     def human_only(self) -> SignedApproval:
         if self.actor_type != "human":
             raise ValueError("only a human actor can issue a formal approval")
+        if self.scope_hash is not None and self.scope_hash != semantic_hash(self.scope):
+            raise ValueError("scope_hash is invalid")
         return self
 
     def signing_payload(self) -> ApprovalPayload:
