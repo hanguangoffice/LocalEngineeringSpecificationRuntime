@@ -11,7 +11,7 @@
 <body>
   <div class="paper-grain" aria-hidden="true"></div>
   <header class="masthead">
-    <a class="wordmark" href="#overview" data-panel-link="overview" aria-label="返回工作台">
+    <a class="wordmark" href="#overview" data-panel-link="overview" aria-label="返回工程地图">
       <span class="mark">L</span><span><b>LESR</b><small>工程规范工作台</small></span>
     </a>
     <div class="project-heading"><small>当前工程</small><strong id="project-name">正在读取…</strong></div>
@@ -21,54 +21,74 @@
 
   <div class="app-shell">
     <nav class="rail" aria-label="主要功能">
-      <p class="rail-label">工作</p>
-      <button class="nav-item active" data-panel="overview"><i>⌂</i><b>工作台</b></button>
-      <button class="nav-item" data-panel="intake"><i>✦</i><b>从需求开始</b></button>
-      <button class="nav-item" data-panel="explore"><i>⌕</i><b>查找工程内容</b></button>
-      <button class="nav-item" data-panel="context"><i>◎</i><b>相关资料</b></button>
-      <button class="nav-item" data-panel="workspace"><i>＋</i><b>发起变更</b></button>
-      <button class="nav-item" data-panel="review"><i>✓</i><b>审阅与批准</b></button>
-      <button class="nav-item" data-panel="baseline"><i>◇</i><b>发布基线</b></button>
-      <p class="rail-label rail-label-secondary">系统</p>
-      <button class="nav-item" data-panel="tasks"><i>↻</i><b>后台任务</b></button>
+      <p class="rail-label">工程</p>
+      <button class="nav-item active" data-panel="overview"><i>⌘</i><b>工程地图</b></button>
+      <button class="nav-item" data-panel="missions"><i>↗</i><b>任务</b></button>
+      <button class="nav-item" data-panel="decisions"><i>◆</i><b>决策</b><span class="nav-count" id="decision-nav-count" hidden>0</span></button>
+      <button class="nav-item" data-panel="explore"><i>⌕</i><b>工程内容</b></button>
+      <button class="nav-item" data-panel="versions"><i>◇</i><b>版本</b></button>
+      <button class="nav-item nav-intake" data-panel="intake"><i>＋</i><b>从需求开始</b></button>
+      <p class="rail-label rail-label-secondary">流程工具</p>
+      <button class="nav-item workflow-link" data-panel="context"><i>◎</i><b>资料整理</b></button>
+      <button class="nav-item workflow-link" data-panel="workspace"><i>↳</i><b>编辑变更</b></button>
+      <button class="nav-item workflow-link" data-panel="review"><i>✓</i><b>正式审阅</b></button>
+      <button class="nav-item workflow-link" data-panel="baseline"><i>◇</i><b>发布版本</b></button>
+      <p class="rail-label rail-label-secondary">运行</p>
+      <button class="nav-item" data-panel="tasks"><i>↻</i><b>运行记录</b></button>
       <button class="nav-item" data-panel="maintenance"><i>⌁</i><b>维护</b></button>
-      <button class="nav-item audit-link" data-panel="audit"><i>⋯</i><b>审计详情</b></button>
+      <button class="nav-item audit-link" data-panel="audit"><i>⋯</i><b>技术详情</b></button>
     </nav>
 
     <main>
       <section class="panel active" id="overview">
-        <div class="panel-heading">
-          <p class="eyebrow">工程工作台</p>
-          <h1>让需求、变更与批准<br><em>始终对得上。</em></h1>
-          <p class="lede">从一段需求或现有规范开始，整理工程内容、查看影响，并完成审阅。</p>
-        </div>
-        <div class="overview-focus">
-          <article class="priority-work">
-            <small>开始</small>
-            <h2 id="overview-priority-title">建立工程规范</h2>
-            <p id="overview-priority-note">描述新需求，或导入已有的 Markdown、PDF 规范文件。</p>
-            <div class="priority-actions">
-              <button class="priority-primary" type="button" data-go="intake" data-intake-mode="write">描述需求</button>
-              <button class="priority-secondary" type="button" data-go="intake" data-intake-mode="import">导入现有规范</button>
-            </div>
-          </article>
-          <aside class="project-glance" aria-label="当前工程概览">
-            <p>当前工程</p>
-            <dl>
-              <div><dt>配置</dt><dd id="overview-configuration">尚未选择配置</dd></div>
-              <div><dt>待处理变更</dt><dd id="health-workspaces">0</dd></div>
-              <div><dt>工程状态</dt><dd id="health-canonical">读取中</dd></div>
-              <div><dt>资料索引</dt><dd id="health-projection">读取中</dd></div>
-            </dl>
-            <span id="overview-configuration-note">尚未建立工程配置。</span>
+        <div class="panel-heading map-heading">
+          <p class="eyebrow">工程地图</p>
+          <h1>看见工程的结构，<br><em>也看见它为何成立。</em></h1>
+          <p class="lede">从工程区域进入文档和条目，再沿追踪关系查看设计、验证与当前工作资料。</p>
+          <div class="map-status-line" aria-label="当前工程状态">
+            <span><small>当前配置</small><strong id="overview-configuration">尚未选择配置</strong></span>
+            <span><small>工程状态</small><strong id="health-canonical">读取中</strong></span>
+            <span><small>内容索引</small><strong id="health-projection">读取中</strong></span>
+            <span><small>进行中的工作</small><strong id="health-workspaces">0</strong></span>
             <span id="health-manifest" hidden>读取中</span>
+            <span id="overview-configuration-note" hidden>尚未建立工程配置。</span>
+          </div>
+        </div>
+        <div class="engineering-atlas" id="engineering-map" aria-label="工程地图">
+          <aside class="atlas-column atlas-areas" data-map-column="areas">
+            <header><span>01</span><div><small>工程区域</small><h2>结构</h2></div></header>
+            <nav id="engineering-area-tree" aria-label="工程区域">
+              <div class="atlas-loading">正在整理工程结构…</div>
+            </nav>
+          </aside>
+          <section class="atlas-column atlas-documents" data-map-column="documents" aria-labelledby="map-document-heading">
+            <header><span>02</span><div><small id="map-area-label">当前区域</small><h2 id="map-document-heading">文档与条目</h2></div><strong id="map-document-count">0</strong></header>
+            <label class="map-filter"><span>筛选当前区域</span><input id="map-filter-input" type="search" placeholder="输入工程编号或标题" autocomplete="off"></label>
+            <div id="engineering-document-list" class="map-document-list">
+              <div class="atlas-loading">选择左侧区域查看内容。</div>
+            </div>
+          </section>
+          <aside class="atlas-column atlas-detail" data-map-column="context" aria-labelledby="map-detail-heading">
+            <header><span>03</span><div><small>当前条目</small><h2 id="map-detail-heading">上下文与追踪</h2></div></header>
+            <div id="engineering-item-detail" class="map-item-detail">
+              <div class="atlas-empty"><b>选择一项工程内容</b><p>这里将显示正文摘要、生命周期、追踪覆盖和相关资料。</p></div>
+            </div>
+            <div id="engineering-trace-summary" class="map-trace-summary"></div>
+            <div id="engineering-context-summary" class="map-context-summary"></div>
           </aside>
         </div>
+        <article class="priority-work map-entry">
+          <div><small>当前重点</small><h2 id="overview-priority-title">建立工程规范</h2><p id="overview-priority-note">描述新需求，或导入已有的 Markdown、PDF 规范文件。</p></div>
+          <div class="priority-actions">
+            <button class="priority-primary" type="button" data-go="intake" data-intake-mode="write">描述需求</button>
+            <button class="priority-secondary" type="button" data-go="intake" data-intake-mode="import">导入现有规范</button>
+          </div>
+        </article>
         <nav class="overview-actions" aria-label="其他工作">
-          <p>其他工作</p>
-          <button type="button" data-go="explore"><b>查找工程内容</b><span>按工程编号、标题或正文定位内容</span></button>
-          <button type="button" data-go="workspace"><b>发起变更</b><span>说明修改内容与原因</span></button>
-          <button type="button" data-go="review"><b>审阅与批准</b><span>查看变更范围、影响和理由</span></button>
+          <p>继续工作</p>
+          <button type="button" data-go="missions"><b>查看任务</b><span>了解代理正在做什么、依赖什么、下一步是什么</span></button>
+          <button type="button" data-go="decisions"><b>处理决策</b><span>只呈现当前真正需要你选择的工程问题</span></button>
+          <button type="button" data-go="explore"><b>浏览工程内容</b><span>按工程编号、标题或正文定位条目</span></button>
         </nav>
       </section>
 
@@ -111,14 +131,65 @@
           </section>
           <details class="intake-source-details"><summary>模板与来源</summary><div class="intake-reasons" id="intake-reasons"></div></details>
           <form class="intake-accept" id="intake-accept-form">
-            <p>内容建立后可继续编辑，再提交审阅。</p>
+            <p>建立后，代理会按工程结构继续整理。</p>
             <button>建立工程草案</button>
           </form>
         </div>
       </section>
 
+      <section class="panel" id="missions">
+        <div class="panel-heading compact mission-heading">
+          <p class="eyebrow">任务</p>
+          <h2>代理如何推进这项工程</h2>
+          <p class="section-copy">按依赖关系查看工作包、当前执行者和接下来要完成的内容。</p>
+        </div>
+        <div class="mission-board">
+          <aside class="mission-index" aria-label="任务列表">
+            <header><small>工程任务</small><strong id="mission-count">0</strong></header>
+            <div id="mission-list"><div class="mission-empty">正在读取任务…</div></div>
+          </aside>
+          <section class="mission-flow" aria-labelledby="mission-title">
+            <header><div><small id="mission-state">当前任务</small><h3 id="mission-title">尚无进行中的任务</h3></div><p id="mission-objective">建立工程内容后，代理的工作分解会显示在这里。</p></header>
+            <div id="mission-dag" class="mission-dag"><div class="mission-empty">暂无工作包。</div></div>
+          </section>
+          <aside class="mission-now" aria-label="当前代理与下一步">
+            <section><small>当前代理</small><div id="mission-agent"><b>尚未分派</b><p>等待可执行的工作包。</p></div></section>
+            <section class="mission-next"><small>下一步</small><div id="mission-next-step"><b>等待任务</b><p>工作包就绪后将在这里显示。</p></div></section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel" id="decisions">
+        <div class="panel-heading compact decision-heading">
+          <p class="eyebrow">决策</p>
+          <h2>集中处理真正的工程取舍</h2>
+          <p class="section-copy">问题、影响、检查结论和备选方案汇总在一处，选定方向后任务继续推进。</p>
+        </div>
+        <div class="decision-workspace">
+          <aside class="decision-index" aria-label="待处理决策">
+            <header><small>等待选择</small><strong id="decision-count">0</strong></header>
+            <div id="decision-list"><div class="decision-empty">正在读取决策…</div></div>
+          </aside>
+          <section class="decision-request" id="decision-request" aria-live="polite">
+            <div class="decision-empty decision-empty-main">
+              <span>清</span>
+              <h3>当前没有待定的工程取舍</h3>
+              <p>任务按既定方向推进中。</p>
+            </div>
+          </section>
+        </div>
+        <details class="workflow-drawer">
+          <summary><span><b>流程工具</b><small>变更、正式审阅与版本发布</small></span><i>展开</i></summary>
+          <div>
+            <button type="button" data-go="workspace"><b>编辑变更</b><span>查看或调整当前工作内容</span></button>
+            <button type="button" data-go="review"><b>正式审阅</b><span>查看已冻结的范围与检查结论</span></button>
+            <button type="button" data-go="baseline"><b>发布版本</b><span>建立可引用的工程版本</span></button>
+          </div>
+        </details>
+      </section>
+
       <section class="panel" id="explore">
-        <div class="panel-heading compact"><p class="eyebrow">查找工程内容</p><h2>搜索，也可以直接浏览</h2><p class="section-copy">输入工程编号、标题或正文中的词，留空可查看全部内容。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">工程内容</p><h2>按编号、标题和正文查找</h2><p class="section-copy">留空查看全部内容，也可以按当前工程定义的类型筛选。</p></div>
         <form class="search-command" id="query-form"><label><span>工程编号或关键词</span><input name="text" placeholder="例如 REQ-SW-0001、显存、启动" autocomplete="off"></label><button aria-label="搜索">搜索</button></form>
         <div class="query-filters" id="query-filters" aria-label="按内容类型筛选"></div>
         <div class="explore-workspace">
@@ -142,6 +213,26 @@
         </div>
       </section>
 
+      <section class="panel" id="versions">
+        <div class="panel-heading compact version-heading">
+          <p class="eyebrow">版本</p>
+          <h2>工程配置与已发布版本</h2>
+          <p class="section-copy">查看当前配置包含的内容，并在合适的工程节点发布基线。</p>
+        </div>
+        <div class="version-ledger">
+          <section class="version-current">
+            <small>当前使用</small>
+            <h3 id="version-current-name">尚未选择配置</h3>
+            <p id="version-current-note">建立工程配置后显示版本内容。</p>
+            <button type="button" data-go="baseline">准备发布版本</button>
+          </section>
+          <section class="version-history" aria-labelledby="version-history-title">
+            <header><h3 id="version-history-title">工程配置</h3><span id="version-count">0</span></header>
+            <div id="version-list"><div class="version-empty">正在读取配置…</div></div>
+          </section>
+        </div>
+      </section>
+
       <section class="panel" id="context">
         <div class="panel-heading compact"><p class="eyebrow">相关资料</p><h2>整理任务资料</h2><p class="section-copy">选择目标内容和本次工作，查看必读内容、参考资料和待补项目。</p></div>
         <form class="context-command" id="context-form">
@@ -156,7 +247,7 @@
       </section>
 
       <section class="panel" id="workspace">
-        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>说明要改什么</h2><p class="section-copy">填写工程内容和变更理由，系统会检查后送交审阅。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">发起变更</p><h2>说明要改什么</h2><p class="section-copy">填写工程内容和变更理由，检查结果会直接显示在本页。</p></div>
         <div class="change-composer">
           <form class="change-form" id="workspace-compose-form">
             <div class="change-context-bar">
@@ -169,9 +260,9 @@
               <label class="wide-field">正文或说明<textarea name="statement" placeholder="写下要建立或修改的工程内容" required></textarea></label>
               <label class="wide-field">变更理由<textarea name="change_reason" placeholder="说明这项变更解决什么问题" required></textarea></label>
             </div>
-            <div class="change-submit"><div class="scope-preview" id="workspace-scope"><small>本次范围</small><strong>等待填写</strong><p>工程编号和内容类型会在这里汇总。</p></div><button>检查并送审</button></div>
+            <div class="change-submit"><div class="scope-preview" id="workspace-scope"><small>本次范围</small><strong>等待填写</strong><p>工程编号和内容类型会在这里汇总。</p></div><button>保存并检查</button></div>
           </form>
-          <aside class="change-status"><small>本次变更</small><strong id="workspace-state">准备填写</strong><p id="workspace-guidance">完成内容后即可送审。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
+          <aside class="change-status"><small>本次变更</small><strong id="workspace-state">准备填写</strong><p id="workspace-guidance">完成内容后可以检查。</p><div class="progress-line"><i id="workspace-progress"></i></div></aside>
         </div>
         <div class="human-output" id="workspace-output" hidden><p>尚未发起变更。</p></div>
       </section>
@@ -192,7 +283,7 @@
       </section>
 
       <section class="panel" id="baseline">
-        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>建立工程版本</h2><p class="section-copy">选择工程配置并填写版本名称，检查后进入批准。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">发布基线</p><h2>建立工程版本</h2><p class="section-copy">选择工程配置并填写版本名称，整理本次发布内容。</p></div>
         <div class="baseline-workflow">
           <div class="baseline-steps">
             <form class="baseline-step" id="baseline-form"><header><div><h3>本次发布</h3><p>系统会汇总配置、变更范围和校验结论。</p></div></header><label>工程配置<select name="configuration_uid" data-configuration-select required></select></label><label>版本名称（可选）<input name="tag_name" placeholder="例如 项目A / 设计冻结 / 1.0"></label><button>检查并进入批准</button></form>
@@ -206,7 +297,7 @@
       <section class="panel" id="maintenance"><div class="panel-heading compact"><p class="eyebrow">维护</p><h2>备份、恢复与空间管理</h2><p class="section-copy">管理工程副本、格式版本和工作区记录。</p></div><div class="maintenance-layout"><section class="maintenance-primary"><small>空间管理</small><h3>查看可清理的工作区记录</h3><p>列出长期未使用且未被审阅、批准或基线引用的记录。</p><button id="gc-plan">查看清理清单</button><div id="maintenance-output"><p>等待查看清理清单。</p></div></section><aside class="maintenance-list"><h3>工程维护</h3><article><div><b>保存工程副本</b><p>创建完整备份包。</p></div><span>备份</span></article><article><div><b>恢复工程</b><p>从备份包建立工程。</p></div><span>恢复</span></article><article><div><b>升级工程格式</b><p>查看并执行版本升级。</p></div><span>升级</span></article></aside></div></section>
 
       <section class="panel audit-panel" id="audit">
-        <div class="panel-heading compact"><p class="eyebrow">审计详情</p><h2>工程技术记录</h2><p class="section-copy">查看工程版本、运行契约和本次会话请求。</p></div>
+        <div class="panel-heading compact"><p class="eyebrow">技术详情</p><h2>工程技术记录</h2><p class="section-copy">工程版本、运行契约和本次会话请求。</p></div>
         <div class="audit-summary"><div><small>本次会话</small><strong>本机运行</strong><span>记录随操作更新</span></div><p>最近操作显示在会话记录中。</p></div>
         <details class="audit-section"><summary><span><b>工程状态标识</b><small>Commit 与运行契约</small></span><i>展开</i></summary><dl class="audit-facts"><div><dt>Canonical Commit</dt><dd><code id="audit-commit">{{ canonical_commit }}</code></dd></div><div><dt>Runtime Contract</dt><dd><code>1.0</code></dd></div><div><dt>Session</dt><dd><code>loopback / local</code></dd></div></dl></details>
         <details class="audit-section"><summary><span><b>本次会话原始记录</b><small>请求、返回值与内部标识</small></span><i>展开</i></summary><pre class="audit-output" id="audit-output">尚无本次会话的技术记录。</pre></details>
