@@ -1141,9 +1141,10 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
       `已采用“${value.selected_template}”建立工程草案，任务正在按工程结构展开。`));
     advanceWorkspace('草案已建立', `${value.requirement_count} 项内容可以继续编辑。`, .66);
     motion.step(0);
-    audit('零规范需求已转入工程工作区', value);
-    selectPanel('workspace');
-    toast('工程草案已经建立。');
+    audit('需求已建立工程任务', value);
+    await Promise.all([loadEngineeringMap(), loadMissions()]);
+    selectPanel('missions');
+    toast('工程任务已经建立。');
   } catch (error) { toast(error.message); }
 });
 
@@ -1365,7 +1366,7 @@ const paintDecision = (validation) => {
   const strip = document.querySelector('#decision-strip');
   if (!strip) return;
   strip.dataset.disposition = decision.disposition || (blocking ? 'block' : 'allow');
-  strip.querySelector('strong').textContent = blocking ? '需要先处理' : '可以进入批准';
+  strip.querySelector('strong').textContent = blocking ? '需要先处理' : '检查通过';
   strip.querySelector('small').textContent = blocking
     ? `发现 ${blocking} 项会阻止保存的问题。`
     : findings ? `有 ${findings} 项提示可供审阅。` : '校验通过。';
@@ -1450,6 +1451,25 @@ const renderReview = (value) => {
 const loadReviewPackage = async (packageUid) => {
   renderReview(await api(`/api/review-package/${encodeURIComponent(packageUid)}`));
 };
+const submitChangeWorkspace = async () => {
+  const value = await api('/api/workspace/submit', {
+    method: 'POST', body: JSON.stringify(envelope({
+      configuration_uid: runtimeState.configurationUid,
+      evaluation_time: new Date().toISOString(), maximum_depth: 3,
+    })),
+  });
+  runtimeState.packageUid = value.review_package.package_uid;
+  runtimeState.reviewPurpose = 'candidate'; runtimeState.approval = null;
+  runtimeState.intakeWorkspace = false;
+  advanceWorkspace('等待正式审阅', '变更范围和检查结论已经汇总。', 1);
+  paintDecision(value.validation);
+  const output = document.querySelector('#workspace-output');
+  output.hidden = false;
+  output.replaceChildren(create('p', '', `${runtimeState.change.humanKey} 已进入正式审阅。`));
+  motion.step(1);
+  await loadReviewPackage(runtimeState.packageUid);
+  selectPanel('review');
+};
 const assessChangeWorkspace = async () => {
   const value = await api('/api/workspace/validate', {
     method: 'POST', body: JSON.stringify({
@@ -1467,8 +1487,21 @@ const assessChangeWorkspace = async () => {
       : '变更仍可继续编辑，代理可进入下一项工作。';
   advanceWorkspace(state, guidance, disposition === 'BLOCK' ? .65 : 1);
   paintDecision(value.validation);
-  document.querySelector('#workspace-output').replaceChildren(create('p', '',
-    `${runtimeState.change.humanKey} 已完成后台评估。`));
+  const output = document.querySelector('#workspace-output');
+  output.hidden = false;
+  output.replaceChildren(create('p', '', `${runtimeState.change.humanKey} 已完成检查。`));
+  if (!['BLOCK', 'HUMAN_DECISION_NOW'].includes(disposition)) {
+    const review = create('button', 'secondary-action', '送交正式审阅');
+    review.type = 'button';
+    review.addEventListener('click', async () => {
+      review.disabled = true; review.textContent = '正在整理…';
+      try { await submitChangeWorkspace(); }
+      catch (error) {
+        review.disabled = false; review.textContent = '送交正式审阅'; toast(error.message);
+      }
+    });
+    output.append(review);
+  }
   audit('工作副本评估完成', value);
 };
 document.querySelector('#workspace-compose-form').addEventListener('submit', async (event) => {
