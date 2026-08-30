@@ -226,6 +226,11 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
     assert "configuration_snapshot" in canonical_types
     assert not any(item.get("resource_type") == "revision" for item in runtime.domain.documents)
     assert all(item.state.value == "editable" for item in workspace.working_copies)
+    mission = runtime.domain.missions.inspect(value["mission"]["mission_uid"])
+    assert mission.configuration_uid == value["configuration_uid"]
+    assert {item.workspace_uid for item in mission.work_packages} == {
+        value["workspace_uid"]
+    }
     assert {item.kind for item in workspace.working_copies} == {
         "functional_requirement",
         "constraint_requirement",
@@ -245,6 +250,9 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
     assert value["engineering_areas"] == [
         item.label for item in mapping.engineering_areas
     ]
+    assert {item.engineering_area for item in mission.work_packages} == {
+        item.area_key for item in mapping.engineering_areas
+    }
     assert {
         uid
         for area in mapping.engineering_areas
@@ -327,7 +335,12 @@ def test_template_driven_engineering_map_includes_the_editable_intake(
         for area in web_map.json()["areas"]
         for item in area["items"]
     } >= set(accepted["human_keys"])
-    assert client.get("/api/missions").json() == {"items": []}
+    missions = client.get("/api/missions").json()["items"]
+    assert len(missions) == 1
+    assert missions[0]["title"] == "temporary-observatory · 工程任务"
+    assert {item["engineering_area"] for item in missions[0]["work_packages"]} == {
+        item["area_key"] for item in web_map.json()["areas"]
+    }
     assert client.get("/api/decisions").json() == {"items": []}
 
 

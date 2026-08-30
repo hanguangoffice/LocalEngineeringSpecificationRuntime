@@ -40,6 +40,7 @@ from lesr.domain.semantic import SemanticField, uuid7_candidate
 from lesr.domain.workspace import WorkingCopy
 from lesr.intake.bootstrap import IntakeBootstrapper
 from lesr.intake.engineering_model import engineering_model_for
+from lesr.intake.mission import mission_plan_for_intake
 from lesr.intake.models import IntakeRequest
 from lesr.intake.service import IntakeService
 
@@ -937,6 +938,20 @@ class LocalWebRuntime:
                 if not proposed.ok:
                     assert proposed.error is not None
                     raise RuntimeError(proposed.error.message)
+            mission_result = runtime.create_mission(
+                mission_plan_for_intake(
+                    analysis,
+                    engineering_model,
+                    workspace_uid=workspace_uid,
+                    actor_uid=actor_uid,
+                    configuration_uid=configuration_uid,
+                    project_name=value.project_name,
+                ).model_dump(mode="json")
+            )
+            if not mission_result.ok:
+                assert mission_result.error is not None
+                raise RuntimeError(mission_result.error.message)
+            mission = mission_result.value
             return {
                 "workspace_uid": workspace_uid,
                 "base_commit": runtime.base,
@@ -951,7 +966,8 @@ class LocalWebRuntime:
                 "content_types": list(engineering_model.kind_names),
                 "requirement_count": len(analysis.requirements),
                 "human_keys": [item.human_key for item in analysis.requirements],
-                "next_step": "review_draft",
+                "mission": mission,
+                "next_step": "mission_running",
             }
         except (KeyError, OSError, PermissionError, RuntimeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
