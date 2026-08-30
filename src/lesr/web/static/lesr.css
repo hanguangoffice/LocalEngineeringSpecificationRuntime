@@ -442,6 +442,9 @@ form button:hover, .secondary-action:hover, #gc-plan:hover { background: #174f3b
 .map-status-line strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 
 .engineering-atlas { display: grid; grid-template-columns: 245px minmax(360px, 1.12fr) minmax(330px, .88fr); max-width: 1420px; min-height: 570px; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); background: rgb(255 253 248 / 68%); }
+.engineering-atlas.is-empty { grid-template-columns: minmax(0, 620px); min-height: 0; padding: 8px 0; }
+.engineering-atlas.is-empty .atlas-documents,
+.engineering-atlas.is-empty .atlas-detail { display: none; }
 .atlas-column { min-width: 0; padding: 26px 24px 30px; }
 .atlas-column + .atlas-column { border-left: 1px solid var(--line); }
 .atlas-column > header { display: grid; grid-template-columns: 30px 1fr auto; align-items: start; gap: 10px; min-height: 58px; margin-bottom: 18px; }

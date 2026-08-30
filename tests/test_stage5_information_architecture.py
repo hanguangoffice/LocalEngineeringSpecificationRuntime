@@ -311,6 +311,7 @@ def test_primary_views_remain_readable_at_laptop_and_narrow_widths(
             expect(page.locator("#decision-request")).not_to_contain_text(
                 "OPERATION_OUTSIDE_MANDATE"
             )
+            page.screenshot(path=str(tmp_path / "decision-1366x768.png"), full_page=True)
             page.get_by_label("采用低显存配置").check()
             page.get_by_label("你的判断依据").fill("4GB 显存兼容是本阶段的首要目标。")
             page.get_by_role("button", name="记录选择并继续任务").click()
@@ -337,6 +338,18 @@ def test_primary_views_remain_readable_at_laptop_and_narrow_widths(
                 assert page.evaluate(
                     "document.documentElement.scrollWidth <= window.innerWidth + 1"
                 )
+            page.locator('button[data-panel="overview"]').click()
+            expect(page.get_by_text("工程地图等待第一批内容")).to_be_visible()
+            page.wait_for_function(
+                """() => {
+                    const atlas = document.querySelector('#engineering-map');
+                    const toast = document.querySelector('#toast');
+                    return getComputedStyle(atlas).transform === 'none'
+                        && Number(getComputedStyle(atlas).opacity) === 1
+                        && Number(getComputedStyle(toast).opacity) === 0;
+                }"""
+            )
+            page.screenshot(path=str(tmp_path / "engineering-map-390x844.png"), full_page=True)
             assert not page_errors
             browser.close()
     finally:

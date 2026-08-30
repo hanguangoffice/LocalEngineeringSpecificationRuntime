@@ -599,9 +599,11 @@ const selectMapArea = (area, button) => {
 const renderEngineeringMap = (payload) => {
   const view = payload?.engineering_view || payload?.view || payload || {};
   runtimeState.engineeringMap = view;
+  const atlas = document.querySelector('#engineering-map');
   const tree = document.querySelector('#engineering-area-tree');
   tree.replaceChildren();
   const areas = view.areas || [];
+  atlas.classList.toggle('is-empty', !areas.length);
   if (!areas.length) {
     const empty = create('div', 'atlas-empty');
     empty.append(create('b', '', '工程地图等待第一批内容'),

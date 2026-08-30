@@ -180,7 +180,7 @@ def test_local_ui_honors_reduced_motion_without_hiding_state(tmp_path: Path) -> 
 
 @pytest.mark.playwright
 def test_local_ui_turns_a_raw_request_into_an_agent_mission(tmp_path: Path) -> None:
-    project = tmp_path / "zero-spec-project"
+    project = tmp_path / "edge-telemetry-observatory"
     GitCanonicalRepository(project).initialize()
     runtime = LocalWebRuntime(
         project,
@@ -205,7 +205,7 @@ def test_local_ui_turns_a_raw_request_into_an_agent_mission(tmp_path: Path) -> N
             browser = playwright.chromium.launch(
                 channel="msedge" if os.name == "nt" else None
             )
-            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page = browser.new_page(viewport={"width": 1920, "height": 1080})
             page.goto(f"http://127.0.0.1:{port}/unlock?token=zero-spec-token")
             page.wait_for_load_state("networkidle")
             page.locator('button[data-panel="intake"]').click()
@@ -274,6 +274,7 @@ def test_local_ui_turns_a_raw_request_into_an_agent_mission(tmp_path: Path) -> N
             expect(page.locator('.mission-node[data-state="completed"]')).to_have_count(1)
             expect(page.locator('.mission-node[data-state="ready"]')).to_have_count(1)
             expect(page.locator("#decision-nav-count")).to_be_hidden()
+            page.screenshot(path=str(tmp_path / "agent-mission-1920x1080.png"), full_page=True)
             canonical = tuple(item for _, item in runtime.domain.repository.documents())
             assert not [item for item in canonical if item.get("resource_type") == "revision"]
             browser.close()
