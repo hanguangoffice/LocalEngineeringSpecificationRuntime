@@ -21,16 +21,22 @@ from lesr.domain.model import (
     ProfileReviewPolicy,
     ProfileReviewStage,
 )
+from lesr.domain.presentation import PresentationMappingRevision
 from lesr.domain.semantic import (
     ConfigurationSnapshot,
     CoreResourceClass,
     document_hash,
     uuid7_candidate,
 )
+from lesr.intake.engineering_model import (
+    build_presentation_mapping,
+    engineering_model_for,
+)
+from lesr.intake.models import TemplatePack
 
 
 class IntakeBootstrapper:
-    """Create the minimum human trust and generic requirement model once."""
+    """Create local trust and the selected template's engineering model once."""
 
     def __init__(
         self,
@@ -42,31 +48,44 @@ class IntakeBootstrapper:
         self.domain = domain
         self.key_store = ApprovalKeyStore(key_root, password=key_password)
 
-    def ensure(self, display_name: str) -> dict[str, str | bool]:
+    def ensure(
+        self,
+        display_name: str,
+        selected_pack: TemplatePack,
+    ) -> dict[str, str | bool]:
+        plan = engineering_model_for(selected_pack)
         current = self._current()
         if current is not None:
             return current | {"created": False}
         existing_identity = self._existing_identity()
         if existing_identity is not None:
-            return self._complete_configuration(existing_identity) | {"created": False}
+            return self._complete_configuration(existing_identity, selected_pack) | {
+                "created": False
+            }
 
         actor_uid = uuid7_candidate()
         workspace_uid = uuid7_candidate()
         delegation_uid = uuid7_candidate()
         trust = self.key_store.generate(actor_uid, display_name, ("technical",))
         facet = FacetDefinitionRevision(
-            name="requirement_content",
+            name="engineering_content",
             authority=100,
             fields=(
                 FieldDefinition(path="/statement", value_type="string", required=True),
             ),
         )
-        kind = KindDefinitionRevision(
-            name="software_requirement",
-            core_class=CoreResourceClass.GOVERNED_OBJECT,
-            required_facet_revision_uids=(facet.revision_uid,),
-            authority=100,
+        kinds = tuple(
+            KindDefinitionRevision(
+                name=name,
+                core_class=CoreResourceClass.GOVERNED_OBJECT,
+                required_facet_revision_uids=(facet.revision_uid,),
+                authority=100,
+            )
+            for name in plan.kind_names
         )
+        definitions: tuple[
+            FacetDefinitionRevision | KindDefinitionRevision, ...
+        ] = (facet, *kinds)
         profile = NormativeProfileRevision(
             layer=ProfileLayer.PROJECT,
             authority=100,
@@ -75,7 +94,7 @@ class IntakeBootstrapper:
                     mode=CompositionMode.EXTEND,
                     definition_revision_uid=item.revision_uid,
                 )
-                for item in (facet, kind)
+                for item in definitions
             ),
             review_policies=(
                 ProfileReviewPolicy(
@@ -101,7 +120,7 @@ class IntakeBootstrapper:
             ),
             context_policies=(ProfileContextPolicy(task_type="*"),),
         )
-        model = EffectiveModelCompiler().compile((profile,), (facet, kind))
+        model = EffectiveModelCompiler().compile((profile,), definitions)
         issued_at = datetime.now(UTC)
         raw_delegation: dict[str, Any] = {
             "schema_version": "1.0",
@@ -134,7 +153,7 @@ class IntakeBootstrapper:
                 "operation_type": "create_record",
                 "resource": item.model_dump(mode="json"),
             }
-            for item in (facet, kind)
+            for item in definitions
         ) + (
             {
                 "operation_type": "update_profile_binding",
@@ -172,7 +191,7 @@ class IntakeBootstrapper:
             relation_revision_uids=(),
             profile_revision_uids=(profile.profile_revision_uid,),
             effective_model_hash=model.model_hash,
-            variant="zero-spec-intake",
+            variant=f"zero-spec-intake:{selected_pack.pack_uid}",
             closure_status="complete",
         )
         configuration_value = configuration.model_dump(mode="json")
@@ -207,7 +226,59 @@ class IntakeBootstrapper:
             "created": True,
         }
 
-    def _complete_configuration(self, identity: dict[str, str]) -> dict[str, str]:
+    def presentation_mapping(
+        self,
+        selected_pack: TemplatePack,
+    ) -> PresentationMappingRevision:
+        """Bind the selected template to exact active Kind Revision UIDs."""
+
+        plan = engineering_model_for(selected_pack)
+        configurations = [
+            item
+            for item in self.domain.documents
+            if item.get("resource_type") == "configuration_snapshot"
+            and item.get("closure_status") == "complete"
+        ]
+        if not configurations:
+            raise RuntimeError("工程配置尚未建立，无法创建工程视图")
+        configuration = configurations[-1]
+        profile_revision_uids = tuple(
+            str(item) for item in configuration.get("profile_revision_uids", ())
+        )
+        profiles = tuple(
+            NormativeProfileRevision.model_validate(item)
+            for item in self.domain.documents
+            if item.get("resource_type") == "normative_profile_revision"
+            and item.get("profile_revision_uid") in profile_revision_uids
+        )
+        active_definition_uids = {
+            contribution.definition_revision_uid
+            for profile in profiles
+            for contribution in profile.contributions
+        }
+        kind_definitions = tuple(
+            KindDefinitionRevision.model_validate(item)
+            for item in self.domain.documents
+            if item.get("resource_type") == "kind_definition_revision"
+            and item.get("revision_uid") in active_definition_uids
+        )
+        by_name = {item.name: item for item in kind_definitions}
+        if len(by_name) != len(kind_definitions):
+            raise RuntimeError("当前工程模型存在同名 Kind，无法生成工程视图")
+        try:
+            return build_presentation_mapping(
+                plan,
+                by_name,
+                profile_revision_uids=profile_revision_uids,
+            )
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+
+    def _complete_configuration(
+        self,
+        identity: dict[str, str],
+        selected_pack: TemplatePack,
+    ) -> dict[str, str]:
         profiles = tuple(
             NormativeProfileRevision.model_validate(item)
             for item in self.domain.documents
@@ -235,7 +306,7 @@ class IntakeBootstrapper:
             relation_revision_uids=(),
             profile_revision_uids=tuple(item.profile_revision_uid for item in profiles),
             effective_model_hash=model.model_hash,
-            variant="zero-spec-intake",
+            variant=f"zero-spec-intake:{selected_pack.pack_uid}",
             closure_status="complete",
         )
         configuration_value = configuration.model_dump(mode="json")

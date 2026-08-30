@@ -1,18 +1,25 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
   "$id":"https://lesr.dev/schemas/v1/audit-anchor.schema.json",
-  "title":"LESR Audit Anchor",
+  "title":"LESR Audit Record",
   "type":"object",
   "additionalProperties":false,
-  "required":["schema_version","resource_type","anchor_uid","transaction_uid","previous_anchor_hash","event_hashes","created_at","anchor_hash"],
+  "required":["schema_version","resource_type","anchor_uid","transaction_uid","created_at"],
   "properties":{
     "schema_version":{"$ref":"common.schema.json#/$defs/schema_version"},
     "resource_type":{"const":"audit_anchor"},
     "anchor_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
     "transaction_uid":{"$ref":"common.schema.json#/$defs/uuid7"},
-    "previous_anchor_hash":{"oneOf":[{"$ref":"common.schema.json#/$defs/sha256"},{"type":"null"}]},
-    "event_hashes":{"type":"array","minItems":1,"items":{"$ref":"common.schema.json#/$defs/sha256"}},
-    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"},
-    "anchor_hash":{"$ref":"common.schema.json#/$defs/sha256"}
-  }
+    "actor_uid":{"type":"string","minLength":1},
+    "operation_types":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string","minLength":1}},
+    "approval_uids":{"type":"array","uniqueItems":true,"items":{"$ref":"common.schema.json#/$defs/uuid7"}},
+    "previous_anchor_hash":{"oneOf":[{"$ref":"common.schema.json#/$defs/sha256"},{"type":"null"}],"deprecated":true},
+    "event_hashes":{"type":"array","minItems":1,"items":{"$ref":"common.schema.json#/$defs/sha256"},"deprecated":true},
+    "anchor_hash":{"$ref":"common.schema.json#/$defs/sha256","deprecated":true},
+    "created_at":{"$ref":"common.schema.json#/$defs/utc_timestamp"}
+  },
+  "oneOf":[
+    {"required":["actor_uid","operation_types","approval_uids"],"not":{"anyOf":[{"required":["previous_anchor_hash"]},{"required":["event_hashes"]},{"required":["anchor_hash"]}]}},
+    {"required":["previous_anchor_hash","event_hashes","anchor_hash"],"not":{"anyOf":[{"required":["actor_uid"]},{"required":["operation_types"]},{"required":["approval_uids"]}]}}
+  ]
 }

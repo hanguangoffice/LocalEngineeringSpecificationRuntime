@@ -4,7 +4,7 @@
   "title": "LESR Ed25519 Approval Attestation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "approval_uid", "package_hash", "effective_model_hash", "scope", "scope_hash", "approval_type", "actor_uid", "actor_role", "actor_type", "issued_at", "conditions", "signature_algorithm", "key_uid", "signature", "provenance_uid"],
+  "required": ["schema_version", "resource_type", "approval_uid", "package_hash", "effective_model_hash", "scope", "approval_type", "actor_uid", "actor_role", "actor_type", "issued_at", "conditions", "signature_algorithm", "key_uid", "signature", "provenance_uid"],
   "properties": {
     "schema_version": {"$ref": "common.schema.json#/$defs/schema_version"},
     "resource_type": {"const": "approval_attestation"},
@@ -12,7 +12,7 @@
     "package_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "scope": {"$ref": "common.schema.json#/$defs/canonical_value"},
-    "scope_hash": {"$ref": "common.schema.json#/$defs/sha256"},
+    "scope_hash": {"$ref": "common.schema.json#/$defs/sha256", "deprecated": true},
     "approval_type": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$"},
     "actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "actor_role": {"type": "string", "minLength": 1},

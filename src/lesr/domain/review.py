@@ -30,15 +30,21 @@ class ReviewComment(FrozenModel):
     author_uid: str
     body: str = Field(min_length=1)
     created_at: datetime
-    comment_hash: str = ""
+    comment_hash: str | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def calculate_hash(self) -> ReviewComment:
-        expected = document_hash(self.model_dump(mode="json"), "comment_hash")
-        if self.comment_hash and self.comment_hash != expected:
+    def validate_legacy_hash(self) -> ReviewComment:
+        if (
+            self.comment_hash is not None
+            and self.comment_hash
+            != document_hash(self.model_dump(mode="json"), "comment_hash")
+        ):
             raise ValueError("comment_hash is invalid")
-        object.__setattr__(self, "comment_hash", expected)
         return self
+
+    @property
+    def references(self) -> frozenset[str]:
+        return frozenset((self.comment_uid, *([self.comment_hash] if self.comment_hash else [])))
 
 
 class CommentDisposition(StrEnum):
@@ -51,20 +57,29 @@ class CommentResolution(FrozenModel):
     schema_version: Literal["1.0"] = "1.0"
     resource_type: Literal["comment_resolution"] = "comment_resolution"
     resolution_uid: str = Field(default_factory=uuid7_candidate)
-    comment_hash: str
+    comment_uid: str | None = None
+    comment_hash: str | None = Field(default=None, exclude=True, repr=False)
     actor_uid: str
     disposition: CommentDisposition
     rationale: str
     created_at: datetime
-    resolution_hash: str = ""
+    resolution_hash: str | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def calculate_hash(self) -> CommentResolution:
-        expected = document_hash(self.model_dump(mode="json"), "resolution_hash")
-        if self.resolution_hash and self.resolution_hash != expected:
-            raise ValueError("resolution_hash is invalid")
-        object.__setattr__(self, "resolution_hash", expected)
+    def validate_reference_and_legacy_hash(self) -> CommentResolution:
+        if (self.comment_uid is None) == (self.comment_hash is None):
+            raise ValueError("comment resolution requires exactly one comment reference")
+        if self.resolution_hash is not None:
+            legacy = self.model_dump(mode="json", exclude_none=True)
+            legacy.pop("comment_uid", None)
+            legacy["comment_hash"] = self.comment_hash
+            if self.resolution_hash != document_hash(legacy, "resolution_hash"):
+                raise ValueError("resolution_hash is invalid")
         return self
+
+    @property
+    def comment_reference(self) -> str:
+        return self.comment_uid or str(self.comment_hash)
 
 
 class ConditionSatisfaction(FrozenModel):
@@ -72,21 +87,31 @@ class ConditionSatisfaction(FrozenModel):
     resource_type: Literal["condition_satisfaction"] = "condition_satisfaction"
     satisfaction_uid: str = Field(default_factory=uuid7_candidate)
     approval_uid: str
-    condition_hash: str
+    condition: object | None = None
+    condition_hash: str | None = Field(default=None, exclude=True, repr=False)
     evidence_uids: tuple[str, ...]
     actor_uid: str
     satisfied_at: datetime
-    satisfaction_hash: str = ""
+    satisfaction_hash: str | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def validate_and_hash(self) -> ConditionSatisfaction:
+    def require_evidence(self) -> ConditionSatisfaction:
         if not self.evidence_uids:
             raise ValueError("condition satisfaction requires evidence")
-        expected = document_hash(self.model_dump(mode="json"), "satisfaction_hash")
-        if self.satisfaction_hash and self.satisfaction_hash != expected:
-            raise ValueError("satisfaction_hash is invalid")
-        object.__setattr__(self, "satisfaction_hash", expected)
+        if (self.condition is None) == (self.condition_hash is None):
+            raise ValueError("condition satisfaction requires exactly one condition value")
+        if self.satisfaction_hash is not None:
+            legacy = self.model_dump(mode="json", exclude_none=True)
+            legacy.pop("condition", None)
+            legacy["condition_hash"] = self.condition_hash
+            if self.satisfaction_hash != document_hash(legacy, "satisfaction_hash"):
+                raise ValueError("satisfaction_hash is invalid")
         return self
+
+    def matches(self, condition: object) -> bool:
+        return self.condition == condition or self.condition_hash == semantic_hash(
+            {"condition": condition}
+        )
 
 
 class ApprovalRevocation(FrozenModel):
@@ -97,14 +122,16 @@ class ApprovalRevocation(FrozenModel):
     actor_uid: str
     reason: str = Field(min_length=1)
     revoked_at: datetime
-    revocation_hash: str = ""
+    revocation_hash: str | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def calculate_hash(self) -> ApprovalRevocation:
-        expected = document_hash(self.model_dump(mode="json"), "revocation_hash")
-        if self.revocation_hash and self.revocation_hash != expected:
+    def validate_legacy_hash(self) -> ApprovalRevocation:
+        if (
+            self.revocation_hash is not None
+            and self.revocation_hash
+            != document_hash(self.model_dump(mode="json"), "revocation_hash")
+        ):
             raise ValueError("revocation_hash is invalid")
-        object.__setattr__(self, "revocation_hash", expected)
         return self
 
 
@@ -149,21 +176,22 @@ class ReviewPackage(FrozenModel):
     effective_model_hash: str
     prepared_by_actor_uid: str
     created_at: datetime
-    subject_hash: str = ""
+    subject_hash: str | None = Field(default=None, exclude=True, repr=False)
     package_hash: str = ""
 
     @model_validator(mode="after")
     def calculate_hash(self) -> ReviewPackage:
         if not self.candidate_scope:
             raise ValueError("review package candidate scope cannot be empty")
-        subject_document = self.model_dump(mode="json")
-        subject_document.pop("subject_hash", None)
-        subject_document.pop("package_hash", None)
-        expected_subject = semantic_hash(subject_document)
-        if self.subject_hash and self.subject_hash != expected_subject:
-            raise ValueError("subject_hash is invalid")
-        object.__setattr__(self, "subject_hash", expected_subject)
-        expected = document_hash(self.model_dump(mode="json"), "package_hash")
+        current = self.model_dump(mode="json")
+        if self.subject_hash is not None:
+            subject_document = dict(current)
+            subject_document.pop("package_hash", None)
+            expected_subject = semantic_hash(subject_document)
+            if self.subject_hash != expected_subject:
+                raise ValueError("subject_hash is invalid")
+            current["subject_hash"] = self.subject_hash
+        expected = document_hash(current, "package_hash")
         if self.package_hash and self.package_hash != expected:
             raise ValueError("package_hash is invalid")
         object.__setattr__(self, "package_hash", expected)
@@ -196,12 +224,14 @@ class GovernanceEvaluator:
         reasons: list[str] = []
         trust_by_key = {item.key_uid: item for item in trust}
         revoked = {item.approval_uid for item in revocations if item.revoked_at <= now}
-        resolved_comments = {item.comment_hash for item in resolutions}
-        package_comments = {
-            item.comment_hash
-            for item in comments
-            if item.package_hash == package.package_hash
-        }
+        resolved_comments = {item.comment_reference for item in resolutions}
+        package_comments = set().union(
+            *(
+                item.references
+                for item in comments
+                if item.package_hash == package.package_hash
+            )
+        )
         if (
             package.review_policy.require_comment_resolution
             and not package_comments <= resolved_comments
@@ -233,13 +263,15 @@ class GovernanceEvaluator:
             ):
                 reasons.append(f"PREPARER_SELF_APPROVAL:{approval.approval_uid}")
                 continue
-            condition_hashes = {semantic_hash({"condition": item}) for item in approval.conditions}
-            satisfied = {
-                item.condition_hash
+            satisfaction_records = [
+                item
                 for item in satisfactions
                 if item.approval_uid == approval.approval_uid
-            }
-            if not condition_hashes <= satisfied:
+            ]
+            if any(
+                not any(item.matches(condition) for item in satisfaction_records)
+                for condition in approval.conditions
+            ):
                 reasons.append(f"CONDITION_UNSATISFIED:{approval.approval_uid}")
                 continue
             valid.append(approval)

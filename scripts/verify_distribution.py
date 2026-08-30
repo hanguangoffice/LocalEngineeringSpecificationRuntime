@@ -80,10 +80,31 @@ def verify(distribution: Path | None = None) -> int:
                 raise ValueError(f"wheel source differs byte-for-byte from src: {name}")
         expected_assets = {
             path.relative_to(ROOT / "src").as_posix(): path
-            for path in (ROOT / "src" / "lesr" / "web").rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            for asset_root in (
+                ROOT / "src" / "lesr" / "web",
+                ROOT / "src" / "lesr" / "intake",
+            )
+            for path in asset_root.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix not in {".py", ".pyc"}
         }
         expected_assets["lesr/py.typed"] = ROOT / "src" / "lesr" / "py.typed"
+        packaged_assets = {
+            name
+            for name in names
+            if (
+                name.startswith(("lesr/web/", "lesr/intake/"))
+                and not name.endswith(".py")
+            )
+            or name == "lesr/py.typed"
+        }
+        if packaged_assets != set(expected_assets):
+            raise ValueError(
+                "wheel runtime asset set differs from src: "
+                f"missing={sorted(set(expected_assets) - packaged_assets)}, "
+                f"unexpected={sorted(packaged_assets - set(expected_assets))}"
+            )
         for name, source in expected_assets.items():
             if name not in names:
                 raise ValueError(f"wheel is missing runtime asset: {name}")
@@ -150,11 +171,26 @@ def _installed_smoke(wheel: Path, version: str) -> None:
                 "".join(
                     (
                         "import importlib.metadata, lesr; ",
+                        "from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService; ",
                         f"assert importlib.metadata.version('lesr') == {version!r}; ",
-                        "assert lesr.__version__ == importlib.metadata.version('lesr')",
+                        "assert lesr.__version__ == importlib.metadata.version('lesr'); ",
+                        "catalog = IntakeCatalog(); ",
+                        "assert catalog.verify_vendored_sources(); ",
+                        "analysis = IntakeService(catalog).analyze(IntakeRequest(",
+                        "description='Build an MQTT edge telemetry service with repeatable tests.'",
+                        ")); ",
+                        "assert analysis.selected_pack.pack_uid == 'event-driven-integration'",
                     )
                 ),
             ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        command = environment / ("Scripts/lesr.exe" if sys.platform == "win32" else "bin/lesr")
+        subprocess.run(
+            [str(command), "--help"],
             cwd=root,
             check=True,
             capture_output=True,

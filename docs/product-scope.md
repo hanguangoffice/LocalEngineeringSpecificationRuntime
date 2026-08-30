@@ -1,19 +1,51 @@
-# Product scope (historical note)
+# 产品范围
 
-> **SUPERSEDED:** this file previously described the YAML MVP. Current scope is
-> controlled by `LESR_Solution_Design_Baseline_v1.0/`, the v1 construction spec,
-> and `AUDIT-REMEDIATION-MATRIX.md`.
+LESR 是本地单仓库的 AI 工程控制平面。它把用户目标、工程规范、AI 代理执行和 Git
+工程状态连接起来，使工程人员能够看到“现在要做什么、工程由哪些部分组成、各部分进展
+怎样、哪里需要真正的工程决定”。
 
-LESR is a local, Git-authoritative semantic runtime for governed engineering
-specifications. It separates stable logical identity from immutable revisions,
-models relations and lifecycle facts as versioned/immutable records, compiles
-declarative profiles and rules, resolves exact configurations, builds auditable
-context contracts and applies reviewed semantic transactions atomically.
+## 用户交给 LESR 的内容
 
-MCP is a replaceable capability adapter, not the domain model or an unrestricted
-filesystem/SQL/shell interface. Human approval keys remain outside MCP and only
-trusted public keys enter Canonical State.
+用户可以直接描述目标，也可以导入自己的 Markdown 或 PDF 规范。已有规范保持为来源；
+没有完整规范时，LESR 从固定版本、许可明确的上游模板中选择结构，再将用户原话映射为
+需求、架构、接口、测试、证据和交付项。模板选择规则与来源见
+`zero-spec-intake-sources.md`。
 
-This runtime does not claim ASPICE assessment, MISRA certification or permission
-to redistribute standards. P6 interoperability, UI, OCR, complex office-layout
-recovery and general plugin execution remain deferred.
+## LESR 组织的工作
+
+一个 Mission 表示一个用户目标。Mission Mandate 定义本次代理可处理的工程范围、操作
+类型、限额和有效期。协调器把目标拆成相互依赖的 Work Package，并把它们交给适合的
+代理运行：例如需求整理、架构设计、实现、验证、影响分析和集成。工作区、上下文、校验、
+重试、检查点和无冲突合并由控制平面协调。
+
+工程结果仍经过同一语义内核：稳定对象、不可变 Revision、关系、Profile、Rule、
+Configuration、Graph Snapshot、Working Copy、Review Package 和 Git 事务。代理运行进度
+属于本地运行状态，不写入 Canonical Git；正式工程变化只在语义事务完成后进入 Git。
+
+## 用户看到的工程
+
+工程地图由当前 Profile 和模板提供展示映射。ASPICE-like 项目可以使用 SYS、SWE、SUP；
+普通软件项目可以使用目标、需求、架构、实现、验证、发布；API、数据、模型和嵌入式项目
+可以采用自己的工程区域。地图同时呈现层级、关系、覆盖、变化和验证结果，让用户从工程
+内容进入工作，而不是先理解 LESR 内部对象模型。
+
+## 人工介入边界
+
+后台根据实际差异、Profile、Mission Mandate、影响和外部效果选择自动继续、里程碑汇总、
+立即请求人工决定或阻止方案。普通编辑、资料整理、校验、测试、修复、检查点和代理交接
+不会逐步请求批准。
+
+人工决定集中在两类边界：
+
+- 材料工程取舍：目标或验收标准变化、存在多个会产生不同结果的方案、关键证据不足；
+- 正式责任：Profile 指定的人类角色、偏离/例外、信任与权限变化、正式基线和发布。
+
+Delegation 表示代理在授权范围内自动执行，不等于人类 Approval。
+
+## 当前边界
+
+LESR 2.0 产品线定位为本地、单 Git 仓库、单用户。MCP 和 Agent Runner 是可替换适配器，
+不获得任意文件、SQL 或 Shell 权限，也不能取得人类私钥。ReqIF、SARIF、Excel、
+Codebeamer、OSLC、OCR、多仓库、多用户服务和通用插件执行不在当前范围内。
+
+版本与历史验收记录的关系见 `versioning.md`。

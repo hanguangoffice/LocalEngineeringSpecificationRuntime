@@ -26,26 +26,44 @@ from lesr.adapters.git import (
     SemanticOperation,
     SemanticTransaction,
 )
+from lesr.adapters.mission_store import MissionStore
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore, TaskWorker
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.schemas import SchemaCatalog
+from lesr.application.agent_broker import AgentReport
 from lesr.application.contracts import (
     CapabilityDescriptor,
     CapabilityGroup,
     DomainErrorContract,
     DomainResult,
     ErrorCategory,
+    WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
+from lesr.application.engineering_view import build_engineering_view
+from lesr.application.mission_runtime import MissionCoordinator, MissionPlan
 from lesr.domain.approval import (
     SignedApproval,
     TrustedActor,
     verify_approval,
     verify_bound_approval,
 )
-from lesr.domain.catalog import CAPABILITIES
+from lesr.domain.catalog import RUNTIME_CAPABILITIES
+from lesr.domain.decision import (
+    DecisionDisposition,
+    DecisionPolicyFacts,
+    DecisionRequestDraft,
+    ImpactSummary,
+    ValidationConclusion,
+    ValidationSummary,
+)
+from lesr.domain.decision import (
+    ImpactCompleteness as DecisionImpactCompleteness,
+)
 from lesr.domain.evaluation import (
     ConstraintEnvironment,
     ConstraintExpression,
+    ContextBundle,
     Direction,
     GraphNode,
     GraphRelation,
@@ -79,7 +97,9 @@ from lesr.domain.merge import (
     SemanticState,
     begin_reconciliation,
 )
+from lesr.domain.mission import WorkPackageState
 from lesr.domain.model import (
+    DefinitionRevision,
     EffectiveModel,
     EffectiveModelCompiler,
     FacetDefinitionRevision,
@@ -90,6 +110,12 @@ from lesr.domain.model import (
     TailoringOverlay,
     WorkflowProjector,
     WorkflowRevision,
+)
+from lesr.domain.presentation import (
+    EngineeringArea,
+    PresentationMappingRevision,
+    PresentationSelector,
+    ViewMode,
 )
 from lesr.domain.review import (
     ApprovalRevocation,
@@ -139,6 +165,7 @@ from lesr.domain.workspace import (
     Workspace,
     WorkspaceCheckpoint,
     WorkspaceEngine,
+    WorkspacePreview,
 )
 
 
@@ -150,6 +177,9 @@ class LocalRuntimeService:
         self.repository = GitCanonicalRepository(self.project)
         self.base = self.repository.initialize()
         self.task_store = TaskStore(self.project)
+        self.mission_store = MissionStore(self.project)
+        self.missions = MissionCoordinator(self.mission_store)
+        self.presentation_store = PresentationMappingStore(self.project)
         self.workspaces: dict[str, Workspace] = {}
         self.submissions: dict[str, Any] = {}
         self.reviews: dict[str, ReviewPackage] = {}
@@ -170,8 +200,11 @@ class LocalRuntimeService:
             CapabilityGroup.WORKSPACE: [],
             CapabilityGroup.GOVERNANCE: [],
             CapabilityGroup.COMPLIANCE: [],
+            CapabilityGroup.MISSION: [],
+            CapabilityGroup.DECISION: [],
+            CapabilityGroup.ENGINEERING: [],
         }
-        for capability in CAPABILITIES:
+        for capability in RUNTIME_CAPABILITIES:
             prefix = capability.name.split(".", 1)[0]
             group = (
                 CapabilityGroup.RESOLVE
@@ -186,6 +219,12 @@ class LocalRuntimeService:
                 if prefix == "workspace"
                 else CapabilityGroup.GOVERNANCE
                 if prefix in {"review", "apply", "baseline", "reconciliation"}
+                else CapabilityGroup.MISSION
+                if prefix == "mission"
+                else CapabilityGroup.DECISION
+                if prefix == "decision"
+                else CapabilityGroup.ENGINEERING
+                if prefix == "engineering"
                 else CapabilityGroup.COMPLIANCE
             )
             groups[group].append(capability.name)
@@ -194,6 +233,459 @@ class LocalRuntimeService:
             for group, names in groups.items()
             if names
         )
+
+    def create_mission(self, plan: dict[str, Any]) -> DomainResult:
+        """Create local orchestration state without changing Canonical Git."""
+
+        try:
+            mission = self.missions.create(MissionPlan.model_validate(plan))
+            return DomainResult(mission.model_dump(mode="json"))
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-PLAN-INVALID",
+                ErrorCategory.VALIDATION,
+                str(error),
+            )
+
+    def list_missions(self) -> DomainResult:
+        return DomainResult(
+            tuple(item.model_dump(mode="json") for item in self.missions.list())
+        )
+
+    def inspect_mission(self, mission_uid: str) -> DomainResult:
+        try:
+            return DomainResult(
+                self.missions.inspect(mission_uid).model_dump(mode="json")
+            )
+        except KeyError:
+            return self._error(
+                "LESR-MISSION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "mission does not exist",
+                (mission_uid,),
+                suggested="mission.list",
+            )
+
+    def ready_mission_work(self, mission_uid: str) -> DomainResult:
+        try:
+            return DomainResult(
+                tuple(
+                    item.model_dump(mode="json")
+                    for item in self.missions.assignments(mission_uid)
+                )
+            )
+        except KeyError:
+            return self._error(
+                "LESR-MISSION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "mission does not exist",
+                (mission_uid,),
+                suggested="mission.list",
+            )
+
+    def claim_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        agent_identity: str,
+        provider: str,
+        model_identifier: str,
+        client: str,
+    ) -> DomainResult:
+        try:
+            claimed = self.missions.claim(
+                mission_uid,
+                work_package_uid,
+                agent_identity=agent_identity,
+                provider=provider,
+                model_identifier=model_identifier,
+                client=client,
+            )
+            return DomainResult(self._local_runtime_payload(claimed))
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (mission_uid, work_package_uid),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-READY",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (mission_uid, work_package_uid),
+                retryable=True,
+                suggested="mission.ready-work",
+            )
+
+    def report_mission_work(self, report: dict[str, Any]) -> DomainResult:
+        try:
+            result = self.missions.report(AgentReport.model_validate(report))
+            return DomainResult(self._local_runtime_payload(result))
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-RUN-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-REPORT-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+            )
+
+    def evaluate_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        workspace_uid: str,
+        evaluation_time: str,
+        operation: str,
+        narrative: dict[str, Any] | None = None,
+    ) -> DomainResult:
+        """Route real Workspace evidence without accepting a caller risk label."""
+
+        try:
+            instant = self._parse_evaluation_time(evaluation_time)
+            mission = self.missions.inspect(mission_uid)
+            package = next(
+                item
+                for item in mission.work_packages
+                if item.work_package_uid == work_package_uid
+            )
+            workspace = self.workspaces[workspace_uid]
+            if package.state is not WorkPackageState.RUNNING:
+                raise ValueError("WorkPackage is not running under an Agent claim")
+            if package.workspace_uid is not None and package.workspace_uid != workspace_uid:
+                raise ValueError("WorkPackage belongs to another Workspace")
+            if (
+                mission.configuration_uid is not None
+                and workspace.configuration_uid != mission.configuration_uid
+            ):
+                raise ValueError("Workspace belongs to another Mission configuration")
+            if mission.delegation_uid is None:
+                raise ValueError("Mission has no active mandate")
+            mandate = self.mission_store.get_mandate(mission.delegation_uid)
+            area = package.engineering_area
+            if area is None:
+                if len(mandate.scope.engineering_areas) != 1:
+                    raise ValueError("WorkPackage has no unambiguous engineering area")
+                area = mandate.scope.engineering_areas[0]
+            assessment = self.assess_workspace(
+                WorkspaceAssessmentRequest(
+                    workspace_uid=workspace_uid,
+                    evaluation_time=evaluation_time,
+                    maximum_depth=3,
+                )
+            )
+            if not assessment.ok:
+                return assessment
+            value = assessment.value
+            if not isinstance(value, dict):
+                raise TypeError("Workspace assessment returned an invalid payload")
+            validation_value = value.get("validation", {})
+            impact_value = value.get("impact_report", {})
+            route_value = value.get("decision", {})
+            if not isinstance(validation_value, dict) or not isinstance(impact_value, dict):
+                raise TypeError("Workspace assessment evidence is incomplete")
+            operation_decision = validation_value.get("operation_decision", {})
+            operation_disposition = (
+                str(operation_decision.get("disposition", "indeterminate"))
+                if isinstance(operation_decision, dict)
+                else "indeterminate"
+            )
+            validation_outcome = str(validation_value.get("outcome", "indeterminate"))
+            if validation_outcome == "pass" and operation_disposition not in {
+                "block",
+                "indeterminate",
+            }:
+                validation_conclusion = ValidationConclusion.PASSED
+            elif validation_outcome == "fail" or operation_disposition == "block":
+                validation_conclusion = ValidationConclusion.FAILED
+            else:
+                validation_conclusion = ValidationConclusion.INDETERMINATE
+            findings = validation_value.get("findings", ())
+            finding_count = len(findings) if isinstance(findings, (list, tuple)) else 0
+            validation_summary = {
+                ValidationConclusion.PASSED: "候选内容校验通过",
+                ValidationConclusion.FAILED: f"候选内容有 {finding_count} 项需要处理",
+                ValidationConclusion.INDETERMINATE: "候选内容尚未形成确定校验结论",
+            }[validation_conclusion]
+            validation = ValidationSummary(
+                conclusion=validation_conclusion,
+                summary=validation_summary,
+            )
+            completeness_text = str(impact_value.get("completeness", ""))
+            if completeness_text == "COMPLETE":
+                impact_completeness = DecisionImpactCompleteness.COMPLETE
+            elif completeness_text.startswith("INCOMPLETE_"):
+                impact_completeness = DecisionImpactCompleteness.INCOMPLETE
+            else:
+                impact_completeness = DecisionImpactCompleteness.INDETERMINATE
+            paths = impact_value.get("paths", ())
+            path_count = len(paths) if isinstance(paths, (list, tuple)) else 0
+            impact = ImpactSummary(
+                completeness=impact_completeness,
+                summary=(
+                    f"已解析 {path_count} 条影响路径"
+                    if impact_completeness is DecisionImpactCompleteness.COMPLETE
+                    else "影响范围仍有未解析内容"
+                ),
+                affected_areas=(area,),
+                affected_targets=tuple(str(item) for item in value.get("change_scope", ())),
+            )
+            copies = workspace.working_copies
+            human_codes = (
+                ("ENGINEERING_POLICY_REQUIRES_HUMAN_DECISION",)
+                if isinstance(route_value, dict)
+                and route_value.get("disposition")
+                == DecisionDisposition.HUMAN_DECISION_NOW.value
+                else ()
+            )
+            milestone_codes = (
+                ("WORK_PACKAGE_REVIEW_MILESTONE",)
+                if operation == "workspace.submit" and not human_codes
+                else ()
+            )
+            facts = DecisionPolicyFacts(
+                mission_uid=mission_uid,
+                work_package_uid=work_package_uid,
+                operation=operation,
+                engineering_area=area,
+                target_resource_uids=tuple(str(item) for item in value.get("change_scope", ())),
+                new_resource_count=sum(item.base_revision_uid is None for item in copies),
+                prospective_work_packages=len(mission.work_packages),
+                prospective_changed_resources=len(value.get("change_scope", ())),
+                prospective_changed_relations=sum(
+                    len(item.relation_proposals) for item in copies
+                ),
+                validation=validation,
+                impact=impact,
+                human_decision_policy_codes=human_codes,
+                milestone_policy_codes=milestone_codes,
+            )
+            draft = (
+                DecisionRequestDraft.model_validate(narrative)
+                if narrative is not None
+                else None
+            )
+            routed = self.missions.route_decision(
+                mission_uid,
+                work_package_uid,
+                facts,
+                draft,
+                evaluated_at=instant,
+            )
+            return DomainResult(
+                self._local_runtime_payload(routed)
+                | {"workspace_assessment": value}
+            )
+        except StopIteration:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "work package does not exist",
+                (mission_uid, work_package_uid),
+            )
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-EVALUATION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (mission_uid, work_package_uid, workspace_uid),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-EVALUATION-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (mission_uid, work_package_uid, workspace_uid),
+            )
+
+    def list_decisions(self, mission_uid: str | None = None) -> DomainResult:
+        return DomainResult(
+            tuple(
+                item.model_dump(mode="json")
+                for item in self.missions.decision_inbox(mission_uid)
+            )
+        )
+
+    def resolve_decision(
+        self,
+        decision_request_uid: str,
+        actor_uid: str,
+        reason: str,
+        selected_action: str | None = None,
+        selected_alternative: str | None = None,
+    ) -> DomainResult:
+        try:
+            result = self.missions.resolve_decision(
+                decision_request_uid,
+                actor_uid=actor_uid,
+                reason=reason,
+                selected_action=selected_action,
+                selected_alternative=selected_alternative,
+            )
+            return DomainResult(self._local_runtime_payload(result))
+        except KeyError as error:
+            return self._error(
+                "LESR-DECISION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (decision_request_uid,),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-DECISION-RESOLUTION-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (decision_request_uid,),
+            )
+
+    def engineering_map(
+        self,
+        configuration_uid: str,
+        evaluation_time: str,
+        workspace_uid: str | None = None,
+    ) -> DomainResult:
+        """Render the resolved engineering structure without technical identifiers."""
+
+        try:
+            instant = self._parse_evaluation_time(evaluation_time)
+            context: ContextBundle | None = None
+            if workspace_uid is None:
+                snapshot = self._evaluator(configuration_uid, instant).snapshot
+            else:
+                workspace = self.workspaces.get(workspace_uid)
+                if workspace is None:
+                    raise KeyError(workspace_uid)
+                if workspace.configuration_uid != configuration_uid:
+                    raise ValueError("workspace belongs to another engineering configuration")
+                assessment = self.assess_workspace(
+                    WorkspaceAssessmentRequest(
+                        workspace_uid=workspace_uid,
+                        evaluation_time=evaluation_time,
+                        maximum_depth=3,
+                    )
+                )
+                if not assessment.ok:
+                    return assessment
+                snapshot = GraphSnapshot.model_validate(
+                    assessment.value["audit"]["graph_snapshot"]
+                )
+                context = ContextBundle.model_validate(
+                    assessment.value["context_bundle"]
+                )
+            model = self._effective_model(configuration_uid)
+            selected_uids = set(model.definition_revision_uids)
+            definitions: tuple[DefinitionRevision, ...] = tuple(
+                self._definition_revision(value)
+                for value in self.documents
+                if value.get("revision_uid") in selected_uids
+                and value.get("resource_type")
+                in {
+                    "facet_definition_revision",
+                    "kind_definition_revision",
+                    "relation_type_revision",
+                    "workflow_revision",
+                }
+            )
+            for mapping in reversed(self.presentation_store.list()):
+                try:
+                    view = build_engineering_view(
+                        mapping,
+                        model,
+                        snapshot,
+                        definitions,
+                        context_bundle=context,
+                    )
+                except ValueError:
+                    continue
+                return DomainResult(view.model_dump(mode="json"))
+            fallback = self._fallback_presentation_mapping(model, definitions)
+            view = build_engineering_view(
+                fallback,
+                model,
+                snapshot,
+                definitions,
+                context_bundle=context,
+            )
+            return DomainResult(view.model_dump(mode="json"))
+        except KeyError as error:
+            return self._error(
+                "LESR-ENGINEERING-MAP-NOT-AVAILABLE",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (configuration_uid,),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-ENGINEERING-MAP-INDETERMINATE",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (configuration_uid,),
+            )
+
+    @staticmethod
+    def _fallback_presentation_mapping(
+        model: EffectiveModel,
+        definitions: tuple[DefinitionRevision, ...],
+    ) -> PresentationMappingRevision:
+        kinds = sorted(
+            (item for item in definitions if isinstance(item, KindDefinitionRevision)),
+            key=lambda item: item.name,
+        )
+        if not kinds:
+            raise ValueError("effective engineering model defines no content types")
+        known_labels = {
+            "goal": "目标与边界",
+            "functional_requirement": "功能需求",
+            "quality_requirement": "质量需求",
+            "constraint_requirement": "工程约束",
+            "safety_requirement": "安全需求",
+            "design": "设计",
+            "architecture_decision": "架构决策",
+            "test_case": "测试",
+            "evidence": "验证证据",
+            "api_contract": "接口契约",
+            "message_contract": "消息契约",
+            "data_asset": "数据资产",
+            "model_asset": "模型资产",
+            "threat": "威胁模型",
+            "deliverable": "交付内容",
+            "dependency": "外部依赖",
+        }
+        return PresentationMappingRevision(
+            name="当前工程结构",
+            source_profile_revision_uids=model.profile_revision_uids,
+            engineering_areas=tuple(
+                EngineeringArea(
+                    area_key=item.name.replace("_", "-"),
+                    label=known_labels.get(item.name, item.name.replace("_", " ")),
+                    selector=PresentationSelector(
+                        kind_definition_revision_uids=(item.revision_uid,)
+                    ),
+                    order=index * 10,
+                )
+                for index, item in enumerate(kinds, 1)
+            ),
+            view_modes=(ViewMode.OVERVIEW, ViewMode.OUTLINE, ViewMode.DOCUMENT),
+            default_view_mode=ViewMode.OVERVIEW,
+        )
+
+    @classmethod
+    def _local_runtime_payload(cls, value: Any) -> Any:
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if isinstance(value, dict):
+            return {
+                key: cls._local_runtime_payload(item) for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._local_runtime_payload(item) for item in value)
+        return value
 
     def resolve(self, identifier: str) -> DomainResult:
         matches = [item for item in self.documents if identifier in self._identifiers(item)]
@@ -803,6 +1295,91 @@ class LocalRuntimeService:
                 str(error),
             )
 
+    def assess_workspace(self, request: WorkspaceAssessmentRequest) -> DomainResult:
+        """Evaluate an editable Working Copy without freezing or checkpointing it."""
+
+        workspace = self.workspaces.get(request.workspace_uid)
+        if workspace is None:
+            return self._error(
+                "LESR-WORKSPACE-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "workspace does not exist",
+                (request.workspace_uid,),
+                suggested="workspace.open",
+            )
+        if not 1 <= request.maximum_depth <= 16:
+            return self._error(
+                "LESR-WORKSPACE-ASSESSMENT-INVALID",
+                ErrorCategory.VALIDATION,
+                "maximum_depth must be between 1 and 16",
+                (request.workspace_uid,),
+            )
+        try:
+            evaluation_time = self._parse_evaluation_time(request.evaluation_time)
+            canonical_evaluator = self._evaluator(
+                workspace.configuration_uid, evaluation_time
+            )
+            self._validate_requested_transitions(
+                workspace, canonical_evaluator, workspace.actor_uid
+            )
+            lifecycle_states = self._workspace_lifecycle_states(
+                workspace, canonical_evaluator
+            )
+            preview = WorkspaceEngine.preview(
+                workspace,
+                actor_uid=workspace.actor_uid,
+                previewed_at=evaluation_time,
+                base_revisions=self._canonical_revisions(),
+                lifecycle_states=lifecycle_states,
+            )
+            transient = self._submission_from_preview(preview)
+            evaluator = self._evaluator(
+                workspace.configuration_uid,
+                evaluation_time,
+                submission=transient,
+            )
+            context = self._candidate_context(transient, evaluator)
+            impact = analyze_impact(
+                evaluator,
+                preview.scope,
+                maximum_depth=request.maximum_depth,
+            )
+            validation = self._validate_submission(transient, evaluator)
+            decision = self._assessment_decision(validation, impact.completeness.value)
+            return DomainResult(
+                {
+                    "workspace_uid": workspace.workspace_uid,
+                    "workspace_state": workspace.state.value,
+                    "candidate_frozen": False,
+                    "evaluation_time": evaluation_time.isoformat().replace("+00:00", "Z"),
+                    "change_scope": preview.scope,
+                    "changes": tuple(
+                        item.model_dump(mode="json") for item in preview.changes
+                    ),
+                    "context_bundle": context.model_dump(mode="json"),
+                    "impact_report": impact.model_dump(mode="json"),
+                    "validation": validation,
+                    "decision": decision,
+                    "audit": {
+                        "graph_snapshot": evaluator.snapshot.model_dump(mode="json"),
+                        "working_state": tuple(
+                            {
+                                "human_key": item.human_key,
+                                "working_state_hash": item.working_state_hash,
+                            }
+                            for item in workspace.working_copies
+                        ),
+                    },
+                }
+            )
+        except (KeyError, TypeError, ValueError, PermissionError, ValidationError) as error:
+            return self._error(
+                "LESR-WORKSPACE-ASSESSMENT-FAILED",
+                ErrorCategory.INDETERMINATE,
+                str(error),
+                (request.workspace_uid,),
+            )
+
     def prepare_review(self, request: WriteEnvelope) -> DomainResult:
         error = self._validate_write(request, require_workspace=True)
         if error:
@@ -816,25 +1393,15 @@ class LocalRuntimeService:
             self._validate_requested_transitions(
                 workspace, canonical_evaluator, request.actor
             )
-            lifecycle_states = tuple(
-                (
-                    copy.object_uid,
-                    canonical_evaluator.nodes[copy.object_uid].lifecycle_state
-                    if copy.object_uid in canonical_evaluator.nodes
-                    else self._initial_state_for_kind(copy.kind),
-                )
-                for copy in workspace.working_copies
+            lifecycle_states = self._workspace_lifecycle_states(
+                workspace, canonical_evaluator
             )
             submission = WorkspaceEngine.submit(
                 workspace,
                 checkpoint_uid=uuid7_candidate(),
                 actor_uid=request.actor,
                 submitted_at=evaluation_time,
-                base_revisions=tuple(
-                    Revision.model_validate(value)
-                    for value in self.documents
-                    if value.get("resource_type") == "revision"
-                ),
+                base_revisions=self._canonical_revisions(),
                 lifecycle_states=lifecycle_states,
             )
             evaluator = self._evaluator(
@@ -842,29 +1409,7 @@ class LocalRuntimeService:
                 evaluation_time,
                 submission=submission,
             )
-            model = self._effective_model(submission.workspace.configuration_uid)
-            review_context_policies = [
-                item for item in model.context_policies if item.task_type in {"review", "*"}
-            ]
-            exact_review_context = [
-                item for item in review_context_policies if item.task_type == "review"
-            ]
-            selected_review_context = exact_review_context or [
-                item for item in review_context_policies if item.task_type == "*"
-            ]
-            if len(selected_review_context) != 1:
-                raise ValueError(
-                    "Effective Model must define exactly one review Context Policy"
-                )
-            context = plan_context(
-                evaluator,
-                (submission.candidate.revisions[0].object_uid,),
-                selected_review_context[0].mandatory_predicates,
-                token_limit=500,
-                conditional_predicates=selected_review_context[0].conditional_predicates,
-                mandatory_formal_trace=selected_review_context[0].mandatory_formal_trace,
-                forbidden_sensitivities=selected_review_context[0].forbidden_sensitivities,
-            )
+            context = self._candidate_context(submission, evaluator)
             self.task_store.put_artifact(
                 context.bundle_hash,
                 {
@@ -2402,6 +2947,146 @@ class LocalRuntimeService:
         value["content_hash"] = semantic_hash(value)
         return value
 
+    def _canonical_revisions(self) -> tuple[Revision, ...]:
+        return tuple(
+            Revision.model_validate(value)
+            for value in self.documents
+            if value.get("resource_type") == "revision"
+        )
+
+    def _workspace_lifecycle_states(
+        self,
+        workspace: Workspace,
+        canonical_evaluator: SemanticEvaluator,
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (
+                copy.object_uid,
+                canonical_evaluator.nodes[copy.object_uid].lifecycle_state
+                if copy.object_uid in canonical_evaluator.nodes
+                else self._initial_state_for_kind(copy.kind),
+            )
+            for copy in workspace.working_copies
+        )
+
+    def _submission_from_preview(self, preview: WorkspacePreview) -> Any:
+        """Adapt transient preview content to the existing pure evaluator.
+
+        The evaluator currently consumes Revision-shaped nodes.  These stable,
+        process-local identities are never returned as candidate resources and
+        never enter a Workspace ref or Canonical Git.
+        """
+
+        state_by_object = {
+            item.object_uid: item.working_state_hash
+            for item in preview.workspace.working_copies
+        }
+        revisions = tuple(
+            Revision.model_validate(
+                item.model_dump(mode="python")
+                | {
+                    "revision_uid": self._stable_uuid7(
+                        "preview:revision:"
+                        f"{preview.workspace.workspace_uid}:{item.object_uid}:"
+                        f"{state_by_object[item.object_uid]}",
+                        preview.previewed_at,
+                    )
+                }
+            )
+            for item in preview.revision_previews
+        )
+        lifecycle_records = tuple(
+            ImmutableRecord.model_validate(
+                item.model_dump(mode="python")
+                | {
+                    "record_uid": self._stable_uuid7(
+                        "preview:lifecycle:"
+                        f"{preview.workspace.workspace_uid}:{item.subject_uid}:"
+                        f"{state_by_object[item.subject_uid]}",
+                        preview.previewed_at,
+                    )
+                }
+            )
+            for item in preview.lifecycle_record_previews
+        )
+        overlay_hash = semantic_hash(
+            {
+                "workspace_uid": preview.workspace.workspace_uid,
+                "previewed_at": preview.previewed_at.isoformat(),
+                "working_states": tuple(sorted(state_by_object.items())),
+            }
+        )
+        candidate = SimpleNamespace(
+            revisions=revisions,
+            relation_revisions=preview.relation_proposals,
+            lifecycle_records=lifecycle_records,
+            candidate_hash=overlay_hash,
+            checkpoint_uid=f"preview:{preview.workspace.workspace_uid}",
+        )
+        diff = SimpleNamespace(
+            changes=preview.changes,
+            scope=preview.scope,
+        )
+        return SimpleNamespace(
+            workspace=preview.workspace,
+            candidate=candidate,
+            semantic_diff=diff,
+        )
+
+    def _candidate_context(
+        self,
+        submission: Any,
+        evaluator: SemanticEvaluator,
+    ) -> Any:
+        model = self._effective_model(submission.workspace.configuration_uid)
+        policies = [
+            item for item in model.context_policies if item.task_type in {"review", "*"}
+        ]
+        exact = [item for item in policies if item.task_type == "review"]
+        selected = exact or [item for item in policies if item.task_type == "*"]
+        if len(selected) != 1:
+            raise ValueError("Effective Model must define exactly one review Context Policy")
+        if not submission.candidate.revisions:
+            raise ValueError("Workspace assessment requires at least one Working Copy")
+        policy = selected[0]
+        return plan_context(
+            evaluator,
+            (submission.candidate.revisions[0].object_uid,),
+            policy.mandatory_predicates,
+            token_limit=500,
+            conditional_predicates=policy.conditional_predicates,
+            mandatory_formal_trace=policy.mandatory_formal_trace,
+            forbidden_sensitivities=policy.forbidden_sensitivities,
+        )
+
+    @staticmethod
+    def _assessment_decision(
+        validation: dict[str, Any],
+        impact_completeness: str,
+    ) -> dict[str, Any]:
+        operation = validation.get("operation_decision", {})
+        operation_disposition = str(operation.get("disposition", "indeterminate"))
+        reasons = [str(item) for item in operation.get("reasons", ())]
+        if validation.get("outcome") != "pass" or operation_disposition in {
+            "block",
+            "indeterminate",
+        }:
+            disposition = DecisionDisposition.BLOCK
+            reasons.append("WORKSPACE_REQUIRES_AGENT_REPAIR")
+        elif impact_completeness != "COMPLETE":
+            disposition = DecisionDisposition.BLOCK
+            reasons.append(f"IMPACT_{impact_completeness}")
+        elif operation_disposition == "requires_governance":
+            disposition = DecisionDisposition.HUMAN_DECISION_NOW
+            reasons.append("ENGINEERING_POLICY_REQUIRES_HUMAN_DECISION")
+        else:
+            disposition = DecisionDisposition.AUTO_EXECUTE
+            reasons.append("WITHIN_ACTIVE_ENGINEERING_POLICY")
+        return {
+            "disposition": disposition.value,
+            "reasons": tuple(sorted(set(reasons))),
+        }
+
     def _evaluator(
         self,
         configuration_uid: str,
@@ -3153,7 +3838,15 @@ class LocalRuntimeService:
                     submission.workspace.workspace_uid,
                     {
                         "operation": ValueCell.present("apply_transaction"),
-                        "risk_class": ValueCell.present("high"),
+                        "risk_class": ValueCell.present(
+                            self._derived_impact_class(submission)
+                        ),
+                        "changed_resource_count": ValueCell.present(
+                            len(submission.candidate.revisions)
+                        ),
+                        "changed_relation_count": ValueCell.present(
+                            len(submission.candidate.relation_revisions)
+                        ),
                     },
                 ),
             )
@@ -3385,6 +4078,34 @@ class LocalRuntimeService:
             "validation_hash": run.content_hash,
             "validation_run": run.model_dump(mode="json"),
         }
+
+    @staticmethod
+    def _derived_impact_class(submission: Any) -> str:
+        """Classify semantic impact without accepting an adapter-provided label."""
+
+        semantic_diff = getattr(submission, "semantic_diff", None)
+        changes = tuple(getattr(semantic_diff, "changes", ()))
+        governed_definition_kinds = {
+            "kind_definition",
+            "facet_definition",
+            "relation_type_definition",
+            "workflow_definition",
+            "normative_profile",
+            "rule_definition",
+            "deviation",
+        }
+        if (
+            any(item.change_type in {"delete", "transition"} for item in changes)
+            or any(
+                item.kind in governed_definition_kinds
+                for item in submission.candidate.revisions
+            )
+            or len(submission.candidate.revisions) > 25
+        ):
+            return "high"
+        if submission.candidate.relation_revisions or len(submission.candidate.revisions) > 5:
+            return "medium"
+        return "low"
 
     @staticmethod
     def _stable_uuid7(seed: str, occurred_at: datetime) -> str:

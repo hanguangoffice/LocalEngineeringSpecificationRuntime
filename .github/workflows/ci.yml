@@ -17,7 +17,8 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv lock --check
+      - run: uv sync --locked --all-extras
       - run: uv run playwright install chromium
         if: runner.os == 'Linux'
       - run: uv run python scripts/verify_baseline_manifest.py

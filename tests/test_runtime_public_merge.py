@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.merge import ForeignDiff
 from lesr.domain.review import CommentResolution, ReviewPackage, ReviewPolicy, StageQuorum
@@ -23,7 +23,6 @@ def envelope(
         "human-reviewer",
         "delegation-1",
         False,
-        RiskClass.HIGH,
         operation,
     )
 
@@ -157,7 +156,7 @@ def test_public_review_records_keep_package_immutable_and_survive_restart(tmp_pa
     assert commented.value["approvals_invalidated"] is False
     comment = commented.value["comment"]
     resolution = CommentResolution(
-        comment_hash=comment["comment_hash"],
+        comment_uid=comment["comment_uid"],
         actor_uid="reviewer",
         disposition="accepted",
         rationale="Timing bound added to the candidate.",

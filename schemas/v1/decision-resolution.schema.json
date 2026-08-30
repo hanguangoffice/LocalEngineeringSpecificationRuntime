@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lesr.dev/schemas/v1/decision-resolution.schema.json",
+  "title": "Local Runtime Decision Resolution",
+  "description": "An immutable local record of one human choice. It is not a formal Approval and carries no signature or hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "resource_type", "persistence_scope", "canonical_git_eligible",
+    "formal_approval", "decision_resolution_uid", "decision_request_uid",
+    "selected_action", "selected_alternative", "decided_by_actor_uid", "reason",
+    "decided_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resource_type": {"const": "decision_resolution"},
+    "persistence_scope": {"const": "local_runtime"},
+    "canonical_git_eligible": {"const": false},
+    "formal_approval": {"const": false},
+    "decision_resolution_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "decision_request_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
+    "selected_action": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "selected_alternative": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "decided_by_actor_uid": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "decided_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "selected_action": {"type": "string", "minLength": 1},
+        "selected_alternative": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "selected_action": {"type": "null"},
+        "selected_alternative": {"type": "string", "minLength": 1}
+      }
+    }
+  ]
+}

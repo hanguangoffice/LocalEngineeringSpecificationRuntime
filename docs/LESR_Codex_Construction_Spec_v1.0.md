@@ -1,6 +1,10 @@
 # LESR v1.0 Codex 工程施工规格
 
-**状态：FINAL IMPLEMENTATION SPECIFICATION**
+**状态：1.0 历史施工规格（保留用于解释 Canonical Format 1.0）**
+
+> 当前 Runtime 版本与 2.0 产品交互契约见 `versioning.md` 和
+> `AGENTIC-PRODUCT-CONTRACT.md`。本文记录 1.0 语义内核的施工决定，不表示当前
+> 工作版本已经完成发布验证。后续精简的完整性边界见 `integrity-boundaries.md`。
 
 **需求权威：`LESR_Solution_Design_Baseline_v1.0/`**
 
@@ -120,7 +124,8 @@ Mandatory Read Set 只能由关系、规则、配置、操作和安全策略决�
 ## 6. Workspace、Review 与 Ed25519 Approval
 
 Workspace 写入统一使用 Write Envelope：Workspace、Expected Base、Idempotency Key、
-Actor、Delegation、Dry Run、Risk Class、Structured Operation。AI 只能在有效 Delegation
+Actor、Delegation、Dry Run 和 Structured Operation。风险由运行时根据实际语义差异、
+Profile、Mission Mandate、影响和外部效果派生，不接受调用方自报。AI 在有效 Delegation
 内编辑 Working Copy、运行校验、Checkpoint 和生成 Review Package。
 
 Review Package 固定 Base/Candidate Revision、Relation/Disposition Change、Semantic
@@ -141,8 +146,8 @@ expires_at_or_empty
 ```
 
 Apply 同时验证签名、Actor/Role、Scope、有效期、撤销和 Reviewer Independence。
-AI Principal 永远不能形成正式 Approval。MCP v1.0 不暴露 key generation 或 signing；
-人类只通过交互式 CLI `approval keygen` 和 `approval sign` 完成签名。
+`scope_hash` 是签名消息从实际 Scope 即时计算的编码成分，不作为 SignedApproval 的重复
+持久字段。AI Principal 不能形成正式人类 Approval；MCP 不暴露私钥签名。
 
 ## 7. Projection、CLI 与 MCP
 

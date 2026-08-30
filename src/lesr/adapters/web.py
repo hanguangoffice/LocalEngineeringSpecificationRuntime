@@ -26,14 +26,21 @@ from lesr.adapters.git import GitCanonicalRepository, IntegrityError
 from lesr.adapters.markdown import preview_markdown
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.pdf_import import preview_pdf
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.signer import sign_once
-from lesr.application.contracts import LESRDomainPort, RiskClass, WriteEnvelope
+from lesr.application.contracts import (
+    LESRDomainPort,
+    WorkspaceAssessmentRequest,
+    WriteEnvelope,
+)
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalPayload, TrustedActor
 from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import SemanticField, uuid7_candidate
 from lesr.domain.workspace import WorkingCopy
 from lesr.intake.bootstrap import IntakeBootstrapper
+from lesr.intake.engineering_model import engineering_model_for
+from lesr.intake.mission import mission_plan_for_intake
 from lesr.intake.models import IntakeRequest
 from lesr.intake.service import IntakeService
 
@@ -78,22 +85,21 @@ class WebWriteRequest(BaseModel):
     expected_base: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
     actor: str = Field(min_length=1)
-    delegation_uid: str = Field(min_length=1)
     dry_run: bool = False
-    risk_class: RiskClass
     operation: dict[str, Any]
 
-    def envelope(self) -> WriteEnvelope:
-        return WriteEnvelope(
-            self.workspace_uid,
-            self.expected_base,
-            self.idempotency_key,
-            self.actor,
-            self.delegation_uid,
-            self.dry_run,
-            self.risk_class,
-            self.operation,
-        )
+
+class WorkspaceValidateRequest(BaseModel):
+    workspace_uid: str = Field(min_length=1)
+    evaluation_time: str = Field(min_length=1)
+    maximum_depth: int = Field(default=3, ge=1, le=16)
+
+
+class DecisionResolveRequest(BaseModel):
+    actor_uid: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=4000)
+    selected_action: str | None = Field(default=None, max_length=240)
+    selected_alternative: str | None = Field(default=None, max_length=240)
 
 
 class LocalWebRuntime:
@@ -236,6 +242,73 @@ class LocalWebRuntime:
             self._session(request)
             return self._session_context()
 
+        @app.get("/api/engineering/map")
+        async def engineering_map(
+            request: Request,
+            configuration_uid: str | None = None,
+            workspace_uid: str | None = None,
+        ) -> dict[str, Any]:
+            self._session(request)
+            selected_configuration = configuration_uid or self._default_configuration_uid()
+            if selected_configuration is None:
+                return {"mapping_name": "工程内容", "areas": []}
+            selected_workspace = workspace_uid or self._editable_workspace_uid(
+                selected_configuration
+            )
+            method = getattr(self.domain, "engineering_map", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="工程地图不可用")
+            result = method(
+                selected_configuration,
+                datetime.now(UTC).isoformat(),
+                selected_workspace,
+            )
+            return self._value_or_error(result.payload())
+
+        @app.get("/api/missions")
+        async def missions(request: Request) -> Any:
+            self._session(request)
+            method = getattr(self.domain, "list_missions", None)
+            if not callable(method):
+                return []
+            return self._value_or_error(method().payload())
+
+        @app.get("/api/missions/{mission_uid}")
+        async def mission(request: Request, mission_uid: str) -> dict[str, Any]:
+            self._session(request)
+            method = getattr(self.domain, "inspect_mission", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="任务不可用")
+            return self._value_or_error(method(mission_uid).payload())
+
+        @app.get("/api/decisions")
+        async def decisions(request: Request, mission_uid: str | None = None) -> Any:
+            self._session(request)
+            method = getattr(self.domain, "list_decisions", None)
+            if not callable(method):
+                return []
+            return self._value_or_error(method(mission_uid).payload())
+
+        @app.post("/api/decisions/{decision_request_uid}/resolve")
+        async def decision_resolve(
+            request: Request,
+            decision_request_uid: str,
+            value: DecisionResolveRequest,
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            method = getattr(self.domain, "resolve_decision", None)
+            if not callable(method):
+                raise HTTPException(status_code=404, detail="工程决策不可用")
+            return self._value_or_error(
+                method(
+                    decision_request_uid,
+                    value.actor_uid,
+                    value.reason,
+                    value.selected_action,
+                    value.selected_alternative,
+                ).payload()
+            )
+
         @app.get("/api/intake/templates")
         async def intake_templates(request: Request) -> dict[str, Any]:
             self._session(request)
@@ -367,7 +440,9 @@ class LocalWebRuntime:
             request: Request, value: WebWriteRequest
         ) -> dict[str, Any]:
             self._mutation_session(request)
-            return self._value_or_error(self.domain.open_workspace(value.envelope()).payload())
+            return self._value_or_error(
+                self.domain.open_workspace(self._write_envelope(value)).payload()
+            )
 
         @app.post("/api/workspace/edit")
         async def workspace_edit(
@@ -375,15 +450,29 @@ class LocalWebRuntime:
         ) -> dict[str, Any]:
             self._mutation_session(request)
             return self._value_or_error(
-                self.domain.propose_operation(value.envelope()).payload()
+                self.domain.propose_operation(self._write_envelope(value)).payload()
             )
+
+        @app.post("/api/workspace/validate")
+        async def workspace_validate(
+            request: Request, value: WorkspaceValidateRequest
+        ) -> dict[str, Any]:
+            self._mutation_session(request)
+            assessment = WorkspaceAssessmentRequest(
+                workspace_uid=value.workspace_uid,
+                evaluation_time=value.evaluation_time,
+                maximum_depth=value.maximum_depth,
+            )
+            return self._value_or_error(self.domain.assess_workspace(assessment).payload())
 
         @app.post("/api/workspace/submit")
         async def workspace_submit(
             request: Request, value: WebWriteRequest
         ) -> dict[str, Any]:
             self._mutation_session(request)
-            return self._value_or_error(self.domain.prepare_review(value.envelope()).payload())
+            return self._value_or_error(
+                self.domain.prepare_review(self._write_envelope(value)).payload()
+            )
 
         @app.post("/api/workspace/rebase")
         async def workspace_rebase(
@@ -443,7 +532,7 @@ class LocalWebRuntime:
         async def apply(request: Request, value: WebWriteRequest) -> dict[str, Any]:
             self._mutation_session(request)
             return self._value_or_error(
-                self.domain.apply_transaction(value.envelope()).payload()
+                self.domain.apply_transaction(self._write_envelope(value)).payload()
             )
 
         @app.post("/api/baseline/prepare")
@@ -454,7 +543,7 @@ class LocalWebRuntime:
             capability = getattr(self.domain, "prepare_baseline", None)
             if not callable(capability):
                 raise HTTPException(status_code=404, detail="baseline.prepare unavailable")
-            return self._value_or_error(capability(value.envelope()).payload())
+            return self._value_or_error(capability(self._write_envelope(value)).payload())
 
         @app.post("/api/baseline/apply")
         async def baseline_apply(
@@ -464,7 +553,7 @@ class LocalWebRuntime:
             capability = getattr(self.domain, "apply_baseline", None)
             if not callable(capability):
                 raise HTTPException(status_code=404, detail="baseline.apply unavailable")
-            return self._value_or_error(capability(value.envelope()).payload())
+            return self._value_or_error(capability(self._write_envelope(value)).payload())
 
         @app.get("/api/tasks")
         async def tasks(request: Request) -> list[dict[str, Any]]:
@@ -541,7 +630,45 @@ class LocalWebRuntime:
         method = getattr(self.domain, method_name, None)
         if not callable(method):
             raise HTTPException(status_code=404, detail=f"{capability} unavailable")
-        return self._value_or_error(method(value.envelope()).payload())
+        return self._value_or_error(method(self._write_envelope(value)).payload())
+
+    def _write_envelope(self, value: WebWriteRequest) -> WriteEnvelope:
+        return WriteEnvelope(
+            workspace_uid=value.workspace_uid,
+            expected_base=value.expected_base,
+            idempotency_key=value.idempotency_key,
+            actor=value.actor,
+            delegation_uid=self._delegation_uid(value.actor, value.workspace_uid),
+            dry_run=value.dry_run,
+            operation=value.operation,
+        )
+
+    def _delegation_uid(self, actor_uid: str, workspace_uid: str) -> str:
+        # The browser names the work it is editing, not an authority token.
+        # Repository/Mission authority is resolved here from the authenticated
+        # local actor.  The legacy Grant workspace field remains a bootstrap
+        # anchor until MissionMandate becomes the active execution authority.
+        del workspace_uid
+        try:
+            documents = GitCanonicalRepository(self.project).documents()
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        grants = sorted(
+            (
+                value
+                for _, value in documents
+                if value.get("resource_type") == "delegation_grant"
+                and value.get("principal_uid") == actor_uid
+            ),
+            key=lambda value: str(value.get("issued_at", "")),
+            reverse=True,
+        )
+        if not grants:
+            raise HTTPException(
+                status_code=403,
+                detail="当前身份没有此工作区的自动执行授权",
+            )
+        return str(grants[0]["delegation_uid"])
 
     def _mutation_session(self, request: Request) -> WebSession:
         session = self._session(request)
@@ -623,6 +750,26 @@ class LocalWebRuntime:
             )
         )
 
+    def _default_configuration_uid(self) -> str | None:
+        configurations = self._session_context().get("configurations", [])
+        if not configurations:
+            return None
+        value = configurations[0].get("configuration_uid")
+        return str(value) if value else None
+
+    def _editable_workspace_uid(self, configuration_uid: str) -> str | None:
+        workspaces = getattr(self.domain, "workspaces", {})
+        if not isinstance(workspaces, dict):
+            return None
+        for uid, workspace in reversed(tuple(workspaces.items())):
+            state = getattr(getattr(workspace, "state", None), "value", None)
+            if (
+                getattr(workspace, "configuration_uid", None) == configuration_uid
+                and state == "editable"
+            ):
+                return str(uid)
+        return None
+
     def _session_context(self) -> dict[str, Any]:
         repository = GitCanonicalRepository(self.project)
         commit = repository.current_commit()
@@ -639,12 +786,6 @@ class LocalWebRuntime:
             ),
             reverse=True,
         )
-        delegations = tuple(
-            value
-            for value in documents
-            if value.get("resource_type") == "delegation_grant"
-            and not value.get("stop_conditions")
-        )
         actors: list[dict[str, Any]] = []
         for value in documents:
             if value.get("resource_type") != "trusted_actor" or value.get(
@@ -652,23 +793,12 @@ class LocalWebRuntime:
             ):
                 continue
             actor_uid = str(value.get("actor_uid", ""))
-            delegation = next(
-                (
-                    item
-                    for item in delegations
-                    if item.get("principal_uid") == actor_uid
-                ),
-                None,
-            )
             actors.append(
                 {
                     "display_name": value.get("display_name") or "本机用户",
                     "roles": value.get("roles", []),
                     "actor_uid": actor_uid,
                     "key_uid": value.get("key_uid"),
-                    "delegation_uid": (
-                        delegation.get("delegation_uid") if delegation is not None else None
-                    ),
                 }
             )
         kinds_by_name: dict[str, dict[str, str]] = {}
@@ -742,12 +872,21 @@ class LocalWebRuntime:
         )
         runtime = self.domain
         try:
-            identity = IntakeBootstrapper(
+            bootstrapper = IntakeBootstrapper(
                 runtime,
                 key_root=self.signer_key_root,
                 key_password=self.signer_password,
-            ).ensure(value.display_name)
-            workspace_uid = uuid7_candidate()
+            )
+            identity = bootstrapper.ensure(value.display_name, analysis.selected_pack)
+            engineering_model = engineering_model_for(analysis.selected_pack)
+            presentation_mapping = bootstrapper.presentation_mapping(
+                analysis.selected_pack
+            )
+            PresentationMappingStore(self.project).put(
+                analysis.selected_pack.pack_uid,
+                presentation_mapping,
+            )
+            workspace_uid = str(identity["workspace_uid"])
             actor_uid = str(identity["actor_uid"])
             delegation_uid = str(identity["delegation_uid"])
             configuration_uid = str(identity["configuration_uid"])
@@ -759,7 +898,6 @@ class LocalWebRuntime:
                     actor=actor_uid,
                     delegation_uid=delegation_uid,
                     dry_run=False,
-                    risk_class=RiskClass.MEDIUM,
                     operation={
                         "type": "open_workspace",
                         "configuration_uid": configuration_uid,
@@ -776,7 +914,7 @@ class LocalWebRuntime:
                     object_uid=object_uid,
                     base_revision_uid=None,
                     human_key=requirement.human_key,
-                    kind="software_requirement",
+                    kind=engineering_model.kind_for(requirement.category),
                     effective_model_hash=runtime.workspaces[workspace_uid].effective_model_hash,
                     delegation_uid=delegation_uid,
                     draft_fields=(
@@ -791,7 +929,6 @@ class LocalWebRuntime:
                         actor=actor_uid,
                         delegation_uid=delegation_uid,
                         dry_run=False,
-                        risk_class=RiskClass.MEDIUM,
                         operation={
                             "operation_type": "create_object",
                             "working_copy": working_copy.model_dump(mode="json"),
@@ -801,6 +938,20 @@ class LocalWebRuntime:
                 if not proposed.ok:
                     assert proposed.error is not None
                     raise RuntimeError(proposed.error.message)
+            mission_result = runtime.create_mission(
+                mission_plan_for_intake(
+                    analysis,
+                    engineering_model,
+                    workspace_uid=workspace_uid,
+                    actor_uid=actor_uid,
+                    configuration_uid=configuration_uid,
+                    project_name=value.project_name,
+                ).model_dump(mode="json")
+            )
+            if not mission_result.ok:
+                assert mission_result.error is not None
+                raise RuntimeError(mission_result.error.message)
+            mission = mission_result.value
             return {
                 "workspace_uid": workspace_uid,
                 "base_commit": runtime.base,
@@ -809,9 +960,14 @@ class LocalWebRuntime:
                 "configuration_uid": configuration_uid,
                 "identity_created": bool(identity["created"]),
                 "selected_template": analysis.selected_pack.display_name,
+                "engineering_areas": [
+                    item.label for item in presentation_mapping.engineering_areas
+                ],
+                "content_types": list(engineering_model.kind_names),
                 "requirement_count": len(analysis.requirements),
                 "human_keys": [item.human_key for item in analysis.requirements],
-                "next_step": "review_draft",
+                "mission": mission,
+                "next_step": "mission_running",
             }
         except (KeyError, OSError, PermissionError, RuntimeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

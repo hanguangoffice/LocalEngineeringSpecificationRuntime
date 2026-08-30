@@ -4,8 +4,7 @@
   "title": "LESR 1.0 Immutable Review Package",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "resource_type", "package_uid", "workspace_uid", "base_commit", "configuration_uid", "result_configuration_uid", "result_configuration_hash", "candidate_hash", "effective_model_hash", "prepared_by_actor_uid", "created_at", "package_hash"],
-  "required": ["candidate_scope", "semantic_diff_hash", "graph_snapshot_hash", "context_bundle_hash", "impact_report_hash", "validation_hash", "finding_hashes", "governance_finding_uids", "review_policy", "subject_hash"],
+  "required": ["schema_version", "resource_type", "package_uid", "workspace_uid", "base_commit", "configuration_uid", "result_configuration_uid", "result_configuration_hash", "candidate_hash", "candidate_scope", "semantic_diff_hash", "graph_snapshot_hash", "context_bundle_hash", "impact_report_hash", "validation_hash", "finding_hashes", "governance_finding_uids", "review_policy", "effective_model_hash", "prepared_by_actor_uid", "created_at", "package_hash"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "resource_type": {"const": "review_package"},
@@ -25,10 +24,10 @@
     "finding_hashes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/sha256"}},
     "governance_finding_uids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/uuid7"}, "uniqueItems": true},
     "review_policy": {"type": "object", "additionalProperties": false, "required": ["stages", "require_preparer_independence", "require_comment_resolution"], "properties": {"stages": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["stage", "role", "minimum_count"], "properties": {"stage": {"type": "string"}, "role": {"type": "string"}, "minimum_count": {"type": "integer", "minimum": 1}}}}, "require_preparer_independence": {"type": "boolean"}, "require_comment_resolution": {"type": "boolean"}}},
-    "subject_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "effective_model_hash": {"$ref": "common.schema.json#/$defs/sha256"},
     "prepared_by_actor_uid": {"$ref": "common.schema.json#/$defs/uuid7"},
     "created_at": {"$ref": "common.schema.json#/$defs/utc_timestamp"},
+    "subject_hash": {"$ref": "common.schema.json#/$defs/sha256", "deprecated": true},
     "package_hash": {"$ref": "common.schema.json#/$defs/sha256"}
   }
 }

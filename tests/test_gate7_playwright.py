@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
 
@@ -60,7 +61,7 @@ def test_local_ui_uses_real_repository_query_and_lock_flow(tmp_path: Path) -> No
             expect(page.locator("#intake-import-form")).to_be_visible()
             page.get_by_role("tab", name="描述需求").click()
             intake = page.locator("#intake-form")
-            intake.get_by_label("工程名称（可选）").fill("gpu-lab-manager")
+            intake.get_by_label("工程名称（可选）").fill("temporary-ai-console")
             intake.get_by_label("你的需求").fill(
                 "创建一个 Windows 11 本地 AI 工具，检测 NVIDIA GPU 和显存，"
                 "提供 PyTorch 模拟测试。未经确认不得全局安装软件。"
@@ -178,8 +179,8 @@ def test_local_ui_honors_reduced_motion_without_hiding_state(tmp_path: Path) -> 
 
 
 @pytest.mark.playwright
-def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path) -> None:
-    project = tmp_path / "zero-spec-project"
+def test_local_ui_turns_a_raw_request_into_an_agent_mission(tmp_path: Path) -> None:
+    project = tmp_path / "edge-telemetry-observatory"
     GitCanonicalRepository(project).initialize()
     runtime = LocalWebRuntime(
         project,
@@ -204,42 +205,78 @@ def test_local_ui_turns_a_raw_request_into_a_reviewable_workspace(tmp_path: Path
             browser = playwright.chromium.launch(
                 channel="msedge" if os.name == "nt" else None
             )
-            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page = browser.new_page(viewport={"width": 1920, "height": 1080})
             page.goto(f"http://127.0.0.1:{port}/unlock?token=zero-spec-token")
             page.wait_for_load_state("networkidle")
             page.locator('button[data-panel="intake"]').click()
             form = page.locator("#intake-form")
-            form.get_by_label("工程名称（可选）").fill("gpu-lab-manager")
+            form.get_by_label("工程名称（可选）").fill(
+                "edge-telemetry-observatory"
+            )
             form.get_by_label("你的需求").fill(
-                "创建一个 Windows 11 本地 AI 工具。\n"
-                "- 检测 NVIDIA GPU 和显存；\n"
-                "- 提供模拟 nvidia-smi 的自动测试；\n"
-                "- 未经确认不得全局安装软件或修改 PATH。"
+                "创建一个本地事件遥测工程。\n"
+                "- 通过 MQTT 接收边缘设备状态；\n"
+                "- 使用 AsyncAPI 描述消息契约；\n"
+                "- 模拟断线、重连和重复消息；\n"
+                "- 提供可重复运行的自动测试。"
             )
             form.get_by_role("button", name="整理工程内容").click()
-            expect(page.locator("#intake-pack")).to_have_text("本地 AI、GPU 与模型应用")
+            expect(page.locator("#intake-pack")).to_have_text(
+                "事件驱动、消息与 IoT 集成"
+            )
             expect(page.locator("#intake-count")).to_have_text("4 项")
             page.screenshot(path=str(tmp_path / "zero-spec-intake.png"), full_page=True)
             accept = page.locator("#intake-accept-form")
             expect(accept.get_by_role("checkbox")).to_have_count(0)
-            accept.get_by_role("button", name="建立工程草案").click()
-            expect(page.locator("#workspace-output")).to_contain_text(
-                "建立可编辑草案", timeout=60_000
+            with page.expect_response("**/api/intake/accept") as response_info:
+                accept.get_by_role("button", name="建立工程草案").click()
+            accepted = response_info.value.json()
+            expect(page.locator("#missions")).to_be_visible()
+            expect(page.locator("#mission-title")).to_contain_text(
+                "edge-telemetry-observatory"
             )
-            page.locator("#workspace-compose-form").get_by_role(
-                "button", name="检查并送审"
-            ).click()
-            expect(page.locator("#review-reason")).to_have_text(
-                "从自然语言需求建立初始工程规格", timeout=60_000
+            expect(page.locator("#mission-dag .mission-node")).to_have_count(4)
+            mission_uid = accepted["mission"]["mission_uid"]
+            ready = runtime.domain.ready_mission_work(mission_uid)
+            assert ready.ok, ready.payload()
+            assignment = ready.value[0]
+            claimed = runtime.domain.claim_mission_work(
+                mission_uid,
+                assignment["work_package_uid"],
+                "agent:requirements",
+                "codex",
+                "configured-model",
+                "mcp",
             )
-            sign = page.locator("#sign-form")
-            sign.get_by_role("checkbox").check()
-            sign.get_by_role("button", name="批准并写入工程").click()
-            expect(page.locator("#sign-output")).to_contain_text(
-                "已写入工程", timeout=60_000
+            assert claimed.ok, claimed.payload()
+            evaluation = runtime.domain.evaluate_mission_work(
+                mission_uid,
+                assignment["work_package_uid"],
+                accepted["workspace_uid"],
+                datetime.now(UTC).isoformat(),
+                "workspace.validate",
             )
+            assert evaluation.ok, evaluation.payload()
+            assert evaluation.value["policy"]["disposition"] == "AUTO_EXECUTE"
+            finished = runtime.domain.report_mission_work(
+                {
+                    "mission_uid": mission_uid,
+                    "work_package_uid": assignment["work_package_uid"],
+                    "agent_run_uid": claimed.value["agent_run"]["agent_run_uid"],
+                    "state": "completed",
+                    "result_summary": "需求结构已经整理并完成工作区检查。",
+                    "reported_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            assert finished.ok, finished.payload()
+            page.locator('button[data-panel="overview"]').click()
+            page.locator('button[data-panel="missions"]').click()
+            expect(page.locator('.mission-node[data-state="completed"]')).to_have_count(1)
+            expect(page.locator('.mission-node[data-state="ready"]')).to_have_count(1)
+            expect(page.locator("#decision-nav-count")).to_be_hidden()
+            page.screenshot(path=str(tmp_path / "agent-mission-1920x1080.png"), full_page=True)
             canonical = tuple(item for _, item in runtime.domain.repository.documents())
-            assert len([item for item in canonical if item.get("resource_type") == "revision"]) == 4
+            assert not [item for item in canonical if item.get("resource_type") == "revision"]
             browser.close()
     finally:
         server.should_exit = True
@@ -290,7 +327,9 @@ def test_local_ui_completes_edit_review_sign_apply_and_baseline(tmp_path: Path) 
             )
             change_form.get_by_label("变更理由").fill("补充控制器状态发布设计。")
             page.screenshot(path=str(tmp_path / "change-composer.png"), full_page=True)
-            change_form.get_by_role("button", name="检查并送审").click()
+            change_form.get_by_role("button", name="保存并检查").click()
+            expect(page.locator("#workspace-output")).to_contain_text("已完成检查")
+            page.get_by_role("button", name="送交正式审阅").click()
             page.locator("#sign-form").wait_for()
             expect(page.locator("#review-reason")).to_contain_text(
                 "补充控制器状态发布设计"

@@ -26,6 +26,7 @@ def test_ed25519_approval_binds_package_model_scope_and_role(tmp_path) -> None:
         approval_type="technical",
     )
     approval = store.sign(trust, "technical", payload)
+    assert "scope_hash" not in approval.model_dump(mode="json")
     verify_approval(
         approval,
         trust,
@@ -72,7 +73,7 @@ def test_revoked_expired_and_modified_approval_are_rejected(tmp_path) -> None:
             effective_model_hash=payload.effective_model_hash,
         )
     modified = approval.model_copy(update={"scope": {"revision_uids": ["REV-2"]}})
-    with pytest.raises(PermissionError, match="scope hash"):
+    with pytest.raises(PermissionError, match="signature"):
         verify_approval(
             modified,
             trust,

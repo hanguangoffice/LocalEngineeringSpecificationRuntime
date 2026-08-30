@@ -577,15 +577,11 @@ class GitCanonicalRepository:
                 "resource_type": "audit_anchor",
                 "anchor_uid": transaction_uid,
                 "transaction_uid": transaction_uid,
-                "previous_anchor_hash": self._audit_tail(current),
-                "event_hashes": [
-                    transaction_hash,
-                    package.package_hash,
-                    *(semantic_hash(item.model_dump(mode="json")) for item in approvals),
-                ],
+                "actor_uid": actor_uid,
+                "operation_types": ["apply_candidate"],
+                "approval_uids": sorted(item.approval_uid for item in approvals),
                 "created_at": applied_at,
             }
-            audit["anchor_hash"] = semantic_hash(audit)
             self._stage_json(f"canonical/audit_anchors/{transaction_uid}.json", audit, env)
             idempotency = {
                 "transaction_uid": transaction_uid,
@@ -614,25 +610,6 @@ class GitCanonicalRepository:
             )
         finally:
             index.unlink(missing_ok=True)
-
-    def _audit_tail(self, commit: str) -> str | None:
-        anchors = [
-            value
-            for path, value in self.documents(commit)
-            if path.startswith("canonical/audit_anchors/")
-        ]
-        if not anchors:
-            return None
-        hashes = {str(item["anchor_hash"]) for item in anchors}
-        referenced = {
-            str(item["previous_anchor_hash"])
-            for item in anchors
-            if item.get("previous_anchor_hash") is not None
-        }
-        tails = hashes - referenced
-        if len(tails) != 1:
-            raise IntegrityError("audit anchor chain has no unique tail")
-        return next(iter(tails))
 
     def idempotency_record(self, idempotency_key: str) -> dict[str, Any] | None:
         current = self.current_commit()
@@ -1531,29 +1508,30 @@ class GitCanonicalRepository:
                 recovered.append(payload | {"git_reference": reference})
         return tuple(recovered)
 
-    def verify_audit_chain(self, commit: str | None = None) -> bool:
-        anchors = [
+    def verify_audit_records(self, commit: str | None = None) -> bool:
+        """Verify ordinary audit records against their Applied Change records.
+
+        Git already authenticates the committed tree and parent history.  This
+        check therefore validates references only; it does not build a second
+        hash chain inside that same Git history.
+        """
+
+        selected = commit or self.current_commit()
+        documents = tuple(self.documents(selected))
+        changes = {
+            str(value.get("transaction_uid"))
+            for path, value in documents
+            if path.startswith("canonical/applied_changes/")
+        }
+        records = [
             value
-            for path, value in self.documents(commit or self.current_commit())
+            for path, value in documents
             if path.startswith("canonical/audit_anchors/")
         ]
-        by_previous: dict[str | None, list[dict[str, Any]]] = {}
-        for anchor in anchors:
-            anchor_previous = anchor.get("previous_anchor_hash")
-            key = str(anchor_previous) if anchor_previous is not None else None
-            by_previous.setdefault(key, []).append(anchor)
-        previous: str | None = None
-        visited = 0
-        while visited < len(anchors):
-            candidates = by_previous.get(previous, [])
-            if len(candidates) != 1:
-                return False
-            anchor = candidates[0]
-            if anchor.get("anchor_hash") != document_hash(anchor, "anchor_hash"):
-                return False
-            previous = str(anchor["anchor_hash"])
-            visited += 1
-        return visited == len(anchors)
+        transaction_uids = [str(item.get("transaction_uid")) for item in records]
+        return len(transaction_uids) == len(set(transaction_uids)) and set(
+            transaction_uids
+        ) <= changes
 
     @staticmethod
     def requires_reconciliation(changed_paths: tuple[str, ...]) -> bool:
@@ -1772,7 +1750,6 @@ class GitCanonicalRepository:
                 ) from error
             hash_field = {
                 "baseline_manifest": "manifest_hash",
-                "audit_anchor": "anchor_hash",
                 "review_package": "package_hash",
                 "configuration_snapshot": "configuration_hash",
             }.get(str(resource_type), "content_hash")
@@ -2117,7 +2094,7 @@ class GitCanonicalRepository:
             "performed_by_actor_uid": transaction.actor,
             "on_behalf_of_actor_uid": None,
             "tool_uids": [],
-            "tool_identity": "lesr-runtime/1.2.0",
+            "tool_identity": "lesr-runtime/2.0.0",
             "delegation_uid": transaction.delegation_uid,
             "used_uids": sorted(
                 {
@@ -2157,50 +2134,21 @@ class GitCanonicalRepository:
         transaction_hash: str,
         created_at: str,
     ) -> dict[str, Any]:
-        previous_hash: str | None = None
-        previous = [
-            value
-            for path, value in self.documents(commit)
-            if path.startswith("canonical/audit_anchors/")
-        ]
-        if previous:
-            hashes = {
-                str(item["anchor_hash"])
-                for item in previous
-                if isinstance(item.get("anchor_hash"), str)
-            }
-            referenced = {
-                str(item["previous_anchor_hash"])
-                for item in previous
-                if isinstance(item.get("previous_anchor_hash"), str)
-            }
-            tails = hashes - referenced
-            if len(tails) != 1:
-                raise IntegrityError("existing audit anchor chain has no unique tail")
-            previous_hash = next(iter(tails))
-        record: dict[str, Any] = {
+        del commit, transaction_hash
+        return {
             "schema_version": "1.0",
             "resource_type": "audit_anchor",
             "anchor_uid": transaction.transaction_uid,
             "transaction_uid": transaction.transaction_uid,
-            "previous_anchor_hash": previous_hash,
-            "event_hashes": [
-                transaction_hash,
-                *(
-                    semantic_hash(
-                        {
-                            "approval_uid": approval.approval_uid,
-                            "actor": approval.actor,
-                            "approval_type": approval.approval_type,
-                        }
-                    )
-                    for approval in transaction.approvals
-                ),
-            ],
+            "actor_uid": transaction.actor,
+            "operation_types": sorted(
+                {item.operation_type.value for item in transaction.operations}
+            ),
+            "approval_uids": sorted(
+                approval.approval_uid for approval in transaction.approvals
+            ),
             "created_at": created_at,
         }
-        record["anchor_hash"] = semantic_hash(record)
-        return record
 
     @staticmethod
     def _utc_now() -> str:

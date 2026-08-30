@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import ApprovalKeyStore, ApprovalPayload
 from lesr.domain.model import (
@@ -245,7 +245,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.MEDIUM,
             {"configuration_uid": configuration_uid},
         )
     )
@@ -272,7 +271,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.MEDIUM,
             {
                 "operation_type": "create_object",
                 "working_copy": working_copy.model_dump(mode="json"),
@@ -289,7 +287,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.HIGH,
             {
                 "configuration_uid": configuration_uid,
                 "evaluation_time": datetime.now(UTC).isoformat(),
@@ -319,7 +316,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.HIGH,
             {
                 "review_package_uid": package.package_uid,
                 "signed_approvals": [final_approval.model_dump(mode="json")],
@@ -341,7 +337,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.HIGH,
             {
                 "configuration_uid": configuration_uid,
                 "evaluation_time": datetime.now(UTC).isoformat(),
@@ -370,7 +365,6 @@ def test_public_bootstrap_installs_root_governance_and_initial_configuration(
             actor_uid,
             delegation_uid,
             False,
-            RiskClass.HIGH,
             {
                 "review_package_uid": baseline_package_uid,
                 "signed_approvals": [baseline_approval.model_dump(mode="json")],

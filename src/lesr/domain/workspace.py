@@ -170,14 +170,18 @@ class WorkspaceCheckpoint(FrozenModel):
     created_at: datetime
     git_ref: str
     workspace_state: Workspace
-    checkpoint_hash: str = ""
+    # Read-only compatibility with Runtime 1.x. Git already authenticates the
+    # checkpoint document, so Runtime 2 omits this duplicate field on writes.
+    checkpoint_hash: str | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
-    def calculate_hash(self) -> WorkspaceCheckpoint:
-        expected = document_hash(self.model_dump(mode="json"), "checkpoint_hash")
-        if self.checkpoint_hash and self.checkpoint_hash != expected:
+    def validate_legacy_hash(self) -> WorkspaceCheckpoint:
+        if (
+            self.checkpoint_hash is not None
+            and self.checkpoint_hash
+            != document_hash(self.model_dump(mode="json"), "checkpoint_hash")
+        ):
             raise ValueError("checkpoint_hash is invalid")
-        object.__setattr__(self, "checkpoint_hash", expected)
         return self
 
 
@@ -208,6 +212,54 @@ class SemanticChange(FrozenModel):
     change_type: Literal["create", "set", "delete", "relation", "transition"]
     before: JsonValue = None
     after: JsonValue = None
+
+
+class CandidateRevisionPreview(FrozenModel):
+    """Transient revision-shaped content without a formal Revision identity or hash."""
+
+    object_uid: str
+    revision_number: int = Field(ge=1)
+    parent_revision_uid: str | None = None
+    human_key: str
+    kind: str
+    facets: tuple[str, ...] = ()
+    fields: tuple[SemanticField, ...] = ()
+    fragments: tuple[Fragment, ...] = ()
+    provenance_origin: ProvenanceKind
+    created_at: datetime
+
+
+class LifecycleRecordPreview(FrozenModel):
+    """Transient lifecycle content; submit assigns its immutable record identity."""
+
+    record_type: Literal["lifecycle"] = "lifecycle"
+    subject_uid: str
+    actor_uid: str
+    actor_type: Literal["human"] = "human"
+    occurred_at: datetime
+    fields: tuple[SemanticField, ...] = ()
+
+
+class WorkspacePreview(FrozenModel):
+    """Non-freezing candidate materialization for validation and agent inspection.
+
+    A preview is transient runtime output.  It is not a Candidate Revision Set, cannot
+    be applied, creates no checkpoint or formal resource identity, and leaves the
+    supplied Workspace editable.  ``submit`` is the only operation in this engine that
+    freezes this materialized content into formal candidate resources.
+    """
+
+    schema_version: Literal["1.0"] = "1.0"
+    resource_type: Literal["workspace_preview"] = "workspace_preview"
+    persistence_scope: Literal["transient"] = "transient"
+    candidate_frozen: Literal[False] = False
+    workspace: Workspace
+    previewed_at: datetime
+    revision_previews: tuple[CandidateRevisionPreview, ...]
+    relation_proposals: tuple[RelationAssertion, ...]
+    lifecycle_record_previews: tuple[LifecycleRecordPreview, ...]
+    changes: tuple[SemanticChange, ...]
+    scope: tuple[str, ...]
 
 
 class SemanticDiff(FrozenModel):
@@ -350,6 +402,26 @@ class WorkspaceEngine:
         return updated, checkpoint
 
     @staticmethod
+    def preview(
+        workspace: Workspace,
+        *,
+        actor_uid: str,
+        previewed_at: datetime,
+        base_revisions: tuple[Revision, ...] = (),
+        lifecycle_states: tuple[tuple[str, str], ...] = (),
+    ) -> WorkspacePreview:
+        """Materialize editable candidate content without checkpointing or freezing it."""
+
+        WorkspaceEngine._require_editable(workspace)
+        return WorkspaceEngine._materialize(
+            workspace,
+            actor_uid=actor_uid,
+            materialized_at=previewed_at,
+            base_revisions=base_revisions,
+            lifecycle_states=lifecycle_states,
+        )
+
+    @staticmethod
     def submit(
         workspace: Workspace,
         *,
@@ -365,12 +437,68 @@ class WorkspaceEngine:
             actor_uid=actor_uid,
             created_at=submitted_at,
         )
-        revisions: list[Revision] = []
+        preview = WorkspaceEngine._materialize(
+            checkpointed,
+            actor_uid=actor_uid,
+            materialized_at=submitted_at,
+            base_revisions=base_revisions,
+            lifecycle_states=lifecycle_states,
+        )
+        revisions = tuple(
+            Revision.model_validate(item.model_dump(mode="python"))
+            for item in preview.revision_previews
+        )
+        lifecycle_records = tuple(
+            ImmutableRecord.model_validate(item.model_dump(mode="python"))
+            for item in preview.lifecycle_record_previews
+        )
+        candidate = CandidateRevisionSet(
+            workspace_uid=workspace.workspace_uid,
+            checkpoint_uid=checkpoint_uid,
+            effective_model_hash=workspace.effective_model_hash,
+            revisions=revisions,
+            relation_revisions=preview.relation_proposals,
+            lifecycle_records=lifecycle_records,
+        )
+        diff = SemanticDiff(
+            base_commit=workspace.base_commit,
+            candidate_uid=candidate.candidate_uid,
+            changes=preview.changes,
+            scope=preview.scope,
+        )
+        read_only_copies = tuple(
+            WorkingCopy.model_validate(
+                item.model_dump(mode="json")
+                | {"state": WorkingCopyState.SUBMITTED, "working_state_hash": ""}
+            )
+            for item in checkpointed.working_copies
+        )
+        submitted = checkpointed.model_copy(
+            update={"working_copies": read_only_copies, "state": WorkingCopyState.SUBMITTED}
+        )
+        return Submission(
+            workspace=submitted,
+            checkpoint=checkpoint,
+            candidate=candidate,
+            semantic_diff=diff,
+        )
+
+    @staticmethod
+    def _materialize(
+        workspace: Workspace,
+        *,
+        actor_uid: str,
+        materialized_at: datetime,
+        base_revisions: tuple[Revision, ...],
+        lifecycle_states: tuple[tuple[str, str], ...],
+    ) -> WorkspacePreview:
+        revisions: list[CandidateRevisionPreview] = []
         relations: list[RelationAssertion] = []
-        lifecycle_records: list[ImmutableRecord] = []
+        lifecycle_records: list[LifecycleRecordPreview] = []
         changes: list[SemanticChange] = []
         base_by_uid = {item.revision_uid: item for item in base_revisions}
-        for copy in checkpointed.working_copies:
+        lifecycle_by_object = dict(lifecycle_states)
+        for copy in workspace.working_copies:
             base_revision = (
                 base_by_uid.get(copy.base_revision_uid) if copy.base_revision_uid is not None else None
             )
@@ -386,7 +514,7 @@ class WorkspaceEngine:
                 else {}
             )
             revisions.append(
-                Revision(
+                CandidateRevisionPreview(
                     object_uid=copy.object_uid,
                     revision_number=copy.base_revision_number + 1,
                     parent_revision_uid=copy.base_revision_uid,
@@ -396,7 +524,7 @@ class WorkspaceEngine:
                     fields=copy.draft_fields,
                     fragments=copy.draft_fragments,
                     provenance_origin=ProvenanceKind.AUTHORED,
-                    created_at=submitted_at,
+                    created_at=materialized_at,
                 )
             )
             relations.extend(copy.relation_proposals)
@@ -423,49 +551,26 @@ class WorkspaceEngine:
                     )
                 )
             if copy.requested_lifecycle_state is not None:
-                current_state = dict(lifecycle_states).get(copy.object_uid)
+                current_state = lifecycle_by_object.get(copy.object_uid)
                 fields = [SemanticField(path="/to_state", value=copy.requested_lifecycle_state)]
                 if current_state is not None:
                     fields.insert(0, SemanticField(path="/from_state", value=current_state))
                 lifecycle_records.append(
-                    ImmutableRecord(
-                        record_type="lifecycle",
+                    LifecycleRecordPreview(
                         subject_uid=copy.object_uid,
                         actor_uid=actor_uid,
-                        actor_type="human",
-                        occurred_at=submitted_at,
+                        occurred_at=materialized_at,
                         fields=tuple(fields),
                     )
                 )
-        candidate = CandidateRevisionSet(
-            workspace_uid=workspace.workspace_uid,
-            checkpoint_uid=checkpoint_uid,
-            effective_model_hash=workspace.effective_model_hash,
-            revisions=tuple(revisions),
-            relation_revisions=tuple(relations),
-            lifecycle_records=tuple(lifecycle_records),
-        )
-        diff = SemanticDiff(
-            base_commit=workspace.base_commit,
-            candidate_uid=candidate.candidate_uid,
+        return WorkspacePreview(
+            workspace=workspace,
+            previewed_at=materialized_at,
+            revision_previews=tuple(revisions),
+            relation_proposals=tuple(relations),
+            lifecycle_record_previews=tuple(lifecycle_records),
             changes=tuple(changes),
-            scope=tuple(item.object_uid for item in checkpointed.working_copies),
-        )
-        read_only_copies = tuple(
-            WorkingCopy.model_validate(
-                item.model_dump(mode="json")
-                | {"state": WorkingCopyState.SUBMITTED, "working_state_hash": ""}
-            )
-            for item in checkpointed.working_copies
-        )
-        submitted = checkpointed.model_copy(
-            update={"working_copies": read_only_copies, "state": WorkingCopyState.SUBMITTED}
-        )
-        return Submission(
-            workspace=submitted,
-            checkpoint=checkpoint,
-            candidate=candidate,
-            semantic_diff=diff,
+            scope=tuple(item.object_uid for item in workspace.working_copies),
         )
 
     @staticmethod

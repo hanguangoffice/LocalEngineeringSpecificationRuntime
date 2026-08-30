@@ -1,4 +1,4 @@
-"""LESR v1 MCP adapter. Only this module imports the replaceable MCP SDK."""
+"""LESR MCP adapter. Only this module imports the replaceable MCP SDK."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from mcp.types import ToolAnnotations
 
 from lesr.application.contracts import (
     LESRDomainPort,
-    RiskClass,
+    WorkspaceAssessmentRequest,
     WriteEnvelope,
 )
-from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
+from lesr.domain.catalog import RUNTIME_CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import uuid7_candidate
 
 
 def create_server(domain: LESRDomainPort) -> FastMCP:
-    server = FastMCP("LESR v1")
+    server = FastMCP("LESR Runtime 2")
     read_only = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -44,7 +44,11 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Negotiate the versioned LESR domain capability groups."""
         return {
             "domain_contract": RUNTIME_CONTRACT_VERSION,
-            "capabilities": [item.model_dump(mode="json") for item in CAPABILITIES if item.mcp],
+            "capabilities": [
+                item.model_dump(mode="json")
+                for item in RUNTIME_CAPABILITIES
+                if item.mcp
+            ],
         }
 
     @server.tool(annotations=read_only, structured_output=True)
@@ -144,6 +148,21 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             dict[str, Any], starter(bundle_hash, start_uid, max_depth).payload()
         )
 
+    @server.tool(name="workspace_validate", annotations=read_only, structured_output=True)
+    def assess_workspace(
+        workspace_uid: str,
+        evaluation_time: str,
+        maximum_depth: int = 3,
+    ) -> dict[str, Any]:
+        """Evaluate an editable Workspace without freezing or submitting it."""
+        return domain.assess_workspace(
+            WorkspaceAssessmentRequest(
+                workspace_uid=workspace_uid,
+                evaluation_time=evaluation_time,
+                maximum_depth=maximum_depth,
+            )
+        ).payload()
+
     @server.tool(name="workspace_submit", annotations=write, structured_output=True)
     def prepare_review(
         workspace_uid: str,
@@ -152,7 +171,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Run Profile-derived validation and create an immutable review package."""
@@ -164,7 +182,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -177,7 +194,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Open an isolated workspace through the standard write envelope."""
@@ -189,7 +205,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -202,7 +217,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Propose a structured semantic operation; no raw file write is exposed."""
@@ -214,7 +228,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -228,7 +241,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         method = getattr(domain, method_name, None)
@@ -244,7 +256,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    risk_class,
                     operation,
                 )
             ).payload(),
@@ -263,7 +274,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Rebase Working Copies through the deterministic three-way semantic engine."""
         return invoke_write_capability(
             "rebase_workspace", "workspace.rebase", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="workspace_merge", annotations=write, structured_output=True)
@@ -279,7 +290,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Merge another Workspace without treating a Git merge as authority."""
         return invoke_write_capability(
             "merge_workspace", "workspace.merge", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="workspace_resolve", annotations=write, structured_output=True)
@@ -295,7 +306,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Resolve one structured semantic merge conflict."""
         return invoke_write_capability(
             "resolve_merge_conflict", "workspace.resolve", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="review_record", annotations=write, structured_output=True)
@@ -321,7 +332,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
             return _capability_unavailable(f"review.{record_type}")
         return invoke_write_capability(
             selected[0], selected[1], workspace_uid, expected_base, idempotency_key,
-            actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="reconciliation_open", annotations=write, structured_output=True)
@@ -337,7 +348,7 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Open a non-authoritative Workspace for a detected foreign Canonical diff."""
         return invoke_write_capability(
             "begin_reconciliation", "reconciliation.open", workspace_uid, expected_base,
-            idempotency_key, actor, delegation_uid, dry_run, RiskClass.HIGH, operation
+            idempotency_key, actor, delegation_uid, dry_run, operation
         )
 
     @server.tool(name="apply", annotations=atomic_apply, structured_output=True)
@@ -348,7 +359,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         actor: str,
         delegation_uid: str,
         dry_run: bool,
-        risk_class: RiskClass,
         operation: dict[str, Any],
     ) -> dict[str, Any]:
         """Apply an approved transaction with base and idempotency checks."""
@@ -360,7 +370,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                 actor,
                 delegation_uid,
                 dry_run,
-                risk_class,
                 operation,
             )
         ).payload()
@@ -388,7 +397,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    RiskClass.HIGH,
                     operation,
                 )
             ).payload(),
@@ -417,7 +425,6 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
                     actor,
                     delegation_uid,
                     dry_run,
-                    RiskClass.HIGH,
                     operation,
                 )
             ).payload(),
@@ -429,6 +436,104 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         if task_type not in {"full_validation", "deep_trace", "large_impact"}:
             return _capability_unavailable(f"task.{task_type}")
         return domain.start_task(task_type, request).payload()
+
+    @server.tool(name="mission_create", annotations=write, structured_output=True)
+    def create_mission(plan: dict[str, Any]) -> dict[str, Any]:
+        """Create a local engineering Mission and its dependency-ordered work packages."""
+        return domain.create_mission(plan).payload()
+
+    @server.tool(name="mission_list", annotations=read_only, structured_output=True)
+    def list_missions() -> dict[str, Any]:
+        """List local Missions with their current engineering progress."""
+        return domain.list_missions().payload()
+
+    @server.tool(name="mission_inspect", annotations=read_only, structured_output=True)
+    def inspect_mission(mission_uid: str) -> dict[str, Any]:
+        """Inspect one Mission and all of its work-package states."""
+        return domain.inspect_mission(mission_uid).payload()
+
+    @server.tool(name="mission_ready_work", annotations=read_only, structured_output=True)
+    def ready_mission_work(mission_uid: str) -> dict[str, Any]:
+        """List work packages that are ready for an Agent to claim."""
+        return domain.ready_mission_work(mission_uid).payload()
+
+    @server.tool(name="mission_claim_work", annotations=write, structured_output=True)
+    def claim_mission_work(
+        mission_uid: str,
+        work_package_uid: str,
+        agent_identity: str,
+        provider: str,
+        model_identifier: str,
+        client: str,
+    ) -> dict[str, Any]:
+        """Atomically claim one ready work package for one Agent run."""
+        return domain.claim_mission_work(
+            mission_uid,
+            work_package_uid,
+            agent_identity,
+            provider,
+            model_identifier,
+            client,
+        ).payload()
+
+    @server.tool(name="mission_report_work", annotations=write, structured_output=True)
+    def report_mission_work(report: dict[str, Any]) -> dict[str, Any]:
+        """Record the terminal outcome of a claimed Agent run."""
+        return domain.report_mission_work(report).payload()
+
+    @server.tool(name="mission_evaluate_work", annotations=write, structured_output=True)
+    def evaluate_mission_work(
+        mission_uid: str,
+        work_package_uid: str,
+        workspace_uid: str,
+        evaluation_time: str,
+        operation: str,
+        narrative: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate real Workspace evidence and route the resulting Agent decision."""
+        return domain.evaluate_mission_work(
+            mission_uid,
+            work_package_uid,
+            workspace_uid,
+            evaluation_time,
+            operation,
+            narrative,
+        ).payload()
+
+    @server.tool(name="decision_list", annotations=read_only, structured_output=True)
+    def list_decisions(mission_uid: str | None = None) -> dict[str, Any]:
+        """List unresolved material decisions that need the local user."""
+        return domain.list_decisions(mission_uid).payload()
+
+    @server.tool(name="decision_resolve", annotations=write, structured_output=True)
+    def resolve_decision(
+        decision_request_uid: str,
+        actor_uid: str,
+        reason: str,
+        selected_action: str | None = None,
+        selected_alternative: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one material engineering choice and resume its work package."""
+        return domain.resolve_decision(
+            decision_request_uid,
+            actor_uid,
+            reason,
+            selected_action,
+            selected_alternative,
+        ).payload()
+
+    @server.tool(name="engineering_map", annotations=read_only, structured_output=True)
+    def engineering_map(
+        configuration_uid: str,
+        evaluation_time: str,
+        workspace_uid: str | None = None,
+    ) -> dict[str, Any]:
+        """Read the Profile- or template-defined engineering map in human terms."""
+        return domain.engineering_map(
+            configuration_uid,
+            evaluation_time,
+            workspace_uid,
+        ).payload()
 
     @server.resource("lesr://objects/{uid}")
     def object_resource(uid: str) -> str:
@@ -470,7 +575,6 @@ def _write(
     actor: str,
     delegation_uid: str,
     dry_run: bool,
-    risk_class: RiskClass,
     operation: dict[str, Any],
 ) -> WriteEnvelope:
     return WriteEnvelope(
@@ -480,7 +584,6 @@ def _write(
         actor,
         delegation_uid,
         dry_run,
-        risk_class,
         operation,
     )
 

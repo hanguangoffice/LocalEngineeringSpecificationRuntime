@@ -9,8 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lesr.adapters.git import GitCanonicalRepository
+from lesr.adapters.presentation_store import PresentationMappingStore
 from lesr.adapters.web import LocalWebRuntime
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WriteEnvelope
 from lesr.domain.semantic import uuid7_candidate
 from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService
 
@@ -225,6 +226,38 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
     assert "configuration_snapshot" in canonical_types
     assert not any(item.get("resource_type") == "revision" for item in runtime.domain.documents)
     assert all(item.state.value == "editable" for item in workspace.working_copies)
+    mission = runtime.domain.missions.inspect(value["mission"]["mission_uid"])
+    assert mission.configuration_uid == value["configuration_uid"]
+    assert {item.workspace_uid for item in mission.work_packages} == {
+        value["workspace_uid"]
+    }
+    assert {item.kind for item in workspace.working_copies} == {
+        "functional_requirement",
+        "constraint_requirement",
+        "test_case",
+        "safety_requirement",
+    }
+    kind_definitions = {
+        str(item["name"]): str(item["revision_uid"])
+        for item in runtime.domain.documents
+        if item.get("resource_type") == "kind_definition_revision"
+    }
+    assert set(value["content_types"]) == set(kind_definitions)
+    mapping = PresentationMappingStore(runtime.project).latest_for_pack(
+        "local-ai-runtime"
+    )
+    assert mapping is not None
+    assert value["engineering_areas"] == [
+        item.label for item in mapping.engineering_areas
+    ]
+    assert {item.engineering_area for item in mission.work_packages} == {
+        item.area_key for item in mapping.engineering_areas
+    }
+    assert {
+        uid
+        for area in mapping.engineering_areas
+        for uid in area.selector.kind_definition_revision_uids
+    } == set(kind_definitions.values())
     review = runtime.domain.prepare_review(
         WriteEnvelope(
             workspace_uid=value["workspace_uid"],
@@ -233,7 +266,6 @@ def test_accept_intake_bootstraps_local_identity_configuration_and_workspace(
             actor=value["actor_uid"],
             delegation_uid=value["delegation_uid"],
             dry_run=False,
-            risk_class=RiskClass.HIGH,
             operation={
                 "configuration_uid": value["configuration_uid"],
                 "evaluation_time": datetime.now(UTC).isoformat(),
@@ -256,6 +288,60 @@ def test_accept_intake_does_not_require_internal_authorization_input(tmp_path: P
     )
     assert response.status_code == 200
     assert response.json()["workspace_uid"] in runtime.domain.workspaces
+
+
+def test_template_driven_engineering_map_includes_the_editable_intake(
+    tmp_path: Path,
+) -> None:
+    runtime, client, csrf = unlocked_runtime(tmp_path)
+    response = client.post(
+        "/api/intake/accept",
+        headers={"X-LESR-CSRF": csrf},
+        json={
+            "description": GPU_REQUEST,
+            "project_name": "temporary-observatory",
+            "display_name": "Local owner",
+        },
+    )
+    assert response.status_code == 200, response.text
+    accepted = response.json()
+
+    result = runtime.domain.engineering_map(
+        accepted["configuration_uid"],
+        datetime.now(UTC).isoformat(),
+        accepted["workspace_uid"],
+    )
+
+    assert result.ok, result.payload()
+    assert result.value["mapping_name"] == "本地 AI、GPU 与模型应用工程结构"
+    labels = {item["label"] for item in result.value["areas"]}
+    assert "Spec Kit 需求规格" in labels
+    assert "arc42 架构文档" in labels
+    human_keys = {
+        item["human_key"]
+        for area in result.value["areas"]
+        for item in area["items"]
+    }
+    assert set(accepted["human_keys"]) <= human_keys
+    serialized = str(result.value).casefold()
+    assert "canonical_commit" not in serialized
+    assert "snapshot_hash" not in serialized
+    assert "delegation_uid" not in serialized
+
+    web_map = client.get("/api/engineering/map")
+    assert web_map.status_code == 200, web_map.text
+    assert {
+        item["human_key"]
+        for area in web_map.json()["areas"]
+        for item in area["items"]
+    } >= set(accepted["human_keys"])
+    missions = client.get("/api/missions").json()["items"]
+    assert len(missions) == 1
+    assert missions[0]["title"] == "temporary-observatory · 工程任务"
+    assert {item["engineering_area"] for item in missions[0]["work_packages"]} == {
+        item["area_key"] for item in web_map.json()["areas"]
+    }
+    assert client.get("/api/decisions").json() == {"items": []}
 
 
 def test_web_intake_imports_a_custom_markdown_specification(tmp_path: Path) -> None:

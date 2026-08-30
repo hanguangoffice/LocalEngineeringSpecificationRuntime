@@ -86,6 +86,24 @@ SCHEMA_CATALOG: tuple[str, ...] = (
     "workspace.schema.json",
 )
 
+# Mission execution, decision routing, and presentation are local-runtime
+# resources.  They deliberately stay outside the canonical repository manifest:
+# restarting or upgrading the agent runtime must not change the engineering
+# state contract of an existing 1.0 repository.
+RUNTIME_SCHEMA_CATALOG: tuple[str, ...] = (
+    "agent-run.schema.json",
+    "decision-request.schema.json",
+    "decision-resolution.schema.json",
+    "mission-mandate.schema.json",
+    "mission.schema.json",
+    "presentation-mapping.schema.json",
+    "work-package.schema.json",
+)
+
+CONSTRUCTION_SCHEMA_CATALOG: tuple[str, ...] = tuple(
+    sorted((*SCHEMA_CATALOG, *RUNTIME_SCHEMA_CATALOG))
+)
+
 
 CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
     sorted(
@@ -131,6 +149,75 @@ CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
                 ("migrate", CapabilityAccess.ADMIN, True, False, False),
                 ("gc", CapabilityAccess.ADMIN, True, False, False),
             )
+        ),
+        key=lambda item: item.name,
+    )
+)
+
+# RepositoryManifest.capabilities is the frozen 1.0 Canonical repository
+# contract above.  Runtime-only capabilities may evolve without rewriting a
+# project's engineering history or invalidating its existing Manifest.
+RUNTIME_CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
+    sorted(
+        (
+            *CAPABILITIES,
+            RuntimeCapability(
+                name="workspace.validate",
+                access=CapabilityAccess.READ,
+                cli=True,
+                mcp=True,
+                persistent_task=False,
+            ),
+            RuntimeCapability(
+                name="mission.create",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.list",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.inspect",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.ready-work",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.claim-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.report-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="mission.evaluate-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="decision.list",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="decision.resolve",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
+                name="engineering.map",
+                access=CapabilityAccess.READ,
+                mcp=True,
+            ),
         ),
         key=lambda item: item.name,
     )

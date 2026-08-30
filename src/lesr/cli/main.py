@@ -1,4 +1,4 @@
-"""LESR v1 capability-oriented command line interface."""
+"""LESR Runtime 2 capability-oriented command line interface."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from lesr.adapters.mcp import create_server
 from lesr.adapters.operations import RepositoryMaintenance, TaskStore
 from lesr.adapters.pdf_import import preview_pdf
 from lesr.adapters.web import create_web_app
-from lesr.application.contracts import RiskClass, WriteEnvelope
+from lesr.application.contracts import WorkspaceAssessmentRequest, WriteEnvelope
 from lesr.application.runtime import LocalRuntimeService
 from lesr.domain.approval import (
     ApprovalKeyStore,
@@ -29,7 +29,7 @@ from lesr.domain.catalog import CAPABILITIES, RUNTIME_CONTRACT_VERSION
 from lesr.domain.semantic import uuid7_candidate
 from lesr.intake import IntakeCatalog, IntakeRequest, IntakeService
 
-app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime v1")
+app = typer.Typer(no_args_is_help=True, help="Local Engineering Specification Runtime 2")
 context_app = typer.Typer(no_args_is_help=True)
 workspace_app = typer.Typer(no_args_is_help=True)
 approval_app = typer.Typer(no_args_is_help=True)
@@ -465,7 +465,6 @@ def open_workspace(
             actor_uid,
             delegation_uid,
             dry_run,
-            RiskClass.MEDIUM,
             {"type": "open_workspace", "configuration_uid": configuration_uid},
         )
     )
@@ -484,6 +483,28 @@ def checkpoint_workspace(project: Path, workspace_uid: str, state: Path) -> None
             "commit": result.commit,
             "git_reference": result.git_reference,
         }
+    )
+
+
+@workspace_app.command("validate")
+def validate_workspace(
+    project: Path,
+    workspace_uid: str,
+    evaluation_time: str,
+    maximum_depth: int = 3,
+) -> None:
+    """Assess editable candidate state without checkpointing or submitting it."""
+
+    emit(
+        LocalRuntimeService(project)
+        .assess_workspace(
+            WorkspaceAssessmentRequest(
+                workspace_uid=workspace_uid,
+                evaluation_time=evaluation_time,
+                maximum_depth=maximum_depth,
+            )
+        )
+        .payload()
     )
 
 
@@ -508,7 +529,6 @@ def propose_workspace_operation(
                 actor_uid,
                 delegation_uid,
                 dry_run,
-                RiskClass.MEDIUM,
                 read_object(operation_file),
             )
         )
@@ -538,7 +558,6 @@ def invoke_runtime_write(
                 actor_uid,
                 delegation_uid,
                 dry_run,
-                RiskClass.HIGH,
                 read_object(operation_file),
             )
         ).payload()
@@ -634,7 +653,6 @@ def build_review_package(
                 actor_uid,
                 delegation_uid,
                 dry_run,
-                RiskClass.HIGH,
                 {
                     "configuration_uid": configuration_uid,
                     "evaluation_time": evaluation_time,
@@ -732,7 +750,6 @@ def apply_transaction(
             actor_uid,
             delegation_uid,
             dry_run,
-            RiskClass.HIGH,
             {
                 "transaction_uid": transaction_uid or uuid7_candidate(),
                 "review_package_uid": review_package_uid,
@@ -766,7 +783,6 @@ def prepare_baseline(
                 actor_uid,
                 delegation_uid,
                 dry_run,
-                RiskClass.HIGH,
                 {
                     "configuration_uid": configuration_uid,
                     "evaluation_time": evaluation_time,
@@ -801,7 +817,6 @@ def apply_baseline(
                 actor_uid,
                 delegation_uid,
                 dry_run,
-                RiskClass.HIGH,
                 {
                     "review_package_uid": review_package_uid,
                     "signed_approvals": [read_object(path) for path in approval_file],

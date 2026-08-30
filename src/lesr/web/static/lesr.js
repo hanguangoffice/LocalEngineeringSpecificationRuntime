@@ -1,11 +1,13 @@
 /* LESR human interface: engineering meaning in front, machine identity in audit. */
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const runtimeState = {
-  workspaceUid: null, base: null, actor: null, delegationUid: null,
+  workspaceUid: null, base: null, actor: null,
   configurationUid: null, packageUid: null, approval: null,
   reviewPurpose: null, flowIndex: 0, context: null,
   intakeRequest: null, intakeWorkspace: false, selectedItem: null,
   queryKind: '', baselineTag: '',
+  engineeringMap: null, selectedMapArea: null, selectedMapItem: null,
+  missions: [], decisions: [],
   change: {humanKey: '', kind: '', statement: '', reason: ''}, audit: [],
 };
 
@@ -27,53 +29,154 @@ const motion = (() => {
   const media = gsap.matchMedia();
   let enabled = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let panelTimeline = null;
+  let mapTimeline = null;
+  let decisionTimeline = null;
+  let panelTargets = [];
+  let toastTimer = null;
   const ease = 'power3.out';
+  const toElements = (targets) => {
+    if (!targets) return [];
+    if (typeof targets === 'string') return [...document.querySelectorAll(targets)];
+    if (targets instanceof Element) return [targets];
+    if (typeof targets[Symbol.iterator] === 'function') {
+      return [...targets].flatMap((target) => toElements(target));
+    }
+    return [];
+  };
+  const clearAnimatedState = (targets) => {
+    const elements = toElements(targets);
+    if (!elements.length) return;
+    gsap.set(elements, {clearProps: 'transform,opacity,visibility,willChange'});
+  };
   media.add('(prefers-reduced-motion: reduce)', () => {
     enabled = false;
-    gsap.set('.panel.active, .priority-work, .project-glance', {clearProps: 'all'});
+    if (panelTimeline) panelTimeline.kill();
+    if (mapTimeline) mapTimeline.kill();
+    clearAnimatedState('.panel, .priority-work, [data-map-column], .map-document-row');
     return () => { enabled = true; };
   });
   const animate = (targets, vars) => {
+    const elements = toElements(targets);
+    if (!elements.length) return null;
     if (!enabled) {
-      gsap.set(targets, {clearProps: 'transform,opacity,visibility'});
+      clearAnimatedState(elements);
       return null;
     }
-    gsap.set(targets, {willChange: 'transform,opacity'});
-    return gsap.to(targets, {
+    gsap.set(elements, {willChange: 'transform,opacity'});
+    const after = vars.onComplete;
+    return gsap.to(elements, {
       ...vars,
       onComplete() {
-        gsap.set(targets, {clearProps: 'willChange'});
-        if (vars.onComplete) vars.onComplete();
+        clearAnimatedState(elements);
+        if (after) after();
       },
+      onInterrupt() { clearAnimatedState(elements); },
     });
   };
   const boot = () => {
     if (!enabled) return;
     gsap.timeline({defaults: {ease}})
-      .from('.masthead > *', {y: -12, autoAlpha: 0, duration: .42, stagger: .06})
-      .from('.rail .nav-item', {x: -10, autoAlpha: 0, duration: .28, stagger: .025}, '-=.2')
+      .addLabel('shell')
+      .from('.masthead > *', {y: -12, autoAlpha: 0, duration: .42, stagger: .06}, 'shell')
+      .from('.rail .nav-item', {x: -10, autoAlpha: 0, duration: .28, stagger: .025}, 'shell+=.16')
+      .addLabel('heading', 'shell+=.26')
       .from('#overview .eyebrow, #overview h1, #overview .lede', {
         y: 18, autoAlpha: 0, duration: .48, stagger: .07,
-      }, '-=.08')
-      .from('.priority-work, .project-glance', {
-        y: 16, autoAlpha: 0, duration: .38, stagger: .045,
-      }, '-=.25')
+      }, 'heading')
+      .addLabel('atlas', 'heading+=.18')
+      .from('[data-map-column]', {
+        y: 16, autoAlpha: 0, duration: .38, stagger: .06,
+      }, 'atlas')
       .from('.overview-actions button', {
         y: 12, autoAlpha: 0, duration: .32, stagger: .035,
-      }, '-=.18');
+      }, 'atlas+=.2');
   };
   const enterPanel = (panel) => {
-    if (panelTimeline) panelTimeline.kill();
+    if (panelTimeline) {
+      panelTimeline.kill();
+      clearAnimatedState(panelTargets);
+    }
     if (!enabled) return;
     const content = panel.querySelectorAll(
-      '.section-copy, form, .intake-composer, .intake-result, .explore-workspace, .context-key, .context-result, .change-composer, .review-decision, .review-scope, .sign-zone, .baseline-workflow, .task-toolbar, .task-list, .maintenance-layout, .audit-summary, .audit-section, .human-output'
+      '.section-copy, form, .intake-composer, .intake-result, .engineering-atlas, .mission-board, .decision-workspace, .workflow-drawer, .version-ledger, .explore-workspace, .context-key, .context-result, .change-composer, .review-decision, .review-scope, .sign-zone, .baseline-workflow, .task-toolbar, .task-list, .maintenance-layout, .audit-summary, .audit-section, .human-output'
     );
-    panelTimeline = gsap.timeline({defaults: {ease}})
-      .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16})
-      .from(panel.querySelectorAll('.eyebrow, h2'), {
+    const headings = panel.querySelectorAll('.eyebrow, h2');
+    panelTargets = toElements([panel, headings, content]);
+    gsap.set(panelTargets, {willChange: 'transform,opacity'});
+    panelTimeline = gsap.timeline({
+      defaults: {ease},
+      onComplete: () => clearAnimatedState(panelTargets),
+      onInterrupt: () => clearAnimatedState(panelTargets),
+    })
+      .addLabel('panel')
+      .fromTo(panel, {autoAlpha: 0}, {autoAlpha: 1, duration: .16}, 'panel')
+      .addLabel('heading', 'panel+=.03')
+      .from(headings, {
         y: 15, autoAlpha: 0, duration: .34, stagger: .045,
-      }, 0)
-      .from(content, {y: 12, autoAlpha: 0, duration: .32, stagger: .035}, .1);
+      }, 'heading')
+      .addLabel('content', 'heading+=.08')
+      .from(content, {y: 12, autoAlpha: 0, duration: .32, stagger: .035}, 'content');
+  };
+  const mapFlow = (areaTargets, documentTargets, contextTarget) => {
+    const areas = toElements(areaTargets);
+    const documents = toElements(documentTargets);
+    const contexts = toElements(contextTarget);
+    const animated = [...areas, ...documents, ...contexts];
+    if (mapTimeline) {
+      mapTimeline.kill();
+      clearAnimatedState(animated);
+    }
+    if (!enabled) {
+      clearAnimatedState(animated);
+      return;
+    }
+    if (!animated.length) return;
+    gsap.set(animated, {willChange: 'transform,opacity'});
+    mapTimeline = gsap.timeline({
+      defaults: {duration: .32, ease},
+      onComplete: () => clearAnimatedState(animated),
+      onInterrupt: () => clearAnimatedState(animated),
+    })
+      .addLabel('area')
+      .fromTo(areas, {x: -8, autoAlpha: .5}, {x: 0, autoAlpha: 1}, 'area')
+      .addLabel('documents', 'area+=.07')
+      .fromTo(documents, {x: 10, autoAlpha: 0}, {
+        x: 0, autoAlpha: 1, stagger: .035,
+      }, 'documents')
+      .addLabel('context', 'documents+=.1')
+      .fromTo(contexts, {x: 12, autoAlpha: 0}, {x: 0, autoAlpha: 1}, 'context');
+  };
+  const decisionFlow = (headingTarget, evidenceTargets, responseTarget) => {
+    const headings = toElements(headingTarget);
+    const evidence = toElements(evidenceTargets);
+    const response = toElements(responseTarget);
+    const animated = [...headings, ...evidence, ...response];
+    if (decisionTimeline) {
+      decisionTimeline.kill();
+      clearAnimatedState(animated);
+    }
+    if (!enabled || !animated.length) {
+      clearAnimatedState(animated);
+      return;
+    }
+    gsap.set(animated, {willChange: 'transform,opacity'});
+    decisionTimeline = gsap.timeline({
+      defaults: {ease},
+      onComplete: () => clearAnimatedState(animated),
+      onInterrupt: () => clearAnimatedState(animated),
+    })
+      .addLabel('question')
+      .fromTo(headings, {y: 10, autoAlpha: 0}, {
+        y: 0, autoAlpha: 1, duration: .32,
+      }, 'question')
+      .addLabel('evidence', 'question+=.1')
+      .fromTo(evidence, {x: -8, autoAlpha: 0}, {
+        x: 0, autoAlpha: 1, duration: .3, stagger: .045,
+      }, 'evidence')
+      .addLabel('choice', 'evidence+=.1')
+      .fromTo(response, {x: 10, autoAlpha: 0}, {
+        x: 0, autoAlpha: 1, duration: .34,
+      }, 'choice');
   };
   const step = (index) => {
     runtimeState.flowIndex = Math.max(runtimeState.flowIndex, index);
@@ -82,20 +185,57 @@ const motion = (() => {
     const element = document.querySelector(selector);
     if (!element) return;
     element.textContent = value;
+    element.classList.toggle('state-danger', tone === 'danger');
     if (!enabled) return;
+    gsap.set(element, {willChange: 'transform,opacity'});
     gsap.fromTo(element, {
-      y: 5, autoAlpha: 0, color: tone === 'danger' ? '#a74335' : '#1f654b',
-    }, {y: 0, autoAlpha: 1, color: '', duration: .36, ease});
+      y: 5, autoAlpha: 0,
+    }, {
+      y: 0, autoAlpha: 1, duration: .36, ease,
+      onComplete: () => clearAnimatedState(element),
+      onInterrupt: () => clearAnimatedState(element),
+    });
   };
   const reveal = (targets) => animate(targets, {
     y: 0, autoAlpha: 1, duration: .32, stagger: .04, ease,
   });
   const flash = (target, color = '#dce9df') => {
     if (!enabled) return;
-    gsap.timeline().to(target, {backgroundColor: color, duration: .12})
-      .to(target, {backgroundColor: '', duration: .55, ease});
+    void color;
+    const elements = toElements(target);
+    gsap.set(elements, {willChange: 'transform'});
+    gsap.timeline({
+      defaults: {ease},
+      onComplete: () => clearAnimatedState(elements),
+      onInterrupt: () => clearAnimatedState(elements),
+    })
+      .to(target, {scale: .992, duration: .1})
+      .to(target, {scale: 1, duration: .32});
   };
-  return {boot, enterPanel, step, stateChange, reveal, flash, version: gsap.version};
+  const notify = (target) => {
+    const element = toElements(target)[0];
+    if (!element) return;
+    window.clearTimeout(toastTimer);
+    gsap.killTweensOf(element);
+    if (!enabled) {
+      gsap.set(element, {y: 0, autoAlpha: 1});
+      toastTimer = window.setTimeout(() => {
+        gsap.set(element, {y: 18, autoAlpha: 0, clearProps: 'willChange'});
+      }, 3000);
+      return;
+    }
+    gsap.set(element, {willChange: 'transform,opacity'});
+    gsap.timeline({
+      onComplete: () => clearAnimatedState(element),
+      onInterrupt: () => clearAnimatedState(element),
+    })
+      .to(element, {y: 0, autoAlpha: 1, duration: .28, ease})
+      .to(element, {y: 18, autoAlpha: 0, duration: .24, ease: 'power2.in'}, '+=2.8');
+  };
+  return {
+    boot, enterPanel, mapFlow, decisionFlow, step, stateChange, reveal, flash, notify,
+    version: gsap.version,
+  };
 })();
 
 window.__LESR_MOTION__ = {
@@ -112,10 +252,7 @@ const create = (tag, className, text) => {
 const toast = (message) => {
   const element = document.querySelector('#toast');
   element.querySelector('span').textContent = message;
-  gsap.killTweensOf(element);
-  gsap.timeline()
-    .to(element, {y: 0, autoAlpha: 1, duration: .28, ease: 'power3.out'})
-    .to(element, {y: 18, autoAlpha: 0, duration: .24, ease: 'power2.in'}, '+=2.8');
+  motion.notify(element);
 };
 const audit = (action, details) => {
   runtimeState.audit.unshift({time: new Date().toISOString(), action, details});
@@ -166,6 +303,10 @@ document.querySelectorAll('.nav-item').forEach((button) => button.addEventListen
   button.classList.add('active');
   panel.classList.add('active');
   motion.enterPanel(panel);
+  if (panel.id === 'overview') void loadEngineeringMap();
+  if (panel.id === 'missions') void loadMissions();
+  if (panel.id === 'decisions') void loadDecisions();
+  if (panel.id === 'versions') renderVersions();
   if (panel.id === 'tasks') void loadTasks();
   if (panel.id === 'explore') void loadQuery();
 }));
@@ -239,7 +380,6 @@ const populateSession = (value) => {
       const option = create('option', '', `${actor.display_name}${roles ? ` · ${roles}` : ''}`);
       option.value = actor.actor_uid;
       option.dataset.keyUid = actor.key_uid || '';
-      option.dataset.delegationUid = actor.delegation_uid || '';
       option.dataset.roles = JSON.stringify(actor.roles || []);
       select.append(option);
     });
@@ -271,8 +411,8 @@ const populateSession = (value) => {
   const firstActor = value.actors[0];
   if (firstActor && !runtimeState.actor) {
     runtimeState.actor = firstActor.actor_uid;
-    runtimeState.delegationUid = firstActor.delegation_uid;
   }
+  renderVersions();
   suggestEngineeringNumber(false);
   audit('会话上下文已自动解析', value);
 };
@@ -292,7 +432,7 @@ async function health() {
     motion.stateChange('#health-workspaces', String(value.open_workspaces));
     if (value.open_workspaces > 0) {
       motion.stateChange('#overview-priority-title', `继续处理 ${value.open_workspaces} 项变更`);
-      document.querySelector('#overview-priority-note').textContent = '查看未完成内容，继续编辑或送审。';
+      document.querySelector('#overview-priority-note').textContent = '查看未完成内容，继续整理。';
       const primary = document.querySelector('.priority-primary');
       primary.textContent = '继续处理';
       primary.dataset.go = 'workspace';
@@ -300,6 +440,559 @@ async function health() {
     }
   } catch (error) { toast(error.message); }
 }
+
+const LIFE_NAMES = {
+  approved: '已批准', draft: '草案', active: '有效', retired: '已归档',
+  planned: '已计划', ready: '可开始', running: '进行中',
+  waiting_for_decision: '等待决定', blocked: '受阻', completed: '已完成',
+  failed: '失败', cancelled: '已取消', queued: '等待执行', interrupted: '已中断',
+};
+const CONTEXT_NAMES = {
+  COMPLETE: '资料完整', INCOMPLETE_MISSING_RELATION: '缺少关联内容',
+  INCOMPLETE_BUDGET: '需要继续读取', INCOMPLETE_CONFIGURATION: '配置待补充',
+  INCOMPLETE_CONFLICT: '存在工程冲突', INCOMPLETE_CONFIDENTIALITY: '部分内容受限',
+};
+const lifeName = (value) => LIFE_NAMES[String(value || '').toLocaleLowerCase()]
+  || String(value || '状态待确认').replaceAll('_', ' ');
+const optionalApi = async (url) => {
+  try { return await api(url); }
+  catch (error) {
+    audit('渐进界面数据尚未接入', {url, message: error.message});
+    return null;
+  }
+};
+const mapItemTitle = (item) => item.title || item.human_key || '未命名工程内容';
+const mapItemKind = (item) => humanKind(item.kind_name || item.kind || item.resource_type);
+const mapItemSummary = (item) => item.summary || statementOf(item) || '尚无正文摘要。';
+
+const renderMapDetail = (item, row) => {
+  runtimeState.selectedMapItem = item;
+  document.querySelectorAll('.map-document-row').forEach((element) => {
+    element.toggleAttribute('aria-current', element === row);
+  });
+  const detail = document.querySelector('#engineering-item-detail');
+  detail.replaceChildren();
+  const heading = create('div', 'map-item-heading');
+  heading.append(
+    create('span', '', mapItemKind(item)),
+    create('h3', '', item.human_key || mapItemTitle(item)),
+    create('p', '', mapItemTitle(item) === item.human_key ? '' : mapItemTitle(item)),
+  );
+  const state = create('div', 'map-item-state');
+  state.append(
+    create('small', '', item.is_candidate || item.workspace_draft ? '本次工作' : '工程内容'),
+    create('strong', '', lifeName(item.lifecycle_state || (item.workspace_draft ? 'draft' : 'active'))),
+  );
+  detail.append(heading, state, create('p', 'map-item-summary', mapItemSummary(item)));
+
+  const traceOutput = document.querySelector('#engineering-trace-summary');
+  traceOutput.replaceChildren();
+  const matrices = runtimeState.engineeringMap?.trace_coverage || [];
+  const traceRows = matrices.flatMap((matrix) => (matrix.rows || [])
+    .filter((traceRow) => traceRow.source?.human_key === item.human_key)
+    .map((traceRow) => ({...traceRow, matrixLabel: matrix.label})));
+  const traceHeading = create('header');
+  traceHeading.append(create('h4', '', '追踪覆盖'), create('span', '', traceRows.length
+    ? `${traceRows.filter((traceRow) => traceRow.state === 'covered').length}/${traceRows.length}`
+    : '—'));
+  traceOutput.append(traceHeading);
+  if (!traceRows.length) {
+    traceOutput.append(create('p', 'map-subtle', '当前映射没有为这项内容定义追踪矩阵。'));
+  } else {
+    traceRows.forEach((traceRow) => {
+      const line = create('section', 'map-trace-line');
+      const summary = create('div');
+      summary.append(create('b', '', traceRow.matrixLabel || '追踪关系'),
+        create('span', '', traceRow.state === 'covered' ? '已覆盖'
+          : traceRow.state === 'indeterminate' ? '待确认' : '缺少覆盖'));
+      line.append(summary);
+      (traceRow.links || []).forEach((link) => {
+        line.append(create('p', '', `${link.predicate || '关联'} → ${link.target?.human_key || mapItemTitle(link.target || {})}`));
+      });
+      traceOutput.append(line);
+    });
+  }
+
+  const contextOutput = document.querySelector('#engineering-context-summary');
+  contextOutput.replaceChildren();
+  const context = runtimeState.engineeringMap?.context;
+  const contextHeading = create('header');
+  contextHeading.append(create('h4', '', '工作资料'), create('span', '', context
+    ? (CONTEXT_NAMES[context.completeness] || '资料已整理') : '—'));
+  contextOutput.append(contextHeading);
+  if (!context) {
+    contextOutput.append(create('p', 'map-subtle', '选择具体任务后，这里会汇总必读内容和参考资料。'));
+  } else {
+    const materialLine = (label, values) => {
+      const line = create('section', 'map-material-line');
+      line.append(create('b', '', label), create('span', '', `${values.length} 项`));
+      if (values.length) line.append(create('p', '', values.slice(0, 5)
+        .map((value) => value.human_key || mapItemTitle(value)).join('、')));
+      return line;
+    };
+    contextOutput.append(
+      materialLine('必读', context.mandatory_items || []),
+      materialLine('参考', context.supporting_items || []),
+    );
+  }
+  document.querySelector('#context-form [name="target_key"]').value = item.human_key || '';
+  const changeForm = document.querySelector('#workspace-compose-form');
+  changeForm.querySelector('[name="human_key"]').value = item.human_key || '';
+  changeForm.querySelector('[name="statement"]').value = item.summary || statementOf(item) || '';
+  updateChangePreview();
+  motion.mapFlow(
+    document.querySelector('.map-area-button[aria-current="true"]'),
+    document.querySelectorAll('.map-document-row'),
+    document.querySelector('.atlas-detail'),
+  );
+};
+
+const renderMapDocuments = () => {
+  const area = runtimeState.selectedMapArea;
+  const output = document.querySelector('#engineering-document-list');
+  const query = document.querySelector('#map-filter-input').value.trim().toLocaleLowerCase();
+  output.replaceChildren();
+  const items = (area?.items || []).filter((item) => !query || [
+    item.human_key, mapItemTitle(item), mapItemKind(item), mapItemSummary(item),
+  ].some((value) => String(value || '').toLocaleLowerCase().includes(query)));
+  document.querySelector('#map-document-count').textContent = String(items.length);
+  if (!items.length) {
+    const empty = create('div', 'atlas-empty');
+    empty.append(create('b', '', query ? '当前区域没有匹配内容' : '这个区域还没有工程内容'));
+    if (!query) {
+      const start = create('button', 'text-action', '从需求开始');
+      start.type = 'button'; start.addEventListener('click', () => selectPanel('intake'));
+      empty.append(start);
+    }
+    output.append(empty);
+    document.querySelector('#engineering-item-detail').replaceChildren(
+      create('div', 'atlas-empty', query ? '换一个关键词继续查找。' : '选择其他区域，或建立工程内容。'),
+    );
+    document.querySelector('#engineering-trace-summary').replaceChildren();
+    document.querySelector('#engineering-context-summary').replaceChildren();
+    return;
+  }
+  items.forEach((item) => {
+    const row = create('button', 'map-document-row');
+    row.type = 'button';
+    const title = create('div');
+    title.append(create('b', '', item.human_key || mapItemTitle(item)),
+      create('span', '', mapItemKind(item)));
+    row.append(title, create('p', '', mapItemTitle(item)),
+      create('small', '', mapItemSummary(item)));
+    row.addEventListener('click', () => renderMapDetail(item, row));
+    output.append(row);
+  });
+  renderMapDetail(items[0], output.firstElementChild);
+};
+
+const selectMapArea = (area, button) => {
+  runtimeState.selectedMapArea = area;
+  document.querySelectorAll('.map-area-button').forEach((element) => {
+    element.toggleAttribute('aria-current', element === button);
+  });
+  document.querySelector('#map-area-label').textContent = area.label || '当前区域';
+  document.querySelector('#map-filter-input').value = '';
+  renderMapDocuments();
+};
+
+const renderEngineeringMap = (payload) => {
+  const view = payload?.engineering_view || payload?.view || payload || {};
+  runtimeState.engineeringMap = view;
+  const atlas = document.querySelector('#engineering-map');
+  const tree = document.querySelector('#engineering-area-tree');
+  tree.replaceChildren();
+  const areas = view.areas || [];
+  atlas.classList.toggle('is-empty', !areas.length);
+  if (!areas.length) {
+    const empty = create('div', 'atlas-empty');
+    empty.append(create('b', '', '工程地图等待第一批内容'),
+      create('p', '', '粘贴需求或导入现有规范，建立工程结构。'));
+    const start = create('button', 'text-action', '从需求开始');
+    start.type = 'button'; start.addEventListener('click', () => selectPanel('intake'));
+    empty.append(start); tree.append(empty);
+    runtimeState.selectedMapArea = {label: '工程内容', items: []};
+    document.querySelector('#map-area-label').textContent = '工程内容';
+    renderMapDocuments();
+    return;
+  }
+  areas.forEach((area, index) => {
+    const button = create('button', 'map-area-button');
+    button.type = 'button';
+    const line = create('span');
+    line.append(create('b', '', area.label || area.area_key || '工程区域'),
+      create('em', '', String((area.items || []).length)));
+    button.append(line);
+    if (area.description) button.append(create('small', '', area.description));
+    button.addEventListener('click', () => selectMapArea(area, button));
+    tree.append(button);
+    if (index === 0) selectMapArea(area, button);
+  });
+};
+
+const loadEngineeringMap = async () => {
+  const mapped = await optionalApi('/api/engineering/map');
+  if (mapped) return renderEngineeringMap(mapped);
+  const queried = await optionalApi('/api/query?text=&kind=');
+  if (!queried) return renderEngineeringMap({areas: []});
+  renderEngineeringMap({
+    mapping_name: '工程内容',
+    areas: [{
+      area_key: 'all-content', label: '全部工程内容',
+      description: '当前配置中的文档与条目',
+      items: (queried.items || []).map((item) => ({
+        ...item,
+        title: item.human_key || humanKind(item.kind || item.resource_type),
+        kind_name: item.kind || item.resource_type,
+        summary: statementOf(item),
+        lifecycle_state: item.workspace_draft ? 'draft' : 'active',
+        is_candidate: Boolean(item.workspace_draft),
+      })),
+    }],
+    trace_coverage: [], context: null,
+  });
+};
+
+document.querySelector('#map-filter-input').addEventListener('input', renderMapDocuments);
+
+const missionStateName = (value) => lifeName(value || 'planned');
+const workPackageDepths = (packages) => {
+  const byUid = new Map(packages.map((item) => [item.work_package_uid, item]));
+  const memo = new Map();
+  const depth = (item, path = new Set()) => {
+    if (memo.has(item.work_package_uid)) return memo.get(item.work_package_uid);
+    if (path.has(item.work_package_uid)) return 0;
+    const nextPath = new Set(path); nextPath.add(item.work_package_uid);
+    const dependencies = (item.dependency_uids || []).map((key) => byUid.get(key)).filter(Boolean);
+    const value = dependencies.length ? 1 + Math.max(...dependencies.map((entry) => depth(entry, nextPath))) : 0;
+    memo.set(item.work_package_uid, value); return value;
+  };
+  packages.forEach((item) => depth(item));
+  return memo;
+};
+
+const renderMission = (record, button) => {
+  const mission = record.mission || record;
+  document.querySelectorAll('.mission-select').forEach((element) => {
+    element.toggleAttribute('aria-current', element === button);
+  });
+  document.querySelector('#mission-title').textContent = mission.title || '工程任务';
+  document.querySelector('#mission-objective').textContent = mission.objective || '推进当前工程工作。';
+  document.querySelector('#mission-state').textContent = missionStateName(mission.state);
+  const packages = mission.work_packages || record.work_packages || [];
+  const depths = workPackageDepths(packages);
+  const dag = document.querySelector('#mission-dag'); dag.replaceChildren();
+  packages.forEach((workPackage) => {
+    const node = create('article', 'mission-node');
+    node.style.setProperty('--mission-depth', String(depths.get(workPackage.work_package_uid) || 0));
+    node.dataset.state = workPackage.state || 'planned';
+    const marker = create('i');
+    const body = create('div');
+    body.append(create('b', '', workPackage.title || '工作包'),
+      create('p', '', workPackage.objective || '完成这一项工程工作。'));
+    const meta = create('span', '', `${missionStateName(workPackage.state)} · ${humanRole(workPackage.role || 'engineering')}`);
+    node.append(marker, body, meta); dag.append(node);
+  });
+  if (!packages.length) dag.append(create('div', 'mission-empty', '这项任务尚未分解工作包。'));
+
+  const runs = record.agent_runs || mission.agent_runs || [];
+  const agent = record.current_agent || mission.current_agent
+    || runs.find((run) => run.state === 'running') || null;
+  const agentOutput = document.querySelector('#mission-agent'); agentOutput.replaceChildren();
+  if (agent) {
+    agentOutput.append(create('b', '', humanRole(agent.role || 'engineering')),
+      create('p', '', agent.current_work || agent.objective || '正在处理当前工作包。'),
+      create('span', '', missionStateName(agent.state || 'running')));
+  } else {
+    const running = packages.find((item) => item.state === 'running');
+    agentOutput.append(create('b', '', running ? humanRole(running.role) : '尚未分派'),
+      create('p', '', running?.objective || '等待可执行的工作包。'));
+  }
+  const next = packages.find((item) => item.state === 'waiting_for_decision')
+    || packages.find((item) => item.state === 'ready')
+    || packages.find((item) => item.state === 'planned');
+  const nextOutput = document.querySelector('#mission-next-step'); nextOutput.replaceChildren();
+  if (next) {
+    nextOutput.append(create('b', '', next.title || '下一工作包'),
+      create('p', '', next.objective || '继续推进工程任务。'),
+      create('span', '', missionStateName(next.state)));
+  } else {
+    nextOutput.append(create('b', '', mission.state === 'completed' ? '任务已完成' : '等待下一项工作'),
+      create('p', '', mission.state === 'completed' ? '全部工作包已经完成。' : '代理正在整理下一步。'));
+  }
+};
+
+const renderMissions = (payload) => {
+  const records = Array.isArray(payload) ? payload : payload?.missions || payload?.items || [];
+  runtimeState.missions = records;
+  document.querySelector('#mission-count').textContent = String(records.length);
+  const list = document.querySelector('#mission-list'); list.replaceChildren();
+  if (!records.length) {
+    const empty = create('div', 'mission-empty');
+    empty.append(create('b', '', '尚无工程任务'), create('p', '', '从需求或现有规范建立工程内容。'));
+    const start = create('button', 'text-action', '从需求开始');
+    start.type = 'button'; start.addEventListener('click', () => selectPanel('intake'));
+    empty.append(start); list.append(empty);
+    document.querySelector('#mission-dag').replaceChildren(create('div', 'mission-empty', '暂无工作包。'));
+    return;
+  }
+  records.forEach((record, index) => {
+    const mission = record.mission || record;
+    const button = create('button', 'mission-select');
+    button.type = 'button';
+    button.append(create('b', '', mission.title || '工程任务'),
+      create('span', '', missionStateName(mission.state)));
+    button.addEventListener('click', () => renderMission(record, button));
+    list.append(button);
+    if (index === 0) renderMission(record, button);
+  });
+};
+
+const loadMissions = async () => renderMissions(await optionalApi('/api/missions'));
+
+const decisionNeedsHuman = (decision) => {
+  const disposition = String(decision.disposition || decision.decision_disposition || '');
+  const state = String(decision.state || decision.status || '').toLocaleLowerCase();
+  if (['resolved', 'completed', 'cancelled', 'closed'].includes(state)) return false;
+  if (disposition) return disposition === 'HUMAN_DECISION_NOW';
+  return decision.requires_human !== false;
+};
+const decisionText = (decision, ...names) => names
+  .map((name) => decision[name]).find((value) => typeof value === 'string' && value.trim()) || '';
+
+const humanDecisionType = (value) => String(value || '工程取舍')
+  .replaceAll('_', ' ')
+  .replaceAll('-', ' ');
+const humanDecisionArea = (areaKey) => {
+  const areas = runtimeState.engineeringMap?.areas || [];
+  return areas.find((area) => area.area_key === areaKey)?.label
+    || humanKind(areaKey || '工程范围');
+};
+const decisionActor = () => {
+  const actors = runtimeState.context?.actors || [];
+  return actors.find((actor) => actor.actor_uid === runtimeState.actor) || actors[0] || null;
+};
+const conclusionName = (value) => ({
+  passed: '检查通过', failed: '检查未通过', indeterminate: '仍需补充信息',
+}[String(value || '').toLocaleLowerCase()] || '检查结果待整理');
+
+const appendDecisionOption = (group, value) => {
+  const label = create('label', `decision-option${value.primary ? ' decision-option-primary' : ''}`);
+  const radio = create('input');
+  radio.type = 'radio';
+  radio.name = 'decision-choice';
+  radio.value = value.value;
+  radio.dataset.selectionKind = value.selectionKind;
+  radio.required = true;
+  const copy = create('span');
+  const title = create('span', 'decision-option-title');
+  title.append(create('b', '', value.title));
+  if (value.primary) title.append(create('em', '', '代理建议'));
+  copy.append(title, create('p', '', value.summary));
+  if (value.tradeOff) copy.append(create('small', '', value.tradeOff));
+  label.append(radio, copy);
+  group.append(label);
+};
+
+const renderDecision = (decision, button) => {
+  document.querySelectorAll('.decision-select').forEach((element) => {
+    element.toggleAttribute('aria-current', element === button);
+  });
+  const output = document.querySelector('#decision-request'); output.replaceChildren();
+  const target = decision.target || {};
+  const targetLabel = target.label || target.engineering_key || '当前工程内容';
+  const heading = create('header', 'decision-request-heading');
+  heading.append(create('small', '', `${humanDecisionArea(decision.engineering_area)} · ${humanDecisionType(decision.decision_type)}`),
+    create('h3', '', targetLabel),
+    create('p', '', decision.change_summary || '请选择后续采用的工程方向。'));
+  if (target.engineering_key) {
+    heading.append(create('span', 'decision-engineering-key', `工程编号 ${target.engineering_key}`));
+  }
+  output.append(heading);
+
+  const body = create('div', 'decision-body');
+  const brief = create('div', 'decision-brief');
+  const impact = decision.impact || {};
+  const impactSection = create('section', 'decision-section decision-impact');
+  impactSection.append(create('h4', '', '影响'));
+  impactSection.append(create('p', '', impact.summary || '影响集中在当前工作范围。'));
+  const areaValues = Array.isArray(impact.affected_areas) ? impact.affected_areas : [];
+  const scopeList = create('div', 'decision-scope-list');
+  scopeList.append(create('span', '', target.engineering_key || targetLabel));
+  areaValues.forEach((area) => scopeList.append(create('span', '', humanDecisionArea(area))));
+  impactSection.append(scopeList);
+  brief.append(impactSection);
+
+  const validation = decision.validation || {};
+  const validationSection = create('section', 'decision-section decision-validation');
+  validationSection.append(create('h4', '', '检查结论'),
+    create('strong', '', conclusionName(validation.conclusion)),
+    create('p', '', validation.summary || '检查结果已纳入本次选择。'));
+  brief.append(validationSection);
+
+  const policies = Array.isArray(decision.triggered_policies) ? decision.triggered_policies : [];
+  const reasonSection = create('section', 'decision-section decision-why');
+  reasonSection.append(create('h4', '', '为什么现在需要选择'));
+  policies.forEach((policy) => {
+    const row = create('article');
+    row.append(create('b', '', policy.title || '工程规则'),
+      create('p', '', policy.explanation || '这项规则要求明确工程方向。'));
+    reasonSection.append(row);
+  });
+  if (!policies.length) reasonSection.append(create('p', '', '当前工作出现了需要明确取舍的工程分支。'));
+  brief.append(reasonSection);
+
+  const response = create('aside', 'decision-response');
+  const recommendation = decision.recommendation
+    || decisionText(decision, 'recommended_option');
+  if (recommendation) {
+    const note = create('section', 'decision-recommendation');
+    note.append(create('small', '', '建议方向'), create('p', '', recommendation));
+    response.append(note);
+  }
+  const form = create('form', 'decision-resolution-form');
+  form.id = 'decision-resolution-form';
+  const choice = create('fieldset', 'decision-options');
+  choice.append(create('legend', '', '选择一个方向'));
+  const action = decision.action || {};
+  if (action.operation && action.label) {
+    appendDecisionOption(choice, {
+      primary: true,
+      selectionKind: 'action',
+      value: action.operation,
+      title: action.label,
+      summary: action.result || recommendation || '按此方向继续当前任务。',
+    });
+  }
+  const alternatives = Array.isArray(decision.alternatives) ? decision.alternatives : [];
+  alternatives.forEach((alternative, index) => {
+    appendDecisionOption(choice, {
+      primary: false,
+      selectionKind: 'alternative',
+      value: alternative.title,
+      title: alternative.title || `备选方向 ${index + 1}`,
+      summary: alternative.summary || '采用这一备选方向。',
+      tradeOff: alternative.trade_off || '',
+    });
+  });
+  if (!choice.querySelector('input')) {
+    choice.append(create('p', 'decision-no-options', '可选方向正在整理。'));
+  }
+  form.append(choice);
+
+  const reason = create('label', 'decision-reason');
+  reason.append(create('span', '', '你的判断依据'));
+  const reasonInput = create('textarea');
+  reasonInput.name = 'reason';
+  reasonInput.required = true;
+  reasonInput.maxLength = 4000;
+  reasonInput.placeholder = '简要说明为什么选择这个方向';
+  reason.append(reasonInput);
+  form.append(reason);
+
+  const actor = decisionActor();
+  const footer = create('footer', 'decision-submit');
+  const actorLine = create('p');
+  actorLine.append(create('span', '', '记录人'), create('strong', '', actor?.display_name || '尚未设置本机用户'));
+  const submit = create('button', '', '记录选择并继续任务');
+  submit.type = 'submit';
+  submit.disabled = !actor || !choice.querySelector('input');
+  footer.append(actorLine, submit);
+  const status = create('p', 'decision-resolution-status');
+  status.setAttribute('role', 'status');
+  form.append(footer, status);
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const selected = form.querySelector('input[name="decision-choice"]:checked');
+    const reasonText = reasonInput.value.trim();
+    if (!selected || !actor) {
+      toast('请选择一个工程方向。');
+      return;
+    }
+    if (!reasonText) {
+      toast('请简要写下判断依据。');
+      reasonInput.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = '正在记录…';
+    status.textContent = '';
+    try {
+      const payload = {
+        actor_uid: actor.actor_uid,
+        reason: reasonText,
+        selected_action: selected.dataset.selectionKind === 'action' ? selected.value : null,
+        selected_alternative: selected.dataset.selectionKind === 'alternative' ? selected.value : null,
+      };
+      await api(`/api/decisions/${encodeURIComponent(decision.decision_request_uid)}/resolve`, {
+        method: 'POST', body: JSON.stringify(payload),
+      });
+      toast('选择已记录，任务继续推进。');
+      await Promise.all([loadDecisions(), loadMissions()]);
+    } catch (error) {
+      status.textContent = error.message;
+      submit.disabled = false;
+      submit.textContent = '记录选择并继续任务';
+    }
+  });
+
+  response.append(form);
+  body.append(brief, response);
+  output.append(body);
+  motion.decisionFlow(heading, brief.querySelectorAll('.decision-section'), response);
+};
+
+const renderDecisions = (payload) => {
+  const raw = Array.isArray(payload) ? payload : payload?.decisions || payload?.items || [];
+  const decisions = raw.filter(decisionNeedsHuman);
+  runtimeState.decisions = decisions;
+  document.querySelector('#decision-count').textContent = String(decisions.length);
+  const navCount = document.querySelector('#decision-nav-count');
+  navCount.textContent = String(decisions.length); navCount.hidden = !decisions.length;
+  const list = document.querySelector('#decision-list'); list.replaceChildren();
+  if (!decisions.length) {
+    list.append(create('div', 'decision-empty', '当前没有待处理决策。'));
+    const output = document.querySelector('#decision-request'); output.replaceChildren();
+    const empty = create('div', 'decision-empty decision-empty-main');
+    empty.append(create('span', '', '清'), create('h3', '', '当前没有待定的工程取舍'),
+      create('p', '', '任务按既定方向推进中。'));
+    output.append(empty); return;
+  }
+  decisions.forEach((decision, index) => {
+    const button = create('button', 'decision-select'); button.type = 'button';
+    const target = decision.target || {};
+    button.append(create('b', '', target.label || target.engineering_key || '工程决策'),
+      create('span', '', `${humanDecisionArea(decision.engineering_area)} · ${humanDecisionType(decision.decision_type)}`));
+    button.addEventListener('click', () => renderDecision(decision, button));
+    list.append(button); if (index === 0) renderDecision(decision, button);
+  });
+};
+
+const loadDecisions = async () => renderDecisions(await optionalApi('/api/decisions'));
+
+const renderVersions = () => {
+  const configurations = runtimeState.context?.configurations || [];
+  const selected = configurations.find((item) => item.configuration_uid === runtimeState.configurationUid)
+    || configurations[0];
+  document.querySelector('#version-current-name').textContent = selected?.name || '尚未选择配置';
+  document.querySelector('#version-current-note').textContent = selected
+    ? `${selected.change_count || 0} 项工程内容 · ${selected.closure_status === 'complete' ? '配置完整' : '仍需补充'}`
+    : '建立工程配置后显示版本内容。';
+  document.querySelector('#version-count').textContent = String(configurations.length);
+  const list = document.querySelector('#version-list'); list.replaceChildren();
+  configurations.forEach((configuration) => {
+    const row = create('button', 'version-row'); row.type = 'button';
+    const copy = create('span');
+    copy.append(create('b', '', configuration.name || '工程配置'),
+      create('small', '', `${configuration.change_count || 0} 项内容`));
+    row.append(copy, create('em', '', configuration.closure_status === 'complete' ? '完整' : '待补充'));
+    row.toggleAttribute('aria-current', configuration === selected);
+    row.addEventListener('click', () => { syncConfiguration(configuration.configuration_uid); renderVersions(); });
+    list.append(row);
+  });
+  if (!configurations.length) list.append(create('div', 'version-empty', '当前还没有工程配置。'));
+};
 
 const INTAKE_CATEGORY_NAMES = {
   goal: '目标', function: '功能', quality: '质量要求', constraint: '约束',
@@ -422,7 +1115,6 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.workspaceUid = value.workspace_uid;
     runtimeState.base = value.base_commit;
     runtimeState.actor = value.actor_uid;
-    runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
     runtimeState.intakeWorkspace = true;
     runtimeState.change.humanKey = value.requirement_count === 1
@@ -431,7 +1123,6 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     runtimeState.change.reason = '从自然语言需求建立初始工程规格';
     await loadSession();
     runtimeState.actor = value.actor_uid;
-    runtimeState.delegationUid = value.delegation_uid;
     runtimeState.configurationUid = value.configuration_uid;
     const changeForm = document.querySelector('#workspace-compose-form');
     changeForm.querySelector('[name="human_key"]').value = value.human_keys[0] || 'REQ-SW-0001';
@@ -449,12 +1140,13 @@ document.querySelector('#intake-accept-form').addEventListener('submit', async (
     const workspaceOutput = document.querySelector('#workspace-output');
     workspaceOutput.hidden = false;
     workspaceOutput.replaceChildren(create('p', '',
-      `已采用“${value.selected_template}”建立可编辑草案。请检查内容，然后送审。`));
+      `已采用“${value.selected_template}”建立工程草案，任务正在按工程结构展开。`));
     advanceWorkspace('草案已建立', `${value.requirement_count} 项内容可以继续编辑。`, .66);
     motion.step(0);
-    audit('零规范需求已转入工程工作区', value);
-    selectPanel('workspace');
-    toast('工程草案已经建立。');
+    audit('需求已建立工程任务', value);
+    await Promise.all([loadEngineeringMap(), loadMissions()]);
+    selectPanel('missions');
+    toast('工程任务已经建立。');
   } catch (error) { toast(error.message); }
 });
 
@@ -647,8 +1339,7 @@ const envelope = (operation, overrides = {}) => ({
   workspace_uid: runtimeState.workspaceUid || overrides.workspaceUid || uid(),
   expected_base: runtimeState.base || overrides.base, idempotency_key: uid(),
   actor: runtimeState.actor || overrides.actor,
-  delegation_uid: runtimeState.delegationUid || overrides.delegationUid,
-  dry_run: false, risk_class: overrides.riskClass || 'high', operation,
+  dry_run: false, operation,
 });
 const advanceWorkspace = (state, guidance, progress) => {
   motion.stateChange('#workspace-state', state);
@@ -665,8 +1356,8 @@ const updateChangePreview = () => {
   scope.querySelector('strong').textContent = key || '等待填写';
   scope.querySelector('p').textContent = key
     ? `${humanKind(data.kind)}${reason ? ` · ${reason}` : ''}` : '工程编号和内容类型会在这里汇总。';
-  if (key && statement && reason) advanceWorkspace('可以送审', '内容和理由已经填写。', .72);
-  else advanceWorkspace('准备填写', '完成内容后即可送审。', key || statement || reason ? .35 : 0);
+  if (key && statement && reason) advanceWorkspace('可以检查', '内容和理由已经填写。', .72);
+  else advanceWorkspace('准备填写', '完成内容后可以检查。', key || statement || reason ? .35 : 0);
 };
 document.querySelector('#workspace-compose-form').addEventListener('input', updateChangePreview);
 document.querySelector('#workspace-compose-form').addEventListener('change', updateChangePreview);
@@ -677,7 +1368,7 @@ const paintDecision = (validation) => {
   const strip = document.querySelector('#decision-strip');
   if (!strip) return;
   strip.dataset.disposition = decision.disposition || (blocking ? 'block' : 'allow');
-  strip.querySelector('strong').textContent = blocking ? '需要先处理' : '可以进入批准';
+  strip.querySelector('strong').textContent = blocking ? '需要先处理' : '检查通过';
   strip.querySelector('small').textContent = blocking
     ? `发现 ${blocking} 项会阻止保存的问题。`
     : findings ? `有 ${findings} 项提示可供审阅。` : '校验通过。';
@@ -693,13 +1384,13 @@ const findExistingItem = async (humanKey) => {
 };
 const openChangeWorkspace = async (data, actorOption) => {
   runtimeState.workspaceUid = uid(); runtimeState.actor = String(data.actor);
-  runtimeState.delegationUid = actorOption.dataset.delegationUid;
   runtimeState.configurationUid = String(data.configuration_uid);
   const value = await api('/api/workspace/open', {
     method: 'POST', body: JSON.stringify(envelope({
       type: 'open_workspace', configuration_uid: data.configuration_uid,
     })),
   });
+  runtimeState.workspaceUid = value.workspace_uid;
   audit('工作副本已建立', value);
 };
 const saveChangeContent = async (data) => {
@@ -715,7 +1406,6 @@ const saveChangeContent = async (data) => {
       base_revision_number: Number(existing?.revision_number || 0),
       human_key: runtimeState.change.humanKey, kind: runtimeState.change.kind,
       facets: existing?.facets || [], effective_model_hash: 'bound-by-runtime',
-      delegation_uid: runtimeState.delegationUid,
       draft_fields: [{path: '/statement', value: runtimeState.change.statement}],
       draft_fragments: existing?.fragments || [], relation_proposals: [], edit_log: [],
     },
@@ -773,18 +1463,55 @@ const submitChangeWorkspace = async () => {
   runtimeState.packageUid = value.review_package.package_uid;
   runtimeState.reviewPurpose = 'candidate'; runtimeState.approval = null;
   runtimeState.intakeWorkspace = false;
-  advanceWorkspace('等待批准', '校验完成，请确认范围和理由。', 1);
+  advanceWorkspace('等待正式审阅', '变更范围和检查结论已经汇总。', 1);
   paintDecision(value.validation);
-  document.querySelector('#workspace-output').replaceChildren(create('p', '',
-    `${runtimeState.change.humanKey} 已送交审阅。`));
-  motion.step(1); await loadReviewPackage(runtimeState.packageUid); selectPanel('review');
+  const output = document.querySelector('#workspace-output');
+  output.hidden = false;
+  output.replaceChildren(create('p', '', `${runtimeState.change.humanKey} 已进入正式审阅。`));
+  motion.step(1);
+  await loadReviewPackage(runtimeState.packageUid);
+  selectPanel('review');
+};
+const assessChangeWorkspace = async () => {
+  const value = await api('/api/workspace/validate', {
+    method: 'POST', body: JSON.stringify({
+      workspace_uid: runtimeState.workspaceUid,
+      evaluation_time: new Date().toISOString(), maximum_depth: 3,
+    }),
+  });
+  const disposition = value.decision?.disposition || 'BLOCK';
+  const state = disposition === 'HUMAN_DECISION_NOW' ? '需要决定'
+    : disposition === 'BLOCK' ? '正在修正' : '检查通过';
+  const guidance = disposition === 'HUMAN_DECISION_NOW'
+    ? '存在需要你选择的工程取舍。'
+    : disposition === 'BLOCK'
+      ? '代理将根据校验结论继续修正。'
+      : '变更仍可继续编辑，代理可进入下一项工作。';
+  advanceWorkspace(state, guidance, disposition === 'BLOCK' ? .65 : 1);
+  paintDecision(value.validation);
+  const output = document.querySelector('#workspace-output');
+  output.hidden = false;
+  output.replaceChildren(create('p', '', `${runtimeState.change.humanKey} 已完成检查。`));
+  if (!['BLOCK', 'HUMAN_DECISION_NOW'].includes(disposition)) {
+    const review = create('button', 'secondary-action', '送交正式审阅');
+    review.type = 'button';
+    review.addEventListener('click', async () => {
+      review.disabled = true; review.textContent = '正在整理…';
+      try { await submitChangeWorkspace(); }
+      catch (error) {
+        review.disabled = false; review.textContent = '送交正式审阅'; toast(error.message);
+      }
+    });
+    output.append(review);
+  }
+  audit('工作副本评估完成', value);
 };
 document.querySelector('#workspace-compose-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = Object.fromEntries(new FormData(form));
   const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
-  if (!data.configuration_uid || !data.actor || !actorOption?.dataset.delegationUid) {
+  if (!data.configuration_uid || !data.actor || !actorOption) {
     return toast('当前工程还没有可用的配置和操作人。');
   }
   const button = form.querySelector('button[type="submit"], button:not([type])');
@@ -794,11 +1521,11 @@ document.querySelector('#workspace-compose-form').addEventListener('submit', asy
       await openChangeWorkspace(data, actorOption);
       await saveChangeContent(data);
     }
-    await submitChangeWorkspace();
+    await assessChangeWorkspace();
   } catch (error) {
     toast(error.message);
   } finally {
-    button.disabled = false; button.textContent = '检查并送审';
+    button.disabled = false; button.textContent = '保存并检查';
   }
 });
 const addResultConfiguration = (uidValue) => {
@@ -878,9 +1605,8 @@ document.querySelector('#baseline-form').addEventListener('submit', async (event
   const actorOption = selectedOption('#workspace-compose-form [name="actor"]');
   if (!runtimeState.actor && actorOption?.value) {
     runtimeState.actor = actorOption.value;
-    runtimeState.delegationUid = actorOption.dataset.delegationUid;
   }
-  if (!runtimeState.actor || !runtimeState.delegationUid) {
+  if (!runtimeState.actor) {
     return toast('当前工程缺少可用的本机身份。');
   }
   try {
@@ -931,4 +1657,8 @@ document.querySelector('#lock-button').addEventListener('click', async () => {
 });
 
 motion.boot();
-Promise.all([loadSession(), health()]);
+const initializeInterface = async () => {
+  await Promise.all([loadSession(), health()]);
+  await Promise.all([loadEngineeringMap(), loadMissions(), loadDecisions()]);
+};
+void initializeInterface();

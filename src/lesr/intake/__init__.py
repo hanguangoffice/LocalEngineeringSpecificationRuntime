@@ -1,6 +1,7 @@
 """Source-backed zero-specification intake for LESR."""
 
 from lesr.intake.catalog import IntakeCatalog
+from lesr.intake.mission import mission_plan_for_intake
 from lesr.intake.models import (
     GapDisposition,
     GapItem,
@@ -26,4 +27,5 @@ __all__ = [
     "TemplateArtifact",
     "TemplatePack",
     "TemplateSource",
+    "mission_plan_for_intake",
 ]

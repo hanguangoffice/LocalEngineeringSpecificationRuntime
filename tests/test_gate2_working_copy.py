@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from lesr.domain.semantic import SemanticField, semantic_hash
+from lesr.domain.semantic import ProvenanceKind, Revision, SemanticField, semantic_hash
 from lesr.domain.workspace import (
     EditOperation,
     EditOperationType,
@@ -56,6 +56,17 @@ def operation(path: str, value: str, index: int) -> EditOperation:
     )
 
 
+def lifecycle_operation(target_state: str, index: int) -> EditOperation:
+    return EditOperation(
+        operation_uid=UIDS[index],
+        operation_type=EditOperationType.REQUEST_LIFECYCLE_TRANSITION,
+        object_uid=UIDS[3],
+        actor_uid="author",
+        occurred_at=NOW,
+        value=target_state,
+    )
+
+
 def test_working_copy_supports_continuous_editing_and_stable_hash() -> None:
     first = WorkspaceEngine.edit(workspace(), operation("/title", "Edited", 5))
     second = WorkspaceEngine.edit(first, operation("/statement", "Shall reconnect", 6))
@@ -80,11 +91,90 @@ def test_checkpoint_round_trip_restores_exact_state() -> None:
         edited, checkpoint_uid=UIDS[6], actor_uid="author", created_at=NOW
     )
     serialized = checkpoint.model_dump_json()
+    assert "checkpoint_hash" not in checkpoint.model_dump(mode="json")
     restored_checkpoint = WorkspaceCheckpoint.model_validate_json(serialized)
     restored = WorkspaceEngine.restore(restored_checkpoint)
     assert restored == edited
     assert updated.checkpoint_uids == (UIDS[6],)
     assert checkpoint.git_ref == f"refs/lesr/workspaces/{edited.workspace_uid}"
+
+
+def test_preview_is_repeatable_transient_and_leaves_workspace_editable() -> None:
+    edited = WorkspaceEngine.edit(workspace(), operation("/title", "Preview me", 5))
+
+    first = WorkspaceEngine.preview(edited, actor_uid="author", previewed_at=NOW)
+    second = WorkspaceEngine.preview(edited, actor_uid="author", previewed_at=NOW)
+
+    assert first == second
+    assert first.workspace == edited
+    assert first.workspace.state is WorkingCopyState.EDITABLE
+    assert first.workspace.checkpoint_uids == ()
+    assert first.persistence_scope == "transient"
+    assert first.candidate_frozen is False
+    revision_value = first.revision_previews[0].model_dump(mode="json")
+    assert "revision_uid" not in revision_value
+    assert "content_hash" not in revision_value
+    assert "candidate_uid" not in first.model_dump(mode="json", exclude={"workspace"})
+    assert "checkpoint_uid" not in first.model_dump(mode="json", exclude={"workspace"})
+
+    continued = WorkspaceEngine.edit(
+        first.workspace,
+        operation("/statement", "Editing continues after preview", 6),
+    )
+    assert continued.state is WorkingCopyState.EDITABLE
+    assert len(continued.working_copies[0].edit_log) == 2
+
+
+def test_preview_and_submit_share_candidate_materialization() -> None:
+    base = Revision(
+        revision_uid=UIDS[4],
+        object_uid=UIDS[3],
+        revision_number=3,
+        human_key="REQ-001",
+        kind="software_requirement",
+        fields=(SemanticField(path="/title", value="Original"),),
+        provenance_origin=ProvenanceKind.AUTHORED,
+        created_at=NOW,
+    )
+    edited = WorkspaceEngine.edit(workspace(), operation("/title", "Edited", 5))
+    edited = WorkspaceEngine.edit(edited, lifecycle_operation("in_review", 6))
+
+    preview = WorkspaceEngine.preview(
+        edited,
+        actor_uid="author",
+        previewed_at=NOW,
+        base_revisions=(base,),
+        lifecycle_states=((UIDS[3], "draft"),),
+    )
+    submission = WorkspaceEngine.submit(
+        edited,
+        checkpoint_uid=UIDS[7],
+        actor_uid="author",
+        submitted_at=NOW,
+        base_revisions=(base,),
+        lifecycle_states=((UIDS[3], "draft"),),
+    )
+
+    revision_value = submission.candidate.revisions[0].model_dump(
+        mode="python",
+        exclude={"schema_version", "resource_type", "revision_uid", "content_hash"},
+    )
+    assert revision_value == preview.revision_previews[0].model_dump(mode="python")
+    record_value = submission.candidate.lifecycle_records[0].model_dump(
+        mode="python",
+        exclude={
+            "schema_version",
+            "resource_type",
+            "record_uid",
+            "content_hash",
+            "supersedes_record_uid",
+        },
+    )
+    assert record_value == preview.lifecycle_record_previews[0].model_dump(mode="python")
+    assert submission.candidate.relation_revisions == preview.relation_proposals
+    assert submission.semantic_diff.changes == preview.changes
+    assert submission.semantic_diff.scope == preview.scope
+    assert preview.changes[0].before == "Original"
 
 
 def test_submit_freezes_candidate_without_promoting_it_to_canonical_state() -> None:
