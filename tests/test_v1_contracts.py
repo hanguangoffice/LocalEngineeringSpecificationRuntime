@@ -172,6 +172,7 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
             "mission_ready_work",
             "mission_claim_work",
             "mission_report_work",
+            "mission_evaluate_work",
             "decision_list",
             "decision_resolve",
             "engineering_map",
@@ -194,6 +195,16 @@ def test_mcp_adapter_exposes_capabilities_resources_and_safe_write_schemas() -> 
     }
     assert assessment.annotations is not None
     assert assessment.annotations.readOnlyHint is True
+    mission_evaluation = tools["mission_evaluate_work"]
+    assert "risk_class" not in mission_evaluation.inputSchema["properties"]
+    assert set(mission_evaluation.inputSchema["properties"]) == {
+        "mission_uid",
+        "work_package_uid",
+        "workspace_uid",
+        "evaluation_time",
+        "operation",
+        "narrative",
+    }
     templates = asyncio.run(server.list_resource_templates())
     assert any(str(item.uriTemplate).startswith("lesr://objects/") for item in templates)
 

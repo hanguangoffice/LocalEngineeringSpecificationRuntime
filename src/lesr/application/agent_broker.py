@@ -43,6 +43,7 @@ class AgentAssignment(FrozenModel):
     work_package_title: str = Field(min_length=1)
     objective: str = Field(min_length=1)
     role: str = Field(min_length=1)
+    engineering_area: str | None = Field(default=None, min_length=1)
     configuration_uid: str | None = None
     workspace_uid: str | None = None
     context_capability: str = Field(min_length=1)
@@ -162,6 +163,7 @@ def build_agent_assignment(
         work_package_title=package.title,
         objective=package.objective,
         role=package.role,
+        engineering_area=package.engineering_area,
         configuration_uid=mission.configuration_uid,
         workspace_uid=package.workspace_uid,
         context_capability=context_capability,

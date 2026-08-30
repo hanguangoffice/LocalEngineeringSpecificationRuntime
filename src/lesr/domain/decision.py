@@ -257,6 +257,30 @@ class DecisionRequestNarrative(FrozenModel):
     action: DecisionAction
 
 
+class DecisionRequestDraft(FrozenModel):
+    """Agent-authored explanation without authority-bearing policy codes."""
+
+    decision_type: str = Field(min_length=1)
+    target: DecisionTarget
+    change_summary: str = Field(min_length=1)
+    recommendation: str = Field(min_length=1)
+    alternatives: tuple[DecisionAlternative, ...] = Field(min_length=1)
+    action: DecisionAction
+
+    def with_policy_reasons(
+        self, reasons: tuple[str, ...]
+    ) -> DecisionRequestNarrative:
+        return DecisionRequestNarrative(
+            decision_type=self.decision_type,
+            target=self.target,
+            change_summary=self.change_summary,
+            recommendation=self.recommendation,
+            alternatives=self.alternatives,
+            triggered_policies=tuple(_explain_policy_reason(code) for code in reasons),
+            action=self.action,
+        )
+
+
 class DecisionRequestFactoryResult(FrozenModel):
     """Routing result for the Agent; only one route contains a user request."""
 
@@ -489,3 +513,66 @@ class DecisionPolicy:
             operation=facts.operation,
             reasons=tuple(sorted(set(reasons))),
         )
+
+
+_POLICY_EXPLANATIONS: dict[str, tuple[str, str]] = {
+    "MANDATE_INACTIVE": (
+        "任务范围需要续期",
+        "这项工作已经超出当前任务的有效执行时间。",
+    ),
+    "OPERATION_OUTSIDE_MANDATE": (
+        "出现新的工作类型",
+        "这项操作不在当前任务已经约定的工作类型中。",
+    ),
+    "ENGINEERING_AREA_OUTSIDE_MANDATE": (
+        "工程范围发生变化",
+        "这项工作涉及当前任务尚未覆盖的工程区域。",
+    ),
+    "TARGET_OUTSIDE_MANDATE": (
+        "变更范围扩大",
+        "候选内容超出了当前任务已经覆盖的工程对象。",
+    ),
+    "NEW_RESOURCE_OUTSIDE_MANDATE": (
+        "需要增加工程内容",
+        "当前任务没有包含建立新工程内容的范围。",
+    ),
+    "WORK_PACKAGE_LIMIT_EXCEEDED": (
+        "任务规模扩大",
+        "需要处理的工作包超过当前任务范围。",
+    ),
+    "CHANGED_RESOURCE_LIMIT_EXCEEDED": (
+        "变更内容扩大",
+        "受影响的工程内容超过当前任务范围。",
+    ),
+    "CHANGED_RELATION_LIMIT_EXCEEDED": (
+        "追踪关系扩大",
+        "受影响的工程关系超过当前任务范围。",
+    ),
+    "EXTERNAL_ACTION_LIMIT_EXCEEDED": (
+        "涉及外部动作",
+        "候选方案需要当前任务未包含的外部操作。",
+    ),
+    "DESTRUCTIVE_ACTION_LIMIT_EXCEEDED": (
+        "涉及破坏性动作",
+        "候选方案包含当前任务未覆盖的破坏性操作。",
+    ),
+    "ENGINEERING_POLICY_REQUIRES_HUMAN_DECISION": (
+        "工程策略指定人工决定",
+        "当前工程策略把这类取舍明确交给相应的人类角色。",
+    ),
+}
+
+
+def _explain_policy_reason(code: str) -> TriggeredPolicy:
+    title, explanation = _POLICY_EXPLANATIONS.get(
+        code,
+        (
+            "工程策略要求确认",
+            "这项工作越过了当前任务可以自动处理的边界。",
+        ),
+    )
+    return TriggeredPolicy(
+        policy_code=code,
+        title=title,
+        explanation=explanation,
+    )

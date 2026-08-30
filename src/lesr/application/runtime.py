@@ -49,7 +49,17 @@ from lesr.domain.approval import (
     verify_bound_approval,
 )
 from lesr.domain.catalog import RUNTIME_CAPABILITIES
-from lesr.domain.decision import DecisionDisposition
+from lesr.domain.decision import (
+    DecisionDisposition,
+    DecisionPolicyFacts,
+    DecisionRequestDraft,
+    ImpactSummary,
+    ValidationConclusion,
+    ValidationSummary,
+)
+from lesr.domain.decision import (
+    ImpactCompleteness as DecisionImpactCompleteness,
+)
 from lesr.domain.evaluation import (
     ConstraintEnvironment,
     ConstraintExpression,
@@ -87,6 +97,7 @@ from lesr.domain.merge import (
     SemanticState,
     begin_reconciliation,
 )
+from lesr.domain.mission import WorkPackageState
 from lesr.domain.model import (
     DefinitionRevision,
     EffectiveModel,
@@ -323,6 +334,174 @@ class LocalRuntimeService:
                 "LESR-MISSION-REPORT-INVALID",
                 ErrorCategory.CONFLICT,
                 str(error),
+            )
+
+    def evaluate_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        workspace_uid: str,
+        evaluation_time: str,
+        operation: str,
+        narrative: dict[str, Any] | None = None,
+    ) -> DomainResult:
+        """Route real Workspace evidence without accepting a caller risk label."""
+
+        try:
+            instant = self._parse_evaluation_time(evaluation_time)
+            mission = self.missions.inspect(mission_uid)
+            package = next(
+                item
+                for item in mission.work_packages
+                if item.work_package_uid == work_package_uid
+            )
+            workspace = self.workspaces[workspace_uid]
+            if package.state is not WorkPackageState.RUNNING:
+                raise ValueError("WorkPackage is not running under an Agent claim")
+            if package.workspace_uid is not None and package.workspace_uid != workspace_uid:
+                raise ValueError("WorkPackage belongs to another Workspace")
+            if (
+                mission.configuration_uid is not None
+                and workspace.configuration_uid != mission.configuration_uid
+            ):
+                raise ValueError("Workspace belongs to another Mission configuration")
+            if mission.delegation_uid is None:
+                raise ValueError("Mission has no active mandate")
+            mandate = self.mission_store.get_mandate(mission.delegation_uid)
+            area = package.engineering_area
+            if area is None:
+                if len(mandate.scope.engineering_areas) != 1:
+                    raise ValueError("WorkPackage has no unambiguous engineering area")
+                area = mandate.scope.engineering_areas[0]
+            assessment = self.assess_workspace(
+                WorkspaceAssessmentRequest(
+                    workspace_uid=workspace_uid,
+                    evaluation_time=evaluation_time,
+                    maximum_depth=3,
+                )
+            )
+            if not assessment.ok:
+                return assessment
+            value = assessment.value
+            if not isinstance(value, dict):
+                raise TypeError("Workspace assessment returned an invalid payload")
+            validation_value = value.get("validation", {})
+            impact_value = value.get("impact_report", {})
+            route_value = value.get("decision", {})
+            if not isinstance(validation_value, dict) or not isinstance(impact_value, dict):
+                raise TypeError("Workspace assessment evidence is incomplete")
+            operation_decision = validation_value.get("operation_decision", {})
+            operation_disposition = (
+                str(operation_decision.get("disposition", "indeterminate"))
+                if isinstance(operation_decision, dict)
+                else "indeterminate"
+            )
+            validation_outcome = str(validation_value.get("outcome", "indeterminate"))
+            if validation_outcome == "pass" and operation_disposition not in {
+                "block",
+                "indeterminate",
+            }:
+                validation_conclusion = ValidationConclusion.PASSED
+            elif validation_outcome == "fail" or operation_disposition == "block":
+                validation_conclusion = ValidationConclusion.FAILED
+            else:
+                validation_conclusion = ValidationConclusion.INDETERMINATE
+            findings = validation_value.get("findings", ())
+            finding_count = len(findings) if isinstance(findings, (list, tuple)) else 0
+            validation_summary = {
+                ValidationConclusion.PASSED: "候选内容校验通过",
+                ValidationConclusion.FAILED: f"候选内容有 {finding_count} 项需要处理",
+                ValidationConclusion.INDETERMINATE: "候选内容尚未形成确定校验结论",
+            }[validation_conclusion]
+            validation = ValidationSummary(
+                conclusion=validation_conclusion,
+                summary=validation_summary,
+            )
+            completeness_text = str(impact_value.get("completeness", ""))
+            if completeness_text == "COMPLETE":
+                impact_completeness = DecisionImpactCompleteness.COMPLETE
+            elif completeness_text.startswith("INCOMPLETE_"):
+                impact_completeness = DecisionImpactCompleteness.INCOMPLETE
+            else:
+                impact_completeness = DecisionImpactCompleteness.INDETERMINATE
+            paths = impact_value.get("paths", ())
+            path_count = len(paths) if isinstance(paths, (list, tuple)) else 0
+            impact = ImpactSummary(
+                completeness=impact_completeness,
+                summary=(
+                    f"已解析 {path_count} 条影响路径"
+                    if impact_completeness is DecisionImpactCompleteness.COMPLETE
+                    else "影响范围仍有未解析内容"
+                ),
+                affected_areas=(area,),
+                affected_targets=tuple(str(item) for item in value.get("change_scope", ())),
+            )
+            copies = workspace.working_copies
+            human_codes = (
+                ("ENGINEERING_POLICY_REQUIRES_HUMAN_DECISION",)
+                if isinstance(route_value, dict)
+                and route_value.get("disposition")
+                == DecisionDisposition.HUMAN_DECISION_NOW.value
+                else ()
+            )
+            milestone_codes = (
+                ("WORK_PACKAGE_REVIEW_MILESTONE",)
+                if operation == "workspace.submit" and not human_codes
+                else ()
+            )
+            facts = DecisionPolicyFacts(
+                mission_uid=mission_uid,
+                work_package_uid=work_package_uid,
+                operation=operation,
+                engineering_area=area,
+                target_resource_uids=tuple(str(item) for item in value.get("change_scope", ())),
+                new_resource_count=sum(item.base_revision_uid is None for item in copies),
+                prospective_work_packages=len(mission.work_packages),
+                prospective_changed_resources=len(value.get("change_scope", ())),
+                prospective_changed_relations=sum(
+                    len(item.relation_proposals) for item in copies
+                ),
+                validation=validation,
+                impact=impact,
+                human_decision_policy_codes=human_codes,
+                milestone_policy_codes=milestone_codes,
+            )
+            draft = (
+                DecisionRequestDraft.model_validate(narrative)
+                if narrative is not None
+                else None
+            )
+            routed = self.missions.route_decision(
+                mission_uid,
+                work_package_uid,
+                facts,
+                draft,
+                evaluated_at=instant,
+            )
+            return DomainResult(
+                self._local_runtime_payload(routed)
+                | {"workspace_assessment": value}
+            )
+        except StopIteration:
+            return self._error(
+                "LESR-MISSION-WORK-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                "work package does not exist",
+                (mission_uid, work_package_uid),
+            )
+        except KeyError as error:
+            return self._error(
+                "LESR-MISSION-EVALUATION-NOT-FOUND",
+                ErrorCategory.NOT_FOUND,
+                str(error),
+                (mission_uid, work_package_uid, workspace_uid),
+            )
+        except (TypeError, ValueError, ValidationError) as error:
+            return self._error(
+                "LESR-MISSION-EVALUATION-INVALID",
+                ErrorCategory.CONFLICT,
+                str(error),
+                (mission_uid, work_package_uid, workspace_uid),
             )
 
     def list_decisions(self, mission_uid: str | None = None) -> DomainResult:

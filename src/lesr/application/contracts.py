@@ -233,6 +233,16 @@ class LESRDomainPort(Protocol):
 
     def report_mission_work(self, report: dict[str, Any]) -> DomainResult: ...
 
+    def evaluate_mission_work(
+        self,
+        mission_uid: str,
+        work_package_uid: str,
+        workspace_uid: str,
+        evaluation_time: str,
+        operation: str,
+        narrative: dict[str, Any] | None = None,
+    ) -> DomainResult: ...
+
     def list_decisions(self, mission_uid: str | None = None) -> DomainResult: ...
 
     def resolve_decision(

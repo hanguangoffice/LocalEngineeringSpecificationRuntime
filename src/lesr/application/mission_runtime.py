@@ -20,6 +20,7 @@ from lesr.domain.decision import (
     DecisionPolicy,
     DecisionPolicyFacts,
     DecisionRequest,
+    DecisionRequestDraft,
     DecisionRequestFactory,
     DecisionRequestNarrative,
     DecisionResolution,
@@ -43,6 +44,7 @@ class MissionPackagePlan(FrozenModel):
     title: str = Field(min_length=1)
     objective: str = Field(min_length=1)
     role: str = Field(min_length=1)
+    engineering_area: str | None = Field(default=None, min_length=1)
     depends_on: tuple[str, ...] = ()
     workspace_uid: str | None = None
 
@@ -81,6 +83,17 @@ class MissionPlan(FrozenModel):
             raise ValueError(
                 "Mission package dependencies are missing: " + ", ".join(sorted(missing))
             )
+        unknown_areas = {
+            package.engineering_area
+            for package in self.packages
+            if package.engineering_area is not None
+            and package.engineering_area not in self.engineering_areas
+        }
+        if unknown_areas:
+            raise ValueError(
+                "Mission package engineering areas are outside the mandate: "
+                + ", ".join(sorted(unknown_areas))
+            )
         if self.mandate_duration <= timedelta(0):
             raise ValueError("Mission mandate duration must be positive")
         return self
@@ -104,6 +117,7 @@ class MissionCoordinator:
                 title=item.title,
                 objective=item.objective,
                 role=item.role,
+                engineering_area=item.engineering_area,
                 dependency_uids=tuple(
                     package_uid_by_key[dependency] for dependency in item.depends_on
                 ),
@@ -216,15 +230,17 @@ class MissionCoordinator:
         expected_mission = mission
         run = self.store.get_agent_run(report.agent_run_uid)
         mandate = self._mandate(mission)
+        package = self._package(mission, report.work_package_uid)
         assignment = AgentAssignment(
             mission_uid=mission.mission_uid,
             mission_title=mission.title,
             work_package_uid=report.work_package_uid,
-            work_package_title=self._package(mission, report.work_package_uid).title,
-            objective=self._package(mission, report.work_package_uid).objective,
+            work_package_title=package.title,
+            objective=package.objective,
             role=run.role,
+            engineering_area=package.engineering_area,
             configuration_uid=mission.configuration_uid,
-            workspace_uid=self._package(mission, report.work_package_uid).workspace_uid,
+            workspace_uid=package.workspace_uid,
             context_capability="workspace.validate",
             allowed_operations=mandate.allowed_operations,
         )
@@ -259,7 +275,7 @@ class MissionCoordinator:
         mission_uid: str,
         work_package_uid: str,
         facts: DecisionPolicyFacts,
-        narrative: DecisionRequestNarrative | None,
+        narrative: DecisionRequestNarrative | DecisionRequestDraft | None,
         *,
         evaluated_at: datetime,
     ) -> dict[str, object]:
@@ -268,6 +284,8 @@ class MissionCoordinator:
             raise ValueError("Decision facts name another WorkPackage")
         mandate = self._mandate(mission)
         policy = DecisionPolicy.decide(mandate, facts, evaluated_at=evaluated_at)
+        if isinstance(narrative, DecisionRequestDraft):
+            narrative = narrative.with_policy_reasons(policy.reasons)
         routed = DecisionRequestFactory.create(
             facts,
             policy,

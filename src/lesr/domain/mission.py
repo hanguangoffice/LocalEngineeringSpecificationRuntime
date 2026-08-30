@@ -74,6 +74,7 @@ class WorkPackage(FrozenModel):
     title: str = Field(min_length=1)
     objective: str = Field(min_length=1)
     role: str = Field(min_length=1)
+    engineering_area: str | None = Field(default=None, min_length=1)
     state: WorkPackageState = WorkPackageState.PLANNED
     dependency_uids: tuple[str, ...] = ()
     blocked_by_uids: tuple[str, ...] = ()

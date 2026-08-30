@@ -199,6 +199,11 @@ RUNTIME_CAPABILITIES: tuple[RuntimeCapability, ...] = tuple(
                 mcp=True,
             ),
             RuntimeCapability(
+                name="mission.evaluate-work",
+                access=CapabilityAccess.WRITE,
+                mcp=True,
+            ),
+            RuntimeCapability(
                 name="decision.list",
                 access=CapabilityAccess.READ,
                 mcp=True,

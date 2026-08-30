@@ -481,6 +481,25 @@ def create_server(domain: LESRDomainPort) -> FastMCP:
         """Record the terminal outcome of a claimed Agent run."""
         return domain.report_mission_work(report).payload()
 
+    @server.tool(name="mission_evaluate_work", annotations=write, structured_output=True)
+    def evaluate_mission_work(
+        mission_uid: str,
+        work_package_uid: str,
+        workspace_uid: str,
+        evaluation_time: str,
+        operation: str,
+        narrative: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate real Workspace evidence and route the resulting Agent decision."""
+        return domain.evaluate_mission_work(
+            mission_uid,
+            work_package_uid,
+            workspace_uid,
+            evaluation_time,
+            operation,
+            narrative,
+        ).payload()
+
     @server.tool(name="decision_list", annotations=read_only, structured_output=True)
     def list_decisions(mission_uid: str | None = None) -> dict[str, Any]:
         """List unresolved material decisions that need the local user."""
